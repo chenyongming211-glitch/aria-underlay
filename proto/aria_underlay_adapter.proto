@@ -1,0 +1,245 @@
+syntax = "proto3";
+
+package aria_underlay.adapter.v1;
+
+service UnderlayAdapter {
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
+  rpc GetCurrentState(GetCurrentStateRequest) returns (GetCurrentStateResponse);
+  rpc DryRun(DryRunRequest) returns (DryRunResponse);
+  rpc Prepare(PrepareRequest) returns (PrepareResponse);
+  rpc Commit(CommitRequest) returns (CommitResponse);
+  rpc Rollback(RollbackRequest) returns (RollbackResponse);
+  rpc Verify(VerifyRequest) returns (VerifyResponse);
+  rpc Recover(RecoverRequest) returns (RecoverResponse);
+  rpc ForceUnlock(ForceUnlockRequest) returns (ForceUnlockResponse);
+}
+
+enum Vendor {
+  VENDOR_UNSPECIFIED = 0;
+  VENDOR_HUAWEI = 1;
+  VENDOR_H3C = 2;
+  VENDOR_CISCO = 3;
+  VENDOR_RUIJIE = 4;
+  VENDOR_UNKNOWN = 100;
+}
+
+enum BackendKind {
+  BACKEND_KIND_UNSPECIFIED = 0;
+  BACKEND_KIND_NETCONF = 1;
+  BACKEND_KIND_NAPALM = 2;
+  BACKEND_KIND_NETMIKO = 3;
+  BACKEND_KIND_CLI = 4;
+}
+
+enum TransactionStrategy {
+  TRANSACTION_STRATEGY_UNSPECIFIED = 0;
+  TRANSACTION_STRATEGY_CONFIRMED_COMMIT_2PC = 1;
+  TRANSACTION_STRATEGY_CANDIDATE_2PC = 2;
+  TRANSACTION_STRATEGY_RUNNING_ROLLBACK_ON_ERROR = 3;
+  TRANSACTION_STRATEGY_BEST_EFFORT_CLI = 4;
+  TRANSACTION_STRATEGY_UNSUPPORTED = 100;
+}
+
+enum AdapterOperationStatus {
+  ADAPTER_OPERATION_STATUS_UNSPECIFIED = 0;
+  ADAPTER_OPERATION_STATUS_NO_CHANGE = 1;
+  ADAPTER_OPERATION_STATUS_PREPARED = 2;
+  ADAPTER_OPERATION_STATUS_COMMITTED = 3;
+  ADAPTER_OPERATION_STATUS_ROLLED_BACK = 4;
+  ADAPTER_OPERATION_STATUS_FAILED = 5;
+  ADAPTER_OPERATION_STATUS_IN_DOUBT = 6;
+}
+
+enum AdminState {
+  ADMIN_STATE_UNSPECIFIED = 0;
+  ADMIN_STATE_UP = 1;
+  ADMIN_STATE_DOWN = 2;
+}
+
+enum PortModeKind {
+  PORT_MODE_KIND_UNSPECIFIED = 0;
+  PORT_MODE_KIND_ACCESS = 1;
+  PORT_MODE_KIND_TRUNK = 2;
+}
+
+message RequestContext {
+  string request_id = 1;
+  string tx_id = 2;
+  string trace_id = 3;
+  string tenant_id = 4;
+  string site_id = 5;
+}
+
+message DeviceRef {
+  string device_id = 1;
+  string management_ip = 2;
+  uint32 management_port = 3;
+  Vendor vendor_hint = 4;
+  string model_hint = 5;
+  string secret_ref = 6;
+}
+
+message DeviceCapability {
+  Vendor vendor = 1;
+  string model = 2;
+  string os_version = 3;
+  repeated string raw_capabilities = 4;
+  bool supports_netconf = 5;
+  bool supports_candidate = 6;
+  bool supports_validate = 7;
+  bool supports_confirmed_commit = 8;
+  bool supports_persist_id = 9;
+  bool supports_rollback_on_error = 10;
+  bool supports_writable_running = 11;
+  repeated BackendKind supported_backends = 12;
+}
+
+message VlanConfig {
+  uint32 vlan_id = 1;
+  optional string name = 2;
+  optional string description = 3;
+}
+
+message PortMode {
+  PortModeKind kind = 1;
+  optional uint32 access_vlan = 2;
+  optional uint32 native_vlan = 3;
+  repeated uint32 allowed_vlans = 4;
+}
+
+message InterfaceConfig {
+  string name = 1;
+  AdminState admin_state = 2;
+  optional string description = 3;
+  PortMode mode = 4;
+}
+
+message DesiredDeviceState {
+  string device_id = 1;
+  repeated VlanConfig vlans = 2;
+  repeated InterfaceConfig interfaces = 3;
+}
+
+message ObservedDeviceState {
+  string device_id = 1;
+  repeated VlanConfig vlans = 2;
+  repeated InterfaceConfig interfaces = 3;
+}
+
+message RollbackArtifactRef {
+  string artifact_id = 1;
+  string tx_id = 2;
+  string device_id = 3;
+  string storage_uri = 4;
+  string checksum = 5;
+}
+
+message AdapterError {
+  string code = 1;
+  string message = 2;
+  string normalized_error = 3;
+  string raw_error_summary = 4;
+  bool retryable = 5;
+}
+
+message AdapterResult {
+  AdapterOperationStatus status = 1;
+  bool changed = 2;
+  repeated string warnings = 3;
+  repeated AdapterError errors = 4;
+  optional RollbackArtifactRef rollback_artifact = 5;
+  optional ObservedDeviceState normalized_state = 6;
+}
+
+message GetCapabilitiesRequest {
+  RequestContext context = 1;
+  DeviceRef device = 2;
+}
+
+message GetCapabilitiesResponse {
+  DeviceCapability capability = 1;
+  repeated string warnings = 2;
+  repeated AdapterError errors = 3;
+}
+
+message GetCurrentStateRequest {
+  RequestContext context = 1;
+  DeviceRef device = 2;
+}
+
+message GetCurrentStateResponse {
+  ObservedDeviceState state = 1;
+  repeated string warnings = 2;
+  repeated AdapterError errors = 3;
+}
+
+message DryRunRequest {
+  RequestContext context = 1;
+  DeviceRef device = 2;
+  DesiredDeviceState desired_state = 3;
+}
+
+message DryRunResponse {
+  AdapterResult result = 1;
+}
+
+message PrepareRequest {
+  RequestContext context = 1;
+  DeviceRef device = 2;
+  DesiredDeviceState desired_state = 3;
+}
+
+message PrepareResponse {
+  AdapterResult result = 1;
+}
+
+message CommitRequest {
+  RequestContext context = 1;
+  DeviceRef device = 2;
+  TransactionStrategy strategy = 3;
+}
+
+message CommitResponse {
+  AdapterResult result = 1;
+}
+
+message RollbackRequest {
+  RequestContext context = 1;
+  DeviceRef device = 2;
+}
+
+message RollbackResponse {
+  AdapterResult result = 1;
+}
+
+message VerifyRequest {
+  RequestContext context = 1;
+  DeviceRef device = 2;
+  DesiredDeviceState desired_state = 3;
+}
+
+message VerifyResponse {
+  AdapterResult result = 1;
+}
+
+message RecoverRequest {
+  RequestContext context = 1;
+  DeviceRef device = 2;
+}
+
+message RecoverResponse {
+  AdapterResult result = 1;
+}
+
+message ForceUnlockRequest {
+  RequestContext context = 1;
+  DeviceRef device = 2;
+  string lock_owner = 3;
+  string reason = 4;
+  bool break_glass_enabled = 5;
+}
+
+message ForceUnlockResponse {
+  AdapterResult result = 1;
+}
+

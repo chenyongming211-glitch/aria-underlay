@@ -1,0 +1,27 @@
+[project]
+name = "aria-underlay-adapter"
+version = "0.1.0"
+description = "Python southbound adapter for Aria Underlay"
+requires-python = ">=3.10"
+dependencies = [
+  "grpcio",
+  "grpcio-tools",
+  "protobuf",
+  "ncclient",
+  "pydantic",
+  "structlog",
+]
+
+[project.optional-dependencies]
+fallback = [
+  "napalm",
+  "netmiko",
+]
+test = [
+  "pytest",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+

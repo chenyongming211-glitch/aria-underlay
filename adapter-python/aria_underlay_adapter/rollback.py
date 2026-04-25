@@ -1,0 +1,3 @@
+class RollbackManager:
+    pass
+

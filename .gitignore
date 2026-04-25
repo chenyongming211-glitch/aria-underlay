@@ -1,0 +1,14 @@
+/target/
+/.idea/
+/.vscode/
+/.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+adapter-python/dist/
+adapter-python/build/
+adapter-python/*.egg-info/
+adapter-python/aria_underlay_adapter/proto/*_pb2.py
+adapter-python/aria_underlay_adapter/proto/*_pb2_grpc.py
