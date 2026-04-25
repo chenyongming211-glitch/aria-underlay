@@ -25,7 +25,10 @@ except ImportError as exc:  # pragma: no cover - exercised before proto generati
 
 from aria_underlay_adapter.drivers.fake import FakeDriver
 from aria_underlay_adapter.backends.netconf import NcclientNetconfBackend
+from aria_underlay_adapter.drivers.error import AdapterErrorDriver
 from aria_underlay_adapter.drivers.netconf_backed import NetconfBackedDriver
+from aria_underlay_adapter.errors import AdapterError
+from aria_underlay_adapter.secret_provider import LocalSecretProvider
 
 
 log = structlog.get_logger(__name__)
@@ -109,7 +112,13 @@ def serve() -> None:
     if config.fake_mode:
         registry = DriverRegistry(default_driver=FakeDriver(profile=config.fake_profile))
     else:
-        registry = DriverRegistry(driver_factory=_netconf_driver_from_device)
+        secret_provider = LocalSecretProvider(secret_file=config.secret_file)
+        registry = DriverRegistry(
+            driver_factory=lambda device: _netconf_driver_from_device(
+                device,
+                secret_provider,
+            )
+        )
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=8))
     pb2_grpc.add_UnderlayAdapterServicer_to_server(
         UnderlayAdapterService(registry),
@@ -121,11 +130,23 @@ def serve() -> None:
     server.wait_for_termination()
 
 
-def _netconf_driver_from_device(device) -> NetconfBackedDriver:
+def _netconf_driver_from_device(
+    device,
+    secret_provider: LocalSecretProvider,
+) -> NetconfBackedDriver | AdapterErrorDriver:
+    try:
+        secret = secret_provider.resolve(device.secret_ref)
+    except AdapterError as error:
+        return AdapterErrorDriver(error)
+
     return NetconfBackedDriver(
         NcclientNetconfBackend(
             host=device.management_ip,
             port=device.management_port or 830,
+            username=secret.username,
+            password=secret.password,
+            key_path=secret.key_path,
+            passphrase=secret.passphrase,
         )
     )
 

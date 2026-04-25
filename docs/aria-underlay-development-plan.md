@@ -684,7 +684,85 @@ GC 规则：
 
 ## 10. Device Onboarding、Drift 与 Lock 策略
 
-### 10.1 Device Onboarding
+### 10.1 Product Initialization / Switch Pair Registration
+
+产品初始化阶段必须把交换机纳管作为一等流程，而不是让用户先手工准备 inventory。
+
+第一阶段面向 2 台核心交换机，建议提供一个高层 API：
+
+```rust
+pub struct InitializeUnderlaySiteRequest {
+    pub request_id: String,
+    pub tenant_id: String,
+    pub site_id: String,
+    pub adapter_endpoint: String,
+    pub switches: [SwitchBootstrapRequest; 2],
+    pub allow_degraded: bool,
+}
+
+pub struct SwitchBootstrapRequest {
+    pub device_id: DeviceId,
+    pub role: DeviceRole,
+    pub management_ip: String,
+    pub management_port: u16,
+    pub vendor_hint: Option<Vendor>,
+    pub model_hint: Option<String>,
+    pub host_key_policy: HostKeyPolicy,
+    pub credential: NetconfCredentialInput,
+}
+
+pub enum NetconfCredentialInput {
+    Password {
+        username: String,
+        password: String,
+    },
+    PrivateKey {
+        username: String,
+        key_pem: String,
+        passphrase: Option<String>,
+    },
+    ExistingSecretRef {
+        secret_ref: String,
+    },
+}
+```
+
+该 API 的内部流程：
+
+```text
+InitializeUnderlaySite
+  -> validate switch pair roles
+  -> create secret for each switch credential
+  -> obtain secret_ref
+  -> register devices into inventory as Pending
+  -> trigger onboarding for both devices
+  -> collect capability profiles
+  -> require Ready by default
+  -> allow Degraded only when allow_degraded=true
+  -> return per-device result and site initialization status
+```
+
+敏感信息处理原则：
+
+- inventory 只保存 `secret_ref`。
+- transaction journal 不记录明文用户名、密码、私钥。
+- audit 只记录 secret 创建/引用事件，不记录 secret 内容。
+- Python Adapter 只通过 `secret_ref` 解析实际认证信息。
+
+初始化状态建议：
+
+```rust
+pub enum SiteInitializationStatus {
+    Ready,
+    ReadyWithDegradedDevice,
+    Failed,
+    PartiallyRegistered,
+}
+```
+
+该高层 API 是产品初始化入口；底层 `RegisterDevice` 和 `DeviceOnboarding` 仍保留为内部能力和运维补救工具。
+
+### 10.2 Device Onboarding
 
 设备必须先纳管，再探测能力，最后才能进入配置事务。
 
@@ -703,7 +781,7 @@ RegisterDevice
 
 只有 `Ready` 或显式允许 degraded 的 `Degraded` 设备可以进入配置事务。
 
-### 10.2 Periodic Drift Auditor
+### 10.3 Periodic Drift Auditor
 
 Rust 主控需要后台巡检 Worker，用于发现网工绕过 Aria 的带外变更。
 
@@ -731,7 +809,7 @@ AutoReconcile
 
 第一阶段默认 `ReportOnly`，关键资源可配置 `BlockNewTransaction`，不默认启用 `AutoReconcile`。
 
-### 10.3 Lock Acquisition Strategy
+### 10.4 Lock Acquisition Strategy
 
 Rust Tx Coordinator 负责锁获取策略。
 

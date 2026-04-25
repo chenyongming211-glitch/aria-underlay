@@ -495,6 +495,62 @@ UnderlayJournalGcCompleted
 
 真实客户现场中，设备不能从 Capability Probe 直接开始。系统必须先完成设备纳管，再进入探测和事务流程。
 
+### 9.0 产品初始化时的交换机录入
+
+Aria Underlay 的产品初始化流程必须包含交换机录入步骤。
+
+客户在初始化产品或站点时，需要一次性录入第一阶段要接管的 2 台核心交换机信息：
+
+- 交换机管理 IP。
+- NETCONF 管理端口，默认 830。
+- NETCONF 用户名。
+- NETCONF 密码或私钥。
+- 设备角色，例如 `LeafA` / `LeafB`。
+- 厂商提示，可选，例如 Huawei / H3C / Cisco / Ruijie。
+- host key 策略，例如 TOFU、known_hosts 或 pinned fingerprint。
+
+产品初始化流程不得把用户名、密码、私钥等敏感信息直接写入普通 inventory 或资源模型。
+
+正确流程是：
+
+```text
+Product Initialize
+  -> collect switch A/B management endpoint and NETCONF credential
+  -> create secret in secret provider
+  -> receive secret_ref
+  -> register switch A/B into device inventory
+  -> trigger onboarding automatically
+  -> adapter resolves secret_ref
+  -> NETCONF capability probe
+  -> mark Ready / Degraded / Unsupported / Unreachable / AuthFailed
+```
+
+初始化完成条件：
+
+- 两台交换机都成功写入 inventory。
+- 两台交换机都完成 onboarding。
+- 默认要求两台交换机都进入 `Ready`。
+- 如果允许降级交付，必须由初始化选项显式允许 `Degraded`。
+- 任意设备进入 `AuthFailed`、`Unreachable`、`Unsupported` 时，产品初始化必须返回失败或部分失败状态，并给出明确原因。
+
+因此产品层需要提供一个高层初始化入口，而不是要求调用方手动串联多个底层接口。
+
+建议命名：
+
+```text
+InitializeUnderlaySite
+RegisterSwitchPair
+```
+
+该入口内部负责：
+
+- 写入 secret。
+- 生成或接收 `secret_ref`。
+- 调用 Device Registration。
+- 触发 Device Onboarding。
+- 汇总 A/B 初始化结果。
+- 产生审计事件。
+
 ### 9.1 Device Registration
 
 Rust 主控必须提供设备注册入口。

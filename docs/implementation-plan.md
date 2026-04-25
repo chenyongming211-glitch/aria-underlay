@@ -412,6 +412,27 @@ InMemoryUnderlayService
 
 第一版 inventory 可以用内存 `DashMap`，但接口要抽象。
 
+产品初始化不能要求调用方手工串联 secret 创建、设备注册和 onboarding。
+
+第一阶段需要在 `api` 或 `device` 层补一个高层入口：
+
+```text
+InitializeUnderlaySite / RegisterSwitchPair
+```
+
+该入口接收客户录入的交换机 A/B 管理 IP、NETCONF 端口、用户名、密码或私钥、角色和厂商提示，内部完成：
+
+```text
+create secret
+  -> receive secret_ref
+  -> register A/B into inventory
+  -> trigger onboarding
+  -> collect capability
+  -> return site initialization status
+```
+
+明文凭据不得进入 inventory、journal 或审计内容。普通设备模型只保存 `secret_ref`。
+
 必须支持状态流转：
 
 ```text
@@ -1084,4 +1105,3 @@ Sprint 7 目标：
 ```text
 Rust 注册设备 -> 调 Python Adapter -> 拿 capability -> 更新 inventory 状态
 ```
-

@@ -25,6 +25,38 @@ NcclientNetconfBackend
 
 非 fake 模式下，adapter 会基于 `DeviceRef.management_ip` 和 `DeviceRef.management_port` 创建 `NcclientNetconfBackend`。
 
+非 fake 模式下，adapter 还会通过 `DeviceRef.secret_ref` 解析本地 secret。第一版支持两种来源：
+
+```text
+ARIA_UNDERLAY_SECRET_<SECRET_REF_KEY>_USERNAME
+ARIA_UNDERLAY_SECRET_<SECRET_REF_KEY>_PASSWORD
+ARIA_UNDERLAY_SECRET_<SECRET_REF_KEY>_KEY_PATH
+ARIA_UNDERLAY_SECRET_<SECRET_REF_KEY>_PASSPHRASE
+```
+
+其中 `SECRET_REF_KEY` 会把 `local/test-device` 转成 `LOCAL_TEST_DEVICE`。
+
+也支持 JSON 文件：
+
+```json
+{
+  "secrets": {
+    "local/test-device": {
+      "username": "netconf",
+      "password": "secret"
+    }
+  }
+}
+```
+
+文件路径通过环境变量指定：
+
+```text
+ARIA_UNDERLAY_SECRET_FILE=/etc/aria-underlay/secrets.json
+```
+
+如果 `secret_ref` 找不到或内容不完整，adapter 必须返回标准化 `SECRET_NOT_FOUND`，不能让 gRPC 请求变成未分类的 transport error。
+
 ## 3. 本阶段明确不做
 
 - 不做真实 VLAN/interface XML renderer。
@@ -37,22 +69,17 @@ NcclientNetconfBackend
 
 ## 4. 下一步开发项
 
-1. 补本地 secret provider。
-   - 输入：`secret_ref`。
-   - 输出：NETCONF username/password 或 key 信息。
-   - 第一版可支持环境变量或本地 YAML 文件。
-
-2. 扩展 `NcclientNetconfBackend`。
+1. 扩展 `NcclientNetconfBackend`。
    - 使用 secret provider 提供认证信息。
    - 增加 host key 策略占位。
    - 保留连接错误、认证错误、超时错误的标准化映射。
 
-3. 增加真实 capability probe example。
+2. 增加真实 capability probe example。
    - 非 fake adapter 模式。
    - 只执行 `GetCapabilities`。
    - 输出 raw capabilities 和推荐事务策略。
 
-4. 真实设备联调前补充 checklist。
+3. 真实设备联调前补充 checklist。
    - 管理 IP。
    - NETCONF 端口。
    - `secret_ref`。

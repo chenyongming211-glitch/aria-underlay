@@ -24,6 +24,8 @@ class NcclientNetconfBackend:
     port: int = 830
     username: str | None = None
     password: str | None = None
+    key_path: str | None = None
+    passphrase: str | None = None
     hostkey_verify: bool = False
     look_for_keys: bool = False
     timeout_secs: int = 30
@@ -46,9 +48,11 @@ class NcclientNetconfBackend:
                 port=self.port,
                 username=self.username,
                 password=self.password,
+                key_filename=self.key_path,
                 hostkey_verify=self.hostkey_verify,
                 look_for_keys=self.look_for_keys,
                 allow_agent=False,
+                passphrase=self.passphrase,
                 timeout=self.timeout_secs,
             ) as session:
                 raw = [str(capability) for capability in session.server_capabilities]
