@@ -11,7 +11,7 @@ from aria_underlay_adapter.errors import AdapterError
         ("candidate_only", True, False, ["netconf"]),
         ("running_only", False, False, ["netconf"]),
         ("cli_only", False, False, ["cli"]),
-        ("unsupported", False, False, []),
+        ("unsupported", False, False, ["netconf"]),
     ],
 )
 def test_mock_capability_profiles(
@@ -37,4 +37,3 @@ def test_mock_error_profiles(profile, code, retryable):
 
     assert exc.value.code == code
     assert exc.value.retryable is retryable
-

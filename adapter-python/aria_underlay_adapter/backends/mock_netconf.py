@@ -98,15 +98,15 @@ class MockNetconfBackend:
             return MockCapability(
                 model="fake-unsupported-switch",
                 os_version="fake-legacy",
-                raw_capabilities=[],
-                supports_netconf=False,
+                raw_capabilities=[BASE_10],
+                supports_netconf=True,
                 supports_candidate=False,
                 supports_validate=False,
                 supports_confirmed_commit=False,
                 supports_persist_id=False,
                 supports_rollback_on_error=False,
                 supports_writable_running=False,
-                supported_backends=[],
+                supported_backends=["netconf"],
             )
 
         if self.profile == "auth_failed":
@@ -134,4 +134,3 @@ class MockNetconfBackend:
             raw_error_summary=self.profile,
             retryable=False,
         )
-
