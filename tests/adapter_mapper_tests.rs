@@ -1,6 +1,6 @@
 use aria_underlay::adapter_client::mapper::{
-    adapter_result_to_outcome, desired_state_to_proto, shadow_state_from_proto,
-    AdapterOperationStatus,
+    adapter_result_to_outcome, capability_from_proto, desired_state_to_proto,
+    shadow_state_from_proto, AdapterOperationStatus,
 };
 use aria_underlay::model::{AdminState, DeviceId, InterfaceConfig, PortMode, VlanConfig};
 use aria_underlay::planner::device_plan::DeviceDesiredState;
@@ -8,26 +8,52 @@ use aria_underlay::proto::adapter;
 use std::collections::BTreeMap;
 
 #[test]
+fn maps_capability_warnings() {
+    let capability = capability_from_proto(
+        adapter::DeviceCapability {
+            vendor: adapter::Vendor::Unknown as i32,
+            model: "fake".into(),
+            os_version: "1.0".into(),
+            raw_capabilities: vec![],
+            supports_netconf: true,
+            supports_candidate: true,
+            supports_validate: true,
+            supports_confirmed_commit: true,
+            supports_persist_id: true,
+            supports_rollback_on_error: false,
+            supports_writable_running: false,
+            supported_backends: vec![adapter::BackendKind::Netconf as i32],
+        },
+        vec!["capability warning".into()],
+    );
+
+    assert_eq!(capability.warnings, vec!["capability warning"]);
+}
+
+#[test]
 fn maps_observed_state_to_shadow_state() {
-    let shadow = shadow_state_from_proto(adapter::ObservedDeviceState {
-        device_id: "leaf-a".into(),
-        vlans: vec![adapter::VlanConfig {
-            vlan_id: 100,
-            name: Some("prod".into()),
-            description: None,
-        }],
-        interfaces: vec![adapter::InterfaceConfig {
-            name: "GE1/0/1".into(),
-            admin_state: adapter::AdminState::Up as i32,
-            description: Some("server uplink".into()),
-            mode: Some(adapter::PortMode {
-                kind: adapter::PortModeKind::Access as i32,
-                access_vlan: Some(100),
-                native_vlan: None,
-                allowed_vlans: vec![],
-            }),
-        }],
-    }, vec!["test warning".into()])
+    let shadow = shadow_state_from_proto(
+        adapter::ObservedDeviceState {
+            device_id: "leaf-a".into(),
+            vlans: vec![adapter::VlanConfig {
+                vlan_id: 100,
+                name: Some("prod".into()),
+                description: None,
+            }],
+            interfaces: vec![adapter::InterfaceConfig {
+                name: "GE1/0/1".into(),
+                admin_state: adapter::AdminState::Up as i32,
+                description: Some("server uplink".into()),
+                mode: Some(adapter::PortMode {
+                    kind: adapter::PortModeKind::Access as i32,
+                    access_vlan: Some(100),
+                    native_vlan: None,
+                    allowed_vlans: vec![],
+                }),
+            }],
+        },
+        vec!["test warning".into()],
+    )
     .expect("observed state should map");
 
     assert_eq!(shadow.device_id.0, "leaf-a");
@@ -109,4 +135,3 @@ fn maps_adapter_result_error() {
 
     assert!(format!("{error}").contains("LOCK_FAILED"));
 }
-
