@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransactionStrategy {
-    ConfirmedCommit2Pc,
-    Candidate2Pc,
+    ConfirmedCommit,
+    CandidateCommit,
     RunningRollbackOnError,
     BestEffortCli,
     Unsupported,
@@ -22,7 +22,7 @@ impl TransactionStrategy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransactionMode {
     StrictConfirmedCommit,
-    AllowCandidate2Pc,
+    AllowCandidateCommit,
     AllowRunningFallback,
     AllowBestEffortCli,
 }
@@ -39,19 +39,19 @@ pub struct CapabilityFlags {
 
 pub fn choose_strategy(flags: CapabilityFlags, mode: TransactionMode) -> TransactionStrategy {
     if flags.supports_candidate && flags.supports_validate && flags.supports_confirmed_commit {
-        return TransactionStrategy::ConfirmedCommit2Pc;
+        return TransactionStrategy::ConfirmedCommit;
     }
 
     if flags.supports_candidate
         && flags.supports_validate
         && matches!(
             mode,
-            TransactionMode::AllowCandidate2Pc
+            TransactionMode::AllowCandidateCommit
                 | TransactionMode::AllowRunningFallback
                 | TransactionMode::AllowBestEffortCli
         )
     {
-        return TransactionStrategy::Candidate2Pc;
+        return TransactionStrategy::CandidateCommit;
     }
 
     if flags.supports_writable_running
@@ -70,4 +70,3 @@ pub fn choose_strategy(flags: CapabilityFlags, mode: TransactionMode) -> Transac
 
     TransactionStrategy::Unsupported
 }
-

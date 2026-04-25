@@ -78,6 +78,24 @@ fn small_fabric_plans_multiple_endpoint_states() {
 }
 
 #[test]
+fn small_fabric_has_no_hardcoded_endpoint_count_limit() {
+    let endpoints = (1..=21)
+        .map(|index| endpoint(&format!("sw-{index}")))
+        .collect::<Vec<_>>();
+    let members = (1..=21)
+        .map(|index| member(&format!("sw-{index}-member"), None, &format!("sw-{index}")))
+        .collect::<Vec<_>>();
+    let interfaces = (1..=21)
+        .map(|index| access_interface(&format!("sw-{index}-member"), "GE1/0/1"))
+        .collect::<Vec<_>>();
+    let intent = domain_intent(UnderlayTopology::SmallFabric, endpoints, members, interfaces);
+
+    let states = plan_underlay_domain(&intent).expect("endpoint count should not be hard-limited");
+
+    assert_eq!(states.len(), 21);
+}
+
+#[test]
 fn unknown_member_reference_fails_validation() {
     let intent = domain_intent(
         UnderlayTopology::SmallFabric,

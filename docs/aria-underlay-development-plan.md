@@ -27,7 +27,7 @@ Desired State
 
 面向 ToB 多厂商真实交付场景，架构采用脑手分离：
 
-- Rust Underlay Core 负责标准 intent、全局事务、journal、审计和平台一致性。
+- Rust Underlay Core 负责标准 intent、单 endpoint 事务、批量编排、journal、审计和平台一致性。
 - Python Underlay Adapter 负责厂商适配、NETCONF/NAPALM/Netmiko/CLI 后端和设备脏活。
 
 第一阶段重点解决当前 Python + NETCONF 方式中经常出现的问题：
@@ -213,7 +213,7 @@ Physical Switch A / B
 | `model` | VLAN、接口、端口模式等结构化模型 |
 | `state` | shadow state、refresh、drift detection |
 | `engine` | normalize、diff、dry-run |
-| `tx` | Rust 全局 2PC、confirmed commit 编排、journal、recovery |
+| `tx` | Rust 单 endpoint confirmed commit 编排、journal、recovery |
 | `proto` | Rust 与 Python Adapter 的 gRPC / Protobuf 契约 |
 | `adapter` | Python gRPC Server、厂商 driver、协议后端 |
 | `device` | Rust 侧设备 registration、onboarding、inventory、capability、adapter routing |
@@ -475,8 +475,8 @@ Normalize 规则：
 
 ```rust
 pub enum TransactionStrategy {
-    ConfirmedCommit2Pc,
-    Candidate2Pc,
+    ConfirmedCommit,
+    CandidateCommit,
     RunningRollbackOnError,
     Unsupported,
 }
@@ -485,13 +485,13 @@ pub enum TransactionStrategy {
 选择逻辑：
 
 ```text
-如果所有设备支持 candidate + validate + confirmed-commit:
-    ConfirmedCommit2Pc
+如果该 endpoint 支持 candidate + validate + confirmed-commit:
+    ConfirmedCommit
 
-否则如果调用方允许降级，且所有设备支持 candidate + validate:
-    Candidate2Pc
+否则如果调用方允许降级，且该 endpoint 支持 candidate + validate:
+    CandidateCommit
 
-否则如果调用方允许降级，且所有设备支持 writable-running + rollback-on-error:
+否则如果调用方允许降级，且该 endpoint 支持 writable-running + rollback-on-error:
     RunningRollbackOnError
 
 否则:
@@ -506,7 +506,7 @@ StrictConfirmedCommit
 
 也就是不支持 confirmed commit 就失败。
 
-### 8.2 ConfirmedCommit2Pc
+### 8.2 ConfirmedCommit
 
 这是生产首选。
 
@@ -514,12 +514,12 @@ StrictConfirmedCommit
 
 ```text
 1. start journal
-2. lock candidate on A/B
-3. edit-config candidate on A/B
-4. validate candidate on A/B
-5. confirmed commit on A/B
+2. lock candidate on endpoint
+3. edit-config candidate on endpoint
+4. validate candidate on endpoint
+5. confirmed commit on endpoint
 6. get-config running and verify desired subset
-7. final confirm on A/B
+7. final confirm on endpoint
 8. update shadow
 9. mark journal committed
 10. unlock candidate
@@ -533,13 +533,8 @@ prepare 失败:
   unlock
   running 不变
 
-confirmed commit 部分失败:
-  已成功 confirmed commit 的设备执行 cancel-commit
-  未成功设备 discard-changes
-  journal 标记 rolled back
-
 verification 失败:
-  cancel-commit all confirmed devices
+  cancel-commit
   journal 标记 rolled back
 
 final confirm 超时:
@@ -550,29 +545,29 @@ final confirm 超时:
 
 说明：
 
-两台物理交换机之间没有真正的分布式原子 commit。
+原子事务边界是单个 management endpoint。多个 endpoint 的一次 apply 是批量编排，不是跨设备分布式原子 commit。
 
 `confirmed-commit` 的价值是把 commit 阶段的灰区变成一个可自动回滚的短暂窗口。
 
-### 8.3 Candidate2Pc
+### 8.3 CandidateCommit
 
 适用于设备支持 candidate + validate，但不支持 confirmed commit。
 
 流程：
 
 ```text
-1. lock candidate on A/B
-2. edit-config candidate on A/B
-3. validate candidate on A/B
-4. if all prepare ok, commit on A/B
+1. lock candidate on endpoint
+2. edit-config candidate on endpoint
+3. validate candidate on endpoint
+4. commit on endpoint
 5. if prepare failed, discard-changes
 ```
 
 限制：
 
-- commit 前一致性较强。
-- commit 后可能出现 A 成功、B 失败。
-- 需要补偿回滚和 `InDoubt` 标记。
+- commit 前不会影响 running。
+- commit 后如果 session 断开，需要 verify/recovery 判断是否收敛。
+- 需要 `InDoubt` 标记。
 - 不建议作为生产默认模式。
 
 ### 8.4 RunningRollbackOnError
@@ -1244,20 +1239,20 @@ pub enum ApplyStatus {
 - 同一 desired state 重复 dry-run，第二次返回 `NoChange`。
 - 给定 VLAN/interface desired state，可以生成目标厂商操作。
 
-### Sprint 4: Rust 全局 2PC 与 Journal
+### Sprint 4: Rust 单 endpoint 事务与 Journal
 
 目标：
 
-- Rust tx coordinator。
+- Rust endpoint tx coordinator。
 - Rust transaction journal。
 - 调用 Adapter Prepare / Commit / Rollback / Verify。
-- Candidate2Pc 状态机。
+- Candidate / ConfirmedCommit 状态机。
 - failure path。
 - journal。
 
 交付：
 
-- `src/tx/candidate_2pc.rs`
+- `src/tx/candidate_commit.rs`
 - `src/tx/journal.rs`
 - `tests/transaction_tests.rs`
 
@@ -1265,7 +1260,7 @@ pub enum ApplyStatus {
 
 - 任意一台设备 prepare 失败，另一台 running 不变。
 
-### Sprint 5: ConfirmedCommit2Pc 与 Recovery
+### Sprint 5: ConfirmedCommit 与 Recovery
 
 目标：
 

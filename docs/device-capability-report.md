@@ -34,7 +34,7 @@
 ## 推荐事务策略
 
 ```text
-ConfirmedCommit2Pc / Candidate2Pc / RunningRollbackOnError / BestEffortCli / Unsupported
+ConfirmedCommit / CandidateCommit / RunningRollbackOnError / BestEffortCli / Unsupported
 ```
 
 结论：

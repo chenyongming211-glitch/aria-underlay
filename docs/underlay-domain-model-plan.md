@@ -19,13 +19,13 @@ Underlay 管控域
 UnderlayDomainIntent
 ```
 
-交换机规模预期：
+交换机规模定位：
 
 ```text
-1 <= management endpoint <= 20
+small underlay domain
 ```
 
-不做大规模 fabric controller，不做自动 EVPN fabric 编排。
+这里不设置硬编码数量上限。`aria-underlay` 的产品定位是小规模物理交换机管控，不做大规模 fabric controller，不做自动 EVPN fabric 编排。实际注册数量和一次 apply 的规模后续由产品配额、部署规格、并发配置和运维策略控制，不在 planner 中用固定数字拒绝。
 
 ## 2. 必须覆盖的现场形态
 
@@ -46,7 +46,7 @@ UnderlayDomainIntent
 单 endpoint 事务
 ```
 
-也就是说，虽然物理上有 2 台设备，但 Aria Underlay 的南向事务参与者只有 1 个。
+也就是说，虽然物理上有 2 台设备，但 Aria Underlay 的南向原子操作目标只有 1 个 endpoint。
 
 ### 2.2 MLAG / 双 ToR
 
@@ -61,24 +61,24 @@ UnderlayDomainIntent
 事务含义：
 
 ```text
-双 endpoint 事务
+两个独立单 endpoint 事务
 ```
 
-这是当前 `LeafA / LeafB` 模型最接近的场景。
+这是当前 `LeafA / LeafB` 模型最接近的场景。MLAG 两台设备可以在一次批量 intent 中同时出现，但原子性边界仍然是单个 management endpoint；其中一台失败时，应记录失败并支持单独重试，而不是要求另一台回滚成跨设备强一致事务。
 
 ### 2.3 小规模多交换机
 
 典型形态：
 
 ```text
-3 到 20 台交换机
+多台交换机
 每台或部分交换机有独立管理 IP
 ```
 
 事务含义：
 
 ```text
-N endpoint 事务，N <= 20
+N 个独立单 endpoint 事务
 ```
 
 该模式仍属于小规模私有化交付，不升级为完整 SDN fabric controller。
@@ -101,7 +101,7 @@ pub enum UnderlayTopology {
 | --- | --- | --- |
 | `StackSingleManagementIp` | 1 | 堆叠/虚拟化集群，对外一个管理面 |
 | `MlagDualManagementIp` | 2 | 双 ToR / MLAG |
-| `SmallFabric` | 1..=20 | 少量交换机的小型管控域 |
+| `SmallFabric` | 多个 | 少量交换机的小型管控域，不设硬编码数量上限 |
 
 ### 3.2 ManagementEndpoint
 
@@ -118,7 +118,7 @@ pub struct ManagementEndpoint {
 
 `ManagementEndpoint` 是真正的 NETCONF / SSH 连接对象。
 
-事务参与者按 endpoint 计算，而不是按物理交换机成员计算。
+原子操作目标按 endpoint 计算，而不是按物理交换机成员计算。更准确地说，原子事务边界是单个 endpoint；多个 endpoint 的 apply 属于批量编排，不承诺跨 endpoint 原子提交。
 
 ### 3.3 SwitchMember
 
@@ -198,7 +198,7 @@ pub struct EndpointDesiredState {
 
 ## 5. 事务调整
 
-事务参与者：
+原子事务边界：
 
 ```text
 management endpoint
@@ -212,15 +212,24 @@ physical switch member
 
 因此：
 
-- 堆叠单 IP：事务参与者数量为 1。
-- MLAG 双 IP：事务参与者数量为 2。
-- 小规模多交换机：事务参与者数量为 N，N <= 20。
+- 堆叠单 IP：1 个 endpoint，1 个单设备原子事务。
+- MLAG 双 IP：2 个 endpoint，2 个彼此独立的单设备原子事务。
+- 小规模多交换机：多个 endpoint，多个彼此独立的单设备原子事务。
+
+一次 `UnderlayDomainIntent` 可以描述多个 endpoint 的期望状态，但它不是全局分布式事务。执行层可以串行或按配置并发下发，每个 endpoint 独立保证：
+
+- diff 前置。
+- candidate / validate / confirmed-commit，如果设备支持。
+- rollback / recovery / InDoubt。
+- journal 和审计。
+
+跨 endpoint 不做强 2PC，不承诺“一起成功或一起回滚”。如果 MLAG 的一台设备成功、另一台失败，系统必须返回部分失败、记录审计，并允许失败设备单独重试。
 
 这会影响：
 
 - device lock table。
 - NETCONF session pool。
-- tx journal device list。
+- tx journal endpoint list。
 - drift auditor scan list。
 - dry-run change set 按 endpoint 输出。
 
@@ -282,7 +291,7 @@ ApplyDomainIntentRequest { intent: UnderlayDomainIntent }
 如果继续只强化 `SwitchPairIntent`，后面会遇到：
 
 - 堆叠单 IP 无法自然表达。
-- 事务参与者数量与物理交换机数量混淆。
+- 原子事务边界、管理 endpoint 与物理交换机数量混淆。
 - journal 记录里 `device_id` 语义不清。
 - drift auditor 不知道该按 member 还是 endpoint 扫描。
 - 小规模多交换机需要重新拆 API。

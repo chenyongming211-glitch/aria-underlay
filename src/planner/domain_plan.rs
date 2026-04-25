@@ -82,11 +82,6 @@ fn validate_domain_shape(intent: &UnderlayDomainIntent) -> UnderlayResult<()> {
             "underlay domain has no management endpoints".into(),
         ));
     }
-    if intent.endpoints.len() > 20 {
-        return Err(UnderlayError::InvalidIntent(
-            "underlay domain supports at most 20 management endpoints".into(),
-        ));
-    }
     if intent.members.is_empty() {
         return Err(UnderlayError::InvalidIntent(
             "underlay domain has no switch members".into(),

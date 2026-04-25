@@ -29,7 +29,8 @@ Rust 负责：
 - 设备纳管。
 - inventory。
 - 标准 intent。
-- 全局事务状态机。
+- 单 endpoint 事务状态机。
+- 多 endpoint 批量编排。
 - transaction journal。
 - drift auditor。
 - lock strategy。
@@ -49,7 +50,7 @@ Python 负责：
 
 第一阶段只实现：
 
-- 小规模 underlay 管控域，通常 1 到 2 个管理 endpoint，后续自然扩展到 20 个以内。
+- 小规模 underlay 管控域，通常 1 到 2 个管理 endpoint，后续自然扩展到少量多 endpoint 场景。
 - VLAN。
 - interface description。
 - access port。
@@ -93,7 +94,7 @@ AdapterError
 
 ### 2.2 Transaction Owned by Rust
 
-Python Adapter 可以执行单设备动作，但不能决定全局事务结果。
+Python Adapter 可以执行单设备动作，但不能决定最终 operation 状态。
 
 Rust 决定：
 
@@ -183,8 +184,8 @@ aria-underlay/
 │   │   ├── mod.rs
 │   │   ├── strategy.rs
 │   │   ├── coordinator.rs
-│   │   ├── candidate_2pc.rs
-│   │   ├── confirmed_commit_2pc.rs
+│   │   ├── candidate_commit.rs
+│   │   ├── confirmed_commit.rs
 │   │   ├── lock_strategy.rs
 │   │   ├── journal.rs
 │   │   └── recovery.rs
@@ -287,8 +288,8 @@ enum BackendKind {
 
 enum TransactionStrategy {
   TRANSACTION_STRATEGY_UNSPECIFIED = 0;
-  TRANSACTION_STRATEGY_CONFIRMED_COMMIT_2PC = 1;
-  TRANSACTION_STRATEGY_CANDIDATE_2PC = 2;
+  TRANSACTION_STRATEGY_CONFIRMED_COMMIT = 1;
+  TRANSACTION_STRATEGY_CANDIDATE_COMMIT = 2;
   TRANSACTION_STRATEGY_RUNNING_ROLLBACK_ON_ERROR = 3;
   TRANSACTION_STRATEGY_BEST_EFFORT_CLI = 4;
   TRANSACTION_STRATEGY_UNSUPPORTED = 100;
@@ -806,8 +807,8 @@ Rust 能通过 Adapter 完成真实设备 capability probe
 Rust 侧实现策略选择：
 
 ```text
-candidate + validate + confirmed-commit -> ConfirmedCommit2Pc
-candidate + validate -> Candidate2Pc
+candidate + validate + confirmed-commit -> ConfirmedCommit
+candidate + validate -> CandidateCommit
 writable-running + rollback-on-error -> RunningRollbackOnError
 CLI fallback allowed -> BestEffortCli
 otherwise -> Unsupported
@@ -878,7 +879,7 @@ Python Driver 完成 VLAN / interface 的设备级 diff 和 renderer
 Sprint 4 目标：
 
 ```text
-Rust 全局 Candidate2Pc 跑通
+Rust 单 endpoint CandidateCommit 跑通
 ```
 
 任务：
@@ -893,9 +894,9 @@ Rust 全局 Candidate2Pc 跑通
 
 验收：
 
-- A/B Prepare 成功后才进入 Commit。
-- 任一 Prepare 失败，另一台不会 Commit。
-- Validate 失败时 running 不变。
+- 单 endpoint Prepare 成功后才进入 Commit。
+- Prepare 失败不会 Commit。
+- Validate 失败时本 endpoint running 不变。
 - Journal 记录每个 phase。
 - 进程重启后能扫描未完成 journal。
 
@@ -904,14 +905,14 @@ Rust 全局 Candidate2Pc 跑通
 Sprint 5 目标：
 
 ```text
-ConfirmedCommit2Pc、Verify、FinalConfirm 和 InDoubt 处理跑通
+ConfirmedCommit、Verify、FinalConfirm 和 InDoubt 处理跑通
 ```
 
 任务：
 
 - Adapter 实现 confirmed-commit。
 - Adapter 实现 cancel-commit。
-- Rust 实现 ConfirmedCommit2Pc。
+- Rust 实现 ConfirmedCommit。
 - Rust 实现 post-commit verify。
 - Rust 实现 final confirm。
 - Rust 实现 final confirm timeout 后 get-current-state 判断。
@@ -919,8 +920,7 @@ ConfirmedCommit2Pc、Verify、FinalConfirm 和 InDoubt 处理跑通
 
 验收：
 
-- A confirmed 成功、B confirmed 失败时，A cancel。
-- Verify 失败时，A/B cancel。
+- confirmed 后 verify 失败时，执行 cancel。
 - Final confirm timeout 后能判断 converged / in-doubt。
 - `InDoubt` journal 不会被 GC。
 

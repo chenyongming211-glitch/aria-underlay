@@ -1,5 +1,5 @@
-pub mod candidate_2pc;
-pub mod confirmed_commit_2pc;
+pub mod candidate_commit;
+pub mod confirmed_commit;
 pub mod coordinator;
 pub mod journal;
 pub mod lock_strategy;

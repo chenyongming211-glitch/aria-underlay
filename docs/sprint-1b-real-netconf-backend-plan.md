@@ -186,14 +186,14 @@ cargo run --example real_capability_probe
 如果已经知道期望策略，可以增加：
 
 ```bash
-ARIA_UNDERLAY_EXPECTED_STRATEGY=ConfirmedCommit2Pc
+ARIA_UNDERLAY_EXPECTED_STRATEGY=ConfirmedCommit
 ```
 
 允许值参考 Rust enum：
 
 ```text
-ConfirmedCommit2Pc
-Candidate2Pc
+ConfirmedCommit
+CandidateCommit
 RunningRollbackOnError
 BestEffortCli
 Unsupported

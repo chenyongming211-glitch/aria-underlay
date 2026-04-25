@@ -14,6 +14,5 @@ fn confirmed_commit_strategy_wins_when_supported() {
         TransactionMode::StrictConfirmedCommit,
     );
 
-    assert_eq!(strategy, TransactionStrategy::ConfirmedCommit2Pc);
+    assert_eq!(strategy, TransactionStrategy::ConfirmedCommit);
 }
-

@@ -27,7 +27,8 @@ Rust 主控负责：
 
 - 设备纳管和 inventory
 - 标准 intent / desired state
-- 全局事务状态机
+- 单 endpoint 事务状态机
+- 多 endpoint 批量编排
 - transaction journal
 - drift auditor
 - lock strategy
