@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 
+use crate::adapter_client::mapper::AdapterOperationStatus;
 use crate::adapter_client::AdapterClient;
 use crate::api::force_unlock::{ForceUnlockRequest, ForceUnlockResponse};
 use crate::api::request::{
@@ -22,6 +23,7 @@ use crate::planner::device_plan::{plan_switch_pair, DeviceDesiredState};
 use crate::planner::domain_plan::plan_underlay_domain;
 use crate::state::DeviceShadowState;
 use crate::tx::recovery::RecoveryReport;
+use crate::tx::TransactionStrategy;
 use crate::{UnderlayError, UnderlayResult};
 
 #[derive(Debug, Clone)]
@@ -38,8 +40,7 @@ impl AriaUnderlayService {
         validate_switch_pair_intent(&request.intent)?;
 
         let desired_states = plan_switch_pair(&request.intent);
-        let current_states = self.fetch_current_states(&desired_states).await?;
-        build_dry_run_plan(&desired_states, &current_states)
+        self.dry_run_desired_states(&desired_states).await
     }
 
     async fn dry_run_domain_plan(
@@ -47,8 +48,7 @@ impl AriaUnderlayService {
         request: &ApplyDomainIntentRequest,
     ) -> UnderlayResult<DryRunPlan> {
         let desired_states = plan_underlay_domain(&request.intent)?;
-        let current_states = self.fetch_current_states(&desired_states).await?;
-        build_dry_run_plan(&desired_states, &current_states)
+        self.dry_run_desired_states(&desired_states).await
     }
 
     pub async fn apply_domain_intent(
@@ -59,7 +59,8 @@ impl AriaUnderlayService {
             .trace_id
             .clone()
             .unwrap_or_else(|| request.request_id.clone());
-        let plan = self.dry_run_domain_plan(&request).await?;
+        let desired_states = plan_underlay_domain(&request.intent)?;
+        let plan = self.dry_run_desired_states(&desired_states).await?;
         let device_results = device_results_from_plan(&plan);
 
         if plan.is_noop() {
@@ -74,7 +75,18 @@ impl AriaUnderlayService {
             });
         }
 
-        Err(UnderlayError::UnsupportedTransactionStrategy)
+        let strategy = self
+            .apply_changed_endpoint_states(&desired_states, &plan)
+            .await?;
+        Ok(ApplyIntentResponse {
+            request_id: request.request_id,
+            trace_id,
+            tx_id: None,
+            status: ApplyStatus::Success,
+            strategy: Some(strategy),
+            device_results,
+            warnings: Vec::new(),
+        })
     }
 
     pub async fn dry_run_domain(
@@ -102,6 +114,100 @@ impl AriaUnderlayService {
         }
 
         Ok(current_states)
+    }
+
+    async fn dry_run_desired_states(
+        &self,
+        desired_states: &[DeviceDesiredState],
+    ) -> UnderlayResult<DryRunPlan> {
+        let current_states = self.fetch_current_states(desired_states).await?;
+        build_dry_run_plan(desired_states, &current_states)
+    }
+
+    async fn apply_changed_endpoint_states(
+        &self,
+        desired_states: &[DeviceDesiredState],
+        plan: &DryRunPlan,
+    ) -> UnderlayResult<TransactionStrategy> {
+        let mut selected_strategy = None;
+
+        for desired in desired_states {
+            let Some(change_set) = plan
+                .change_sets
+                .iter()
+                .find(|change_set| change_set.device_id == desired.device_id)
+            else {
+                return Err(UnderlayError::InvalidDeviceState(format!(
+                    "missing change set for endpoint {}",
+                    desired.device_id.0
+                )));
+            };
+            if change_set.is_empty() {
+                continue;
+            }
+
+            let managed = self.inventory.get(&desired.device_id)?;
+            let mut client = AdapterClient::connect(managed.info.adapter_endpoint.clone()).await?;
+            let capability = match managed.capability {
+                Some(capability) => capability,
+                None => client.get_capabilities(&managed.info).await?,
+            };
+            let strategy = capability.recommended_strategy;
+            if !strategy.is_supported() {
+                return Err(UnderlayError::UnsupportedTransactionStrategy);
+            }
+            selected_strategy.get_or_insert(strategy);
+
+            let prepare = client.prepare(&managed.info, desired).await?;
+            if prepare.status != AdapterOperationStatus::Prepared {
+                return Err(UnderlayError::AdapterOperation {
+                    code: "UNEXPECTED_PREPARE_STATUS".into(),
+                    message: format!("adapter returned prepare status {:?}", prepare.status),
+                    retryable: false,
+                    errors: Vec::new(),
+                });
+            }
+
+            match client.commit(&managed.info, strategy).await {
+                Ok(commit) if commit.status == AdapterOperationStatus::Committed => {}
+                Ok(commit) => {
+                    let _ = client.rollback(&managed.info).await;
+                    return Err(UnderlayError::AdapterOperation {
+                        code: "UNEXPECTED_COMMIT_STATUS".into(),
+                        message: format!("adapter returned commit status {:?}", commit.status),
+                        retryable: false,
+                        errors: Vec::new(),
+                    });
+                }
+                Err(err) => {
+                    let _ = client.rollback(&managed.info).await;
+                    return Err(err);
+                }
+            }
+
+            match client.verify(&managed.info, desired).await {
+                Ok(verify)
+                    if matches!(
+                        verify.status,
+                        AdapterOperationStatus::NoChange | AdapterOperationStatus::Committed
+                    ) => {}
+                Ok(verify) => {
+                    let _ = client.rollback(&managed.info).await;
+                    return Err(UnderlayError::AdapterOperation {
+                        code: "UNEXPECTED_VERIFY_STATUS".into(),
+                        message: format!("adapter returned verify status {:?}", verify.status),
+                        retryable: false,
+                        errors: Vec::new(),
+                    });
+                }
+                Err(err) => {
+                    let _ = client.rollback(&managed.info).await;
+                    return Err(err);
+                }
+            }
+        }
+
+        selected_strategy.ok_or(UnderlayError::UnsupportedTransactionStrategy)
     }
 }
 
@@ -138,11 +244,13 @@ impl UnderlayService for AriaUnderlayService {
         &self,
         request: ApplyIntentRequest,
     ) -> UnderlayResult<ApplyIntentResponse> {
+        validate_switch_pair_intent(&request.intent)?;
         let trace_id = request
             .trace_id
             .clone()
             .unwrap_or_else(|| request.request_id.clone());
-        let plan = self.dry_run_plan(&request).await?;
+        let desired_states = plan_switch_pair(&request.intent);
+        let plan = self.dry_run_desired_states(&desired_states).await?;
         let device_results = device_results_from_plan(&plan);
 
         if plan.is_noop() {
@@ -157,7 +265,18 @@ impl UnderlayService for AriaUnderlayService {
             });
         }
 
-        Err(UnderlayError::UnsupportedTransactionStrategy)
+        let strategy = self
+            .apply_changed_endpoint_states(&desired_states, &plan)
+            .await?;
+        Ok(ApplyIntentResponse {
+            request_id: request.request_id,
+            trace_id,
+            tx_id: None,
+            status: ApplyStatus::Success,
+            strategy: Some(strategy),
+            device_results,
+            warnings: Vec::new(),
+        })
     }
 
     async fn dry_run(&self, request: ApplyIntentRequest) -> UnderlayResult<DryRunResponse> {

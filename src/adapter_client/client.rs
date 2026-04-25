@@ -2,13 +2,17 @@ use tonic::transport::Channel;
 
 use crate::adapter_client::mapper::{
     adapter_result_to_outcome, capability_from_proto, desired_state_to_proto, device_ref_from_info,
-    extract_adapter_errors, shadow_state_from_proto, AdapterOutcome,
+    extract_adapter_errors, shadow_state_from_proto, strategy_to_proto, AdapterOutcome,
 };
 use crate::device::{DeviceCapabilityProfile, DeviceInfo};
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::proto::adapter::underlay_adapter_client::UnderlayAdapterClient;
-use crate::proto::adapter::{GetCapabilitiesRequest, GetCurrentStateRequest, PrepareRequest, RequestContext};
+use crate::proto::adapter::{
+    CommitRequest, GetCapabilitiesRequest, GetCurrentStateRequest, PrepareRequest, RequestContext,
+    RollbackRequest, VerifyRequest,
+};
 use crate::state::DeviceShadowState;
+use crate::tx::TransactionStrategy;
 use crate::{UnderlayError, UnderlayResult};
 
 #[derive(Debug, Clone)]
@@ -109,6 +113,79 @@ impl AdapterClient {
         let result = response.result.ok_or_else(|| UnderlayError::AdapterOperation {
             code: "MISSING_ADAPTER_RESULT".into(),
             message: "adapter returned no prepare result".into(),
+            retryable: false,
+            errors: Vec::new(),
+        })?;
+
+        adapter_result_to_outcome(result)
+    }
+
+    pub async fn commit(
+        &mut self,
+        device: &DeviceInfo,
+        strategy: TransactionStrategy,
+    ) -> UnderlayResult<AdapterOutcome> {
+        let response = self
+            .inner
+            .commit(CommitRequest {
+                context: Some(request_context(device)),
+                device: Some(device_ref_from_info(device)),
+                strategy: strategy_to_proto(strategy) as i32,
+            })
+            .await
+            .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?
+            .into_inner();
+
+        let result = response.result.ok_or_else(|| UnderlayError::AdapterOperation {
+            code: "MISSING_ADAPTER_RESULT".into(),
+            message: "adapter returned no commit result".into(),
+            retryable: false,
+            errors: Vec::new(),
+        })?;
+
+        adapter_result_to_outcome(result)
+    }
+
+    pub async fn rollback(&mut self, device: &DeviceInfo) -> UnderlayResult<AdapterOutcome> {
+        let response = self
+            .inner
+            .rollback(RollbackRequest {
+                context: Some(request_context(device)),
+                device: Some(device_ref_from_info(device)),
+            })
+            .await
+            .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?
+            .into_inner();
+
+        let result = response.result.ok_or_else(|| UnderlayError::AdapterOperation {
+            code: "MISSING_ADAPTER_RESULT".into(),
+            message: "adapter returned no rollback result".into(),
+            retryable: false,
+            errors: Vec::new(),
+        })?;
+
+        adapter_result_to_outcome(result)
+    }
+
+    pub async fn verify(
+        &mut self,
+        device: &DeviceInfo,
+        desired_state: &DeviceDesiredState,
+    ) -> UnderlayResult<AdapterOutcome> {
+        let response = self
+            .inner
+            .verify(VerifyRequest {
+                context: Some(request_context(device)),
+                device: Some(device_ref_from_info(device)),
+                desired_state: Some(desired_state_to_proto(desired_state)),
+            })
+            .await
+            .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?
+            .into_inner();
+
+        let result = response.result.ok_or_else(|| UnderlayError::AdapterOperation {
+            code: "MISSING_ADAPTER_RESULT".into(),
+            message: "adapter returned no verify result".into(),
             retryable: false,
             errors: Vec::new(),
         })?;

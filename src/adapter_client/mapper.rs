@@ -4,7 +4,7 @@ use crate::model::{AdminState, DeviceId, InterfaceConfig, PortMode, Vendor, Vlan
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::proto::adapter;
 use crate::state::DeviceShadowState;
-use crate::tx::{choose_strategy, CapabilityFlags, TransactionMode};
+use crate::tx::{choose_strategy, CapabilityFlags, TransactionMode, TransactionStrategy};
 use crate::{AdapterErrorDetail, UnderlayError, UnderlayResult};
 
 pub fn extract_adapter_errors(errors: Vec<adapter::AdapterError>) -> Option<UnderlayError> {
@@ -147,6 +147,18 @@ pub fn adapter_result_to_outcome(proto: adapter::AdapterResult) -> UnderlayResul
             .map(|state| shadow_state_from_proto(state, Vec::new()))
             .transpose()?,
     })
+}
+
+pub fn strategy_to_proto(strategy: TransactionStrategy) -> adapter::TransactionStrategy {
+    match strategy {
+        TransactionStrategy::ConfirmedCommit => adapter::TransactionStrategy::ConfirmedCommit,
+        TransactionStrategy::CandidateCommit => adapter::TransactionStrategy::CandidateCommit,
+        TransactionStrategy::RunningRollbackOnError => {
+            adapter::TransactionStrategy::RunningRollbackOnError
+        }
+        TransactionStrategy::BestEffortCli => adapter::TransactionStrategy::BestEffortCli,
+        TransactionStrategy::Unsupported => adapter::TransactionStrategy::Unsupported,
+    }
 }
 
 #[derive(Debug, Clone)]

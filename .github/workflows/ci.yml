@@ -445,6 +445,11 @@ jobs:
           ARIA_UNDERLAY_ADAPTER_ENDPOINT: http://127.0.0.1:50051
         run: cargo run --example domain_noop_apply_probe
 
+      - name: Run domain changed apply probe example
+        env:
+          ARIA_UNDERLAY_ADAPTER_ENDPOINT: http://127.0.0.1:50051
+        run: cargo run --example domain_changed_apply_probe
+
       - name: Adapter logs
         if: always()
         run: cat /tmp/aria-underlay-adapter.log || true
