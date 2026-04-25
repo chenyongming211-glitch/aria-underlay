@@ -33,6 +33,8 @@ Sprint 1B: Real Device Capability Probe
 - 通过环境变量选择 profile。
 - Python 单元测试。
 - GitHub Actions 继续验证 Sprint 0 integration。
+- Rust `adapter_actions_probe` 通过 gRPC 调用 `GetCurrentState` 与 `Prepare`。
+- GitHub Actions 覆盖 prepare 成功、lock 失败、validate 失败三条端到端路径。
 
 本阶段不做：
 
@@ -99,6 +101,9 @@ confirmed
 - `unreachable` 返回标准化 `AdapterError`。
 - `GetCurrentState` 能返回稳定的 mock VLAN / interface 状态。
 - `Prepare` 能模拟 lock / validate 成功与失败。
+- CI 中 `confirmed` profile 必须跑通 `GetCurrentState + Prepare` 成功路径。
+- CI 中 `lock_failed` profile 必须返回标准化 `LOCK_FAILED`。
+- CI 中 `validate_failed` profile 必须返回标准化 `VALIDATE_FAILED`。
 - GitHub Actions 保持 Rust / Python / Sprint 0 Integration 全部通过。
 
 ## 7. Sprint 1B 入口条件
