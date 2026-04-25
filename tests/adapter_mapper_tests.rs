@@ -1,10 +1,11 @@
 use aria_underlay::adapter_client::mapper::{
-    adapter_result_to_outcome, capability_from_proto, desired_state_to_proto,
+    adapter_result_to_outcome, capability_from_proto, desired_state_to_proto, extract_adapter_errors,
     shadow_state_from_proto, AdapterOperationStatus,
 };
 use aria_underlay::model::{AdminState, DeviceId, InterfaceConfig, PortMode, VlanConfig};
 use aria_underlay::planner::device_plan::DeviceDesiredState;
 use aria_underlay::proto::adapter;
+use aria_underlay::UnderlayError;
 use std::collections::BTreeMap;
 
 #[test]
@@ -28,6 +29,44 @@ fn maps_capability_warnings() {
     );
 
     assert_eq!(capability.warnings, vec!["capability warning"]);
+}
+
+#[test]
+fn extracts_all_adapter_errors() {
+    let error = extract_adapter_errors(vec![
+        adapter::AdapterError {
+            code: "FIRST".into(),
+            message: "first error".into(),
+            normalized_error: String::new(),
+            raw_error_summary: String::new(),
+            retryable: true,
+        },
+        adapter::AdapterError {
+            code: "SECOND".into(),
+            message: "second error".into(),
+            normalized_error: String::new(),
+            raw_error_summary: String::new(),
+            retryable: false,
+        },
+    ])
+    .expect("adapter errors should map");
+
+    match error {
+        UnderlayError::AdapterOperation {
+            code,
+            message,
+            retryable,
+            errors,
+        } => {
+            assert_eq!(code, "FIRST");
+            assert_eq!(message, "first error");
+            assert!(retryable);
+            assert_eq!(errors.len(), 1);
+            assert_eq!(errors[0].code, "SECOND");
+            assert_eq!(errors[0].message, "second error");
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
 }
 
 #[test]

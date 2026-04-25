@@ -105,7 +105,13 @@ class NetconfBackedDriver:
         raise NotImplementedError
 
     def force_unlock(self, device, lock_owner, reason):
-        raise NotImplementedError
+        raise AdapterError(
+            code="NOT_IMPLEMENTED",
+            message="force unlock is not implemented for NETCONF backend",
+            normalized_error="force unlock operation missing",
+            raw_error_summary="NETCONF kill-session support is not implemented yet",
+            retryable=False,
+        )
 
     def _backend_kind_to_proto(self, backend: str):
         if backend == "netconf":

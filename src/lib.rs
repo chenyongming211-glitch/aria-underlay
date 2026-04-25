@@ -13,5 +13,4 @@ pub mod tx;
 pub mod utils;
 pub mod worker;
 
-pub use error::{UnderlayError, UnderlayResult};
-
+pub use error::{AdapterErrorDetail, UnderlayError, UnderlayResult};
