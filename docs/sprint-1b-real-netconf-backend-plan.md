@@ -61,13 +61,13 @@ Rust 侧已经补出第一版产品初始化入口：
 
 ```text
 InitializeUnderlaySite
-  -> create local secret_ref
+  -> create secret_ref through SecretStore
   -> register LeafA / LeafB
   -> trigger onboarding
   -> summarize site status
 ```
 
-该入口第一版使用内存 secret store，占住产品初始化边界。后续接入 Aria Controller 时，需要把该 store 替换为正式 secret provider / metadata store。
+该入口依赖 `SecretStore` trait。第一版提供 `InMemorySecretStore` 用于测试和本地集成，占住产品初始化边界；后续接入 Aria Controller 时，只需要替换为正式 secret provider / metadata store。
 
 ## 3. 本阶段明确不做
 

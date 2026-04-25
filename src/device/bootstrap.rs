@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
-use crate::device::secret::{InMemorySecretStore, NetconfCredentialInput};
+use crate::device::secret::{NetconfCredentialInput, SecretStore};
 use crate::device::{
     DeviceInventory, DeviceLifecycleState, DeviceOnboardingService, DeviceRegistrationService,
     HostKeyPolicy, RegisterDeviceRequest,
@@ -61,16 +62,19 @@ pub struct UnderlaySiteInitializationService {
     inventory: DeviceInventory,
     registration: DeviceRegistrationService,
     onboarding: DeviceOnboardingService,
-    secret_store: InMemorySecretStore,
+    secret_store: Arc<dyn SecretStore>,
 }
 
 impl UnderlaySiteInitializationService {
-    pub fn new(inventory: DeviceInventory, secret_store: InMemorySecretStore) -> Self {
+    pub fn new<S>(inventory: DeviceInventory, secret_store: S) -> Self
+    where
+        S: SecretStore + 'static,
+    {
         Self {
             registration: DeviceRegistrationService::new(inventory.clone()),
             onboarding: DeviceOnboardingService::new(inventory.clone()),
             inventory,
-            secret_store,
+            secret_store: Arc::new(secret_store),
         }
     }
 

@@ -40,8 +40,18 @@ pub struct InMemorySecretStore {
     inner: Arc<DashMap<String, StoredNetconfCredential>>,
 }
 
-impl InMemorySecretStore {
-    pub fn create_for_device(
+pub trait SecretStore: std::fmt::Debug + Send + Sync {
+    fn create_for_device(
+        &self,
+        tenant_id: &str,
+        site_id: &str,
+        device_id: &DeviceId,
+        credential: NetconfCredentialInput,
+    ) -> UnderlayResult<String>;
+}
+
+impl SecretStore for InMemorySecretStore {
+    fn create_for_device(
         &self,
         tenant_id: &str,
         site_id: &str,
@@ -95,7 +105,9 @@ impl InMemorySecretStore {
             }
         }
     }
+}
 
+impl InMemorySecretStore {
     pub fn get(&self, secret_ref: &str) -> Option<StoredNetconfCredential> {
         self.inner
             .get(secret_ref)

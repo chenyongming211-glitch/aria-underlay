@@ -2,7 +2,8 @@ use aria_underlay::device::{
     bootstrap::validate_switch_pair, onboarding::lifecycle_state_for_onboarding_error,
     DeviceInventory, DeviceLifecycleState, DeviceRegistrationService, HostKeyPolicy,
     InMemorySecretStore, InitializeUnderlaySiteRequest, NetconfCredentialInput,
-    RegisterDeviceRequest, SiteInitializationStatus, SwitchBootstrapRequest,
+    RegisterDeviceRequest, SecretStore, SiteInitializationStatus, SwitchBootstrapRequest,
+    UnderlaySiteInitializationService,
 };
 use aria_underlay::model::{DeviceId, DeviceRole, Vendor};
 use aria_underlay::UnderlayError;
@@ -145,6 +146,29 @@ fn site_initialization_status_is_serializable() {
     assert_eq!(encoded, "\"Ready\"");
 }
 
+#[tokio::test]
+async fn site_initialization_accepts_custom_secret_store() {
+    let initializer =
+        UnderlaySiteInitializationService::new(DeviceInventory::default(), RejectingSecretStore);
+    let response = initializer
+        .initialize_site(InitializeUnderlaySiteRequest {
+            request_id: "req-a".into(),
+            tenant_id: "tenant-a".into(),
+            site_id: "site-a".into(),
+            adapter_endpoint: "http://127.0.0.1:50051".into(),
+            switches: vec![
+                switch_bootstrap("leaf-a", DeviceRole::LeafA),
+                switch_bootstrap("leaf-b", DeviceRole::LeafB),
+            ],
+            allow_degraded: false,
+        })
+        .await
+        .expect("initialization should return per-device errors");
+
+    assert_eq!(response.status, SiteInitializationStatus::PartiallyRegistered);
+    assert!(response.devices.iter().all(|device| device.error.is_some()));
+}
+
 fn switch_bootstrap(device_id: &str, role: DeviceRole) -> SwitchBootstrapRequest {
     SwitchBootstrapRequest {
         device_id: DeviceId(device_id.into()),
@@ -157,5 +181,22 @@ fn switch_bootstrap(device_id: &str, role: DeviceRole) -> SwitchBootstrapRequest
         credential: NetconfCredentialInput::ExistingSecretRef {
             secret_ref: format!("local/{device_id}"),
         },
+    }
+}
+
+#[derive(Debug)]
+struct RejectingSecretStore;
+
+impl SecretStore for RejectingSecretStore {
+    fn create_for_device(
+        &self,
+        _tenant_id: &str,
+        _site_id: &str,
+        _device_id: &DeviceId,
+        _credential: NetconfCredentialInput,
+    ) -> aria_underlay::UnderlayResult<String> {
+        Err(UnderlayError::InvalidDeviceState(
+            "test secret store rejected credential".into(),
+        ))
     }
 }

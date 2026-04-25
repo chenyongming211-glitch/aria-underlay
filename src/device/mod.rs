@@ -15,4 +15,4 @@ pub use info::{DeviceInfo, DeviceLifecycleState, HostKeyPolicy};
 pub use inventory::DeviceInventory;
 pub use onboarding::DeviceOnboardingService;
 pub use registration::{DeviceRegistrationService, RegisterDeviceRequest, RegisterDeviceResponse};
-pub use secret::{InMemorySecretStore, NetconfCredentialInput, StoredNetconfCredential};
+pub use secret::{InMemorySecretStore, NetconfCredentialInput, SecretStore, StoredNetconfCredential};
