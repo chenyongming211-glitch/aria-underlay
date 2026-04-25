@@ -32,8 +32,24 @@ impl DeviceOnboardingService {
         self.inventory
             .set_state(&device_id, DeviceLifecycleState::Probing)?;
 
-        let mut client = AdapterClient::connect(managed.info.adapter_endpoint.clone()).await?;
-        let capability = client.get_capabilities(&managed.info).await?;
+        let mut client = match AdapterClient::connect(managed.info.adapter_endpoint.clone()).await {
+            Ok(client) => client,
+            Err(err) => {
+                let state = lifecycle_state_for_onboarding_error(&err);
+                self.inventory.set_state(&device_id, state.clone())?;
+                return Err(err);
+            }
+        };
+
+        let capability = match client.get_capabilities(&managed.info).await {
+            Ok(capability) => capability,
+            Err(err) => {
+                let state = lifecycle_state_for_onboarding_error(&err);
+                self.inventory.set_state(&device_id, state.clone())?;
+                return Err(err);
+            }
+        };
+
         let state = if capability.recommended_strategy.is_supported() {
             if capability.recommended_strategy.is_degraded() {
                 DeviceLifecycleState::Degraded
@@ -52,3 +68,21 @@ impl DeviceOnboardingService {
     }
 }
 
+pub fn lifecycle_state_for_onboarding_error(error: &UnderlayError) -> DeviceLifecycleState {
+    match error {
+        UnderlayError::AdapterOperation { code, .. } if code == "AUTH_FAILED" => {
+            DeviceLifecycleState::AuthFailed
+        }
+        UnderlayError::AdapterOperation { code, .. } if code == "DEVICE_UNREACHABLE" => {
+            DeviceLifecycleState::Unreachable
+        }
+        UnderlayError::AdapterOperation { code, .. } if code == "UNSUPPORTED_DEVICE" => {
+            DeviceLifecycleState::Unsupported
+        }
+        UnderlayError::AdapterOperation { retryable, .. } if *retryable => {
+            DeviceLifecycleState::Unreachable
+        }
+        UnderlayError::AdapterTransport(_) => DeviceLifecycleState::Unreachable,
+        _ => DeviceLifecycleState::Unsupported,
+    }
+}

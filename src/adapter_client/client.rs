@@ -15,7 +15,7 @@ impl AdapterClient {
     pub async fn connect(endpoint: String) -> UnderlayResult<Self> {
         let inner = UnderlayAdapterClient::connect(endpoint)
             .await
-            .map_err(|err| UnderlayError::Adapter(err.to_string()))?;
+            .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?;
         Ok(Self { inner })
     }
 
@@ -38,14 +38,25 @@ impl AdapterClient {
             .inner
             .get_capabilities(request)
             .await
-            .map_err(|err| UnderlayError::Adapter(err.to_string()))?
+            .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?
             .into_inner();
+
+        if let Some(error) = response.errors.into_iter().next() {
+            return Err(UnderlayError::AdapterOperation {
+                code: error.code,
+                message: error.message,
+                retryable: error.retryable,
+            });
+        }
 
         let capability = response
             .capability
-            .ok_or_else(|| UnderlayError::Adapter("adapter returned no capability".into()))?;
+            .ok_or_else(|| UnderlayError::AdapterOperation {
+                code: "MISSING_CAPABILITY".into(),
+                message: "adapter returned no capability".into(),
+                retryable: false,
+            })?;
 
         Ok(capability_from_proto(capability))
     }
 }
-

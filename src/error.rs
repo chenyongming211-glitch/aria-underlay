@@ -9,8 +9,15 @@ pub enum UnderlayError {
     #[error("invalid device state: {0}")]
     InvalidDeviceState(String),
 
-    #[error("adapter error: {0}")]
-    Adapter(String),
+    #[error("adapter transport error: {0}")]
+    AdapterTransport(String),
+
+    #[error("adapter operation error: {code}: {message}")]
+    AdapterOperation {
+        code: String,
+        message: String,
+        retryable: bool,
+    },
 
     #[error("unsupported transaction strategy")]
     UnsupportedTransactionStrategy,
@@ -20,4 +27,3 @@ pub enum UnderlayError {
 }
 
 pub type UnderlayResult<T> = Result<T, UnderlayError>;
-
