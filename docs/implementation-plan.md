@@ -49,7 +49,7 @@ Python 负责：
 
 第一阶段只实现：
 
-- 2 台交换机。
+- 小规模 underlay 管控域，通常 1 到 2 个管理 endpoint，后续自然扩展到 20 个以内。
 - VLAN。
 - interface description。
 - access port。
@@ -60,6 +60,10 @@ Python 负责：
 - lock retry。
 - force unlock，默认关闭。
 - journal / artifact GC。
+
+当前代码仍保留 `SwitchPairIntent` 作为 MLAG 双管理 IP 场景的兼容入口。后续主模型应演进为 `UnderlayDomainIntent`，详见：
+
+- [Underlay Domain 模型演进计划](./underlay-domain-model-plan.md)
 
 ## 2. 开发原则
 
