@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::device::DeviceLifecycleState;
+use crate::engine::diff::ChangeSet;
 use crate::model::DeviceId;
 use crate::tx::TransactionStrategy;
 
@@ -35,6 +36,8 @@ pub struct ApplyIntentResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DryRunResponse {
     pub device_results: Vec<DeviceApplyResult>,
+    pub change_sets: Vec<ChangeSet>,
+    pub noop: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,4 +55,3 @@ pub struct DeviceOnboardingResponse {
 pub struct DriftAuditResponse {
     pub drifted_devices: Vec<DeviceId>,
 }
-
