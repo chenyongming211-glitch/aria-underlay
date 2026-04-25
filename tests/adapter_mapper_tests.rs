@@ -27,11 +27,12 @@ fn maps_observed_state_to_shadow_state() {
                 allowed_vlans: vec![],
             }),
         }],
-    })
+    }, vec!["test warning".into()])
     .expect("observed state should map");
 
     assert_eq!(shadow.device_id.0, "leaf-a");
     assert_eq!(shadow.vlans[&100].name.as_deref(), Some("prod"));
+    assert_eq!(shadow.warnings, vec!["test warning"]);
     assert!(matches!(
         shadow.interfaces["GE1/0/1"].mode,
         PortMode::Access { vlan_id: 100 }

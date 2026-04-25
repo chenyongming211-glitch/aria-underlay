@@ -5,6 +5,8 @@ use aria_underlay::device::{
     RegisterDeviceRequest, SecretStore, SiteInitializationStatus, SwitchBootstrapRequest,
     UnderlaySiteInitializationService,
 };
+use aria_underlay::intent::validation::validate_switch_pair_intent;
+use aria_underlay::intent::SwitchPairIntent;
 use aria_underlay::model::{DeviceId, DeviceRole, Vendor};
 use aria_underlay::UnderlayError;
 
@@ -136,6 +138,20 @@ fn switch_pair_validation_accepts_leaf_pair() {
     };
 
     validate_switch_pair(&request).expect("leaf pair should be valid");
+}
+
+#[test]
+fn empty_intent_validation_returns_invalid_intent() {
+    let intent = SwitchPairIntent {
+        pair_id: "pair-1".into(),
+        switches: vec![],
+        vlans: vec![],
+        interfaces: vec![],
+    };
+
+    let err = validate_switch_pair_intent(&intent).unwrap_err();
+    assert!(matches!(err, UnderlayError::InvalidIntent(_)));
+    assert!(format!("{err}").contains("no switches"));
 }
 
 #[test]

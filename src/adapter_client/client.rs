@@ -62,7 +62,7 @@ impl AdapterClient {
                 retryable: false,
             })?;
 
-        Ok(capability_from_proto(capability))
+        Ok(capability_from_proto(capability, response.warnings))
     }
 
     pub async fn get_current_state(
@@ -93,7 +93,7 @@ impl AdapterClient {
             retryable: false,
         })?;
 
-        shadow_state_from_proto(state)
+        shadow_state_from_proto(state, response.warnings)
     }
 
     pub async fn prepare(

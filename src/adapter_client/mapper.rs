@@ -18,7 +18,7 @@ pub fn device_ref_from_info(info: &DeviceInfo) -> adapter::DeviceRef {
     }
 }
 
-pub fn capability_from_proto(proto: adapter::DeviceCapability) -> DeviceCapabilityProfile {
+pub fn capability_from_proto(proto: adapter::DeviceCapability, warnings: Vec<String>) -> DeviceCapabilityProfile {
     let supported_backends = proto
         .supported_backends
         .into_iter()
@@ -52,6 +52,7 @@ pub fn capability_from_proto(proto: adapter::DeviceCapability) -> DeviceCapabili
         supports_writable_running: proto.supports_writable_running,
         supported_backends,
         recommended_strategy,
+        warnings,
     }
 }
 
@@ -75,7 +76,7 @@ pub fn desired_state_to_proto(desired: &DeviceDesiredState) -> adapter::DesiredD
     }
 }
 
-pub fn shadow_state_from_proto(proto: adapter::ObservedDeviceState) -> UnderlayResult<DeviceShadowState> {
+pub fn shadow_state_from_proto(proto: adapter::ObservedDeviceState, warnings: Vec<String>) -> UnderlayResult<DeviceShadowState> {
     let mut vlans = std::collections::BTreeMap::new();
     for vlan in proto.vlans {
         let vlan_id = u16::try_from(vlan.vlan_id).map_err(|_| {
@@ -106,6 +107,7 @@ pub fn shadow_state_from_proto(proto: adapter::ObservedDeviceState) -> UnderlayR
         revision: 0,
         vlans,
         interfaces,
+        warnings,
     })
 }
 
@@ -124,7 +126,7 @@ pub fn adapter_result_to_outcome(proto: adapter::AdapterResult) -> UnderlayResul
         warnings: proto.warnings,
         normalized_state: proto
             .normalized_state
-            .map(shadow_state_from_proto)
+            .map(|state| shadow_state_from_proto(state, Vec::new()))
             .transpose()?,
     })
 }

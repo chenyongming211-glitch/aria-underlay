@@ -26,5 +26,6 @@ pub struct DeviceCapabilityProfile {
     pub supports_writable_running: bool,
     pub supported_backends: Vec<BackendKind>,
     pub recommended_strategy: TransactionStrategy,
+    pub warnings: Vec<String>,
 }
 

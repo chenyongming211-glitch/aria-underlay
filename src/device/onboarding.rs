@@ -18,6 +18,7 @@ impl DeviceOnboardingService {
 
         match managed.info.lifecycle_state {
             DeviceLifecycleState::Pending
+            | DeviceLifecycleState::Probing
             | DeviceLifecycleState::Unreachable
             | DeviceLifecycleState::AuthFailed
             | DeviceLifecycleState::Unsupported

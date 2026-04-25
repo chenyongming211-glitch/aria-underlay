@@ -29,6 +29,7 @@ def test_capability_from_raw_detects_legacy_confirmed_commit_10():
 
     assert capability.supports_validate is True
     assert capability.supports_confirmed_commit is True
+    assert capability.supports_persist_id is False
 
 
 def test_capability_from_raw_detects_running_rollback_profile():

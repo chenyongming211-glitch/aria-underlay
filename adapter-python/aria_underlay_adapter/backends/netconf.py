@@ -103,7 +103,7 @@ def capability_from_raw(raw_capabilities: Iterable[str]) -> BackendCapability:
         supports_candidate=supports_candidate,
         supports_validate=supports_validate,
         supports_confirmed_commit=supports_confirmed_commit,
-        supports_persist_id=supports_confirmed_commit,
+        supports_persist_id=CONFIRMED_COMMIT_11 in raw_set,
         supports_rollback_on_error=supports_rollback_on_error,
         supports_writable_running=supports_writable_running,
         supported_backends=["netconf"] if supports_netconf else [],

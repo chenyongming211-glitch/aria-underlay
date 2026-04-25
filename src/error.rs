@@ -19,6 +19,9 @@ pub enum UnderlayError {
         retryable: bool,
     },
 
+    #[error("invalid intent: {0}")]
+    InvalidIntent(String),
+
     #[error("unsupported transaction strategy")]
     UnsupportedTransactionStrategy,
 

@@ -10,5 +10,6 @@ pub struct DeviceShadowState {
     pub revision: u64,
     pub vlans: BTreeMap<u16, VlanConfig>,
     pub interfaces: BTreeMap<String, InterfaceConfig>,
+    pub warnings: Vec<String>,
 }
 
