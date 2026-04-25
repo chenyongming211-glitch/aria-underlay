@@ -116,3 +116,134 @@ InitializeUnderlaySite
   - `rollback-on-error`
 - 非 fake 模式下，真实设备不可达时返回标准化 `DEVICE_UNREACHABLE` 或 `NETCONF_CONNECT_FAILED`。
 - 未实现的真实 `GetCurrentState` 和 `Prepare` 必须返回显式错误，不能返回成功。
+
+## 6. 当前前置工具
+
+已经提供真实设备 capability 探测入口：
+
+```text
+examples/real_capability_probe.rs
+```
+
+该 example 只做：
+
+```text
+register device
+  -> onboard device
+  -> adapter GetCapabilities
+  -> print lifecycle state / raw capabilities / recommended strategy
+```
+
+它不会执行：
+
+```text
+get-config
+edit-config
+lock
+validate
+commit
+confirmed-commit
+```
+
+## 7. 本地运行方式
+
+启动 Python Adapter，必须关闭 fake mode：
+
+```bash
+ARIA_UNDERLAY_ADAPTER_FAKE=0 \
+ARIA_UNDERLAY_ADAPTER_LISTEN=127.0.0.1:50051 \
+ARIA_UNDERLAY_SECRET_LOCAL_REAL_DEVICE_USERNAME=netconf \
+ARIA_UNDERLAY_SECRET_LOCAL_REAL_DEVICE_PASSWORD='replace-me' \
+python -m aria_underlay_adapter.server
+```
+
+`local/real-device` 会被转换成环境变量 key：
+
+```text
+LOCAL_REAL_DEVICE
+```
+
+也就是：
+
+```text
+ARIA_UNDERLAY_SECRET_LOCAL_REAL_DEVICE_USERNAME
+ARIA_UNDERLAY_SECRET_LOCAL_REAL_DEVICE_PASSWORD
+ARIA_UNDERLAY_SECRET_LOCAL_REAL_DEVICE_KEY_PATH
+ARIA_UNDERLAY_SECRET_LOCAL_REAL_DEVICE_PASSPHRASE
+```
+
+运行 Rust probe：
+
+```bash
+ARIA_UNDERLAY_ADAPTER_ENDPOINT=http://127.0.0.1:50051 \
+ARIA_UNDERLAY_DEVICE_ID=leaf-a \
+ARIA_UNDERLAY_MGMT_IP=192.0.2.10 \
+ARIA_UNDERLAY_MGMT_PORT=830 \
+ARIA_UNDERLAY_SECRET_REF=local/real-device \
+cargo run --example real_capability_probe
+```
+
+如果已经知道期望策略，可以增加：
+
+```bash
+ARIA_UNDERLAY_EXPECTED_STRATEGY=ConfirmedCommit2Pc
+```
+
+允许值参考 Rust enum：
+
+```text
+ConfirmedCommit2Pc
+Candidate2Pc
+RunningRollbackOnError
+BestEffortCli
+Unsupported
+```
+
+## 8. GitHub 手动 Workflow
+
+已经提供手动 workflow：
+
+```text
+.github/workflows/real-netconf-probe.yml
+```
+
+它不会在 push / pull_request 时自动运行，只能手动触发。
+
+运行前需要在 GitHub repository secrets 配置：
+
+```text
+ARIA_UNDERLAY_REAL_NETCONF_USERNAME
+ARIA_UNDERLAY_REAL_NETCONF_PASSWORD
+```
+
+手动输入：
+
+```text
+device_id
+management_ip
+management_port
+expected_strategy
+```
+
+该 workflow 适用于临时现场联调。真实客户环境如果没有从 GitHub runner 到客户机房管理网的连通性，应在现场本地执行 `real_capability_probe`，不要使用 GitHub runner 直连客户交换机。
+
+## 9. 现场联调 Checklist
+
+执行 Sprint 1B 前必须确认：
+
+- 交换机管理 IP 可从运行 adapter 的机器访问。
+- NETCONF over SSH 已启用。
+- TCP 830 端口可达，或明确设备使用的 NETCONF 端口。
+- 账号只具备测试所需权限，不使用个人管理员账号。
+- 测试期间不会下发配置，本阶段只读 capability。
+- 确认是否支持：
+  - `base:1.0`
+  - `base:1.1`
+  - `candidate`
+  - `validate:1.0`
+  - `validate:1.1`
+  - `confirmed-commit:1.0`
+  - `confirmed-commit:1.1`
+  - `rollback-on-error`
+  - `writable-running`
+- 保存输出到 capability report。

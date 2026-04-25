@@ -1,0 +1,87 @@
+name: Real NETCONF Probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      device_id:
+        description: "Device ID used in Aria inventory"
+        required: true
+        default: "leaf-a"
+      management_ip:
+        description: "Switch management IP"
+        required: true
+      management_port:
+        description: "NETCONF SSH port"
+        required: true
+        default: "830"
+      expected_strategy:
+        description: "Optional expected strategy, e.g. ConfirmedCommit2Pc"
+        required: false
+        default: ""
+
+jobs:
+  real-netconf-probe:
+    name: Real NETCONF Capability Probe
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "adapter-python[test]"
+
+      - name: Generate Python protobuf stubs
+        run: scripts/generate-python-proto.sh
+
+      - name: Start real adapter
+        env:
+          ARIA_UNDERLAY_ADAPTER_FAKE: "0"
+          ARIA_UNDERLAY_ADAPTER_LISTEN: "127.0.0.1:50051"
+          ARIA_UNDERLAY_SECRET_LOCAL_REAL_DEVICE_USERNAME: ${{ secrets.ARIA_UNDERLAY_REAL_NETCONF_USERNAME }}
+          ARIA_UNDERLAY_SECRET_LOCAL_REAL_DEVICE_PASSWORD: ${{ secrets.ARIA_UNDERLAY_REAL_NETCONF_PASSWORD }}
+        run: |
+          python -m aria_underlay_adapter.server > /tmp/aria-underlay-adapter.log 2>&1 &
+          echo $! > /tmp/aria-underlay-adapter.pid
+
+      - name: Wait for adapter
+        run: |
+          python - <<'PY'
+          import socket
+          import time
+
+          deadline = time.time() + 20
+          while time.time() < deadline:
+              try:
+                  with socket.create_connection(("127.0.0.1", 50051), timeout=1):
+                      raise SystemExit(0)
+              except OSError:
+                  time.sleep(0.5)
+          raise SystemExit("adapter did not open 127.0.0.1:50051")
+          PY
+
+      - name: Run real capability probe
+        env:
+          ARIA_UNDERLAY_ADAPTER_ENDPOINT: "http://127.0.0.1:50051"
+          ARIA_UNDERLAY_DEVICE_ID: ${{ inputs.device_id }}
+          ARIA_UNDERLAY_MGMT_IP: ${{ inputs.management_ip }}
+          ARIA_UNDERLAY_MGMT_PORT: ${{ inputs.management_port }}
+          ARIA_UNDERLAY_SECRET_REF: "local/real-device"
+          ARIA_UNDERLAY_EXPECTED_STRATEGY: ${{ inputs.expected_strategy }}
+        run: cargo run --example real_capability_probe
+
+      - name: Adapter logs
+        if: always()
+        run: cat /tmp/aria-underlay-adapter.log || true
