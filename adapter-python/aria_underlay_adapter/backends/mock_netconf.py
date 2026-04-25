@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
+from aria_underlay_adapter.backends.base import BackendCapability
 from aria_underlay_adapter.errors import AdapterError
 
 
@@ -14,28 +13,13 @@ ROLLBACK_ON_ERROR = "urn:ietf:params:netconf:capability:rollback-on-error:1.0"
 WRITABLE_RUNNING = "urn:ietf:params:netconf:capability:writable-running:1.0"
 
 
-@dataclass(frozen=True)
-class MockCapability:
-    model: str
-    os_version: str
-    raw_capabilities: list[str]
-    supports_netconf: bool
-    supports_candidate: bool
-    supports_validate: bool
-    supports_confirmed_commit: bool
-    supports_persist_id: bool
-    supports_rollback_on_error: bool
-    supports_writable_running: bool
-    supported_backends: list[str]
-
-
 class MockNetconfBackend:
     def __init__(self, profile: str = "confirmed"):
         self.profile = profile
 
-    def get_capabilities(self) -> MockCapability:
+    def get_capabilities(self) -> BackendCapability:
         if self.profile in {"confirmed", "lock_failed", "validate_failed"}:
-            return MockCapability(
+            return BackendCapability(
                 model="fake-confirmed-switch",
                 os_version="fake-1.0",
                 raw_capabilities=[BASE_10, BASE_11, CANDIDATE, VALIDATE_11, CONFIRMED_COMMIT_11],
@@ -50,7 +34,7 @@ class MockNetconfBackend:
             )
 
         if self.profile == "candidate_only":
-            return MockCapability(
+            return BackendCapability(
                 model="fake-candidate-switch",
                 os_version="fake-1.0",
                 raw_capabilities=[BASE_10, CANDIDATE, VALIDATE_11],
@@ -65,7 +49,7 @@ class MockNetconfBackend:
             )
 
         if self.profile == "running_only":
-            return MockCapability(
+            return BackendCapability(
                 model="fake-running-switch",
                 os_version="fake-1.0",
                 raw_capabilities=[BASE_10, WRITABLE_RUNNING, ROLLBACK_ON_ERROR],
@@ -80,7 +64,7 @@ class MockNetconfBackend:
             )
 
         if self.profile == "cli_only":
-            return MockCapability(
+            return BackendCapability(
                 model="fake-cli-switch",
                 os_version="fake-legacy",
                 raw_capabilities=[],
@@ -95,7 +79,7 @@ class MockNetconfBackend:
             )
 
         if self.profile == "unsupported":
-            return MockCapability(
+            return BackendCapability(
                 model="fake-unsupported-switch",
                 os_version="fake-legacy",
                 raw_capabilities=[BASE_10],

@@ -24,6 +24,8 @@ except ImportError as exc:  # pragma: no cover - exercised before proto generati
     ) from exc
 
 from aria_underlay_adapter.drivers.fake import FakeDriver
+from aria_underlay_adapter.backends.netconf import NcclientNetconfBackend
+from aria_underlay_adapter.drivers.netconf_backed import NetconfBackedDriver
 
 
 log = structlog.get_logger(__name__)
@@ -104,7 +106,10 @@ class UnderlayAdapterService(pb2_grpc.UnderlayAdapterServicer):
 
 def serve() -> None:
     config = AdapterConfig.from_env()
-    registry = DriverRegistry(default_driver=FakeDriver(profile=config.fake_profile))
+    if config.fake_mode:
+        registry = DriverRegistry(default_driver=FakeDriver(profile=config.fake_profile))
+    else:
+        registry = DriverRegistry(driver_factory=_netconf_driver_from_device)
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=8))
     pb2_grpc.add_UnderlayAdapterServicer_to_server(
         UnderlayAdapterService(registry),
@@ -114,6 +119,15 @@ def serve() -> None:
     server.start()
     log.info("aria_underlay_adapter_started", listen=config.listen)
     server.wait_for_termination()
+
+
+def _netconf_driver_from_device(device) -> NetconfBackedDriver:
+    return NetconfBackedDriver(
+        NcclientNetconfBackend(
+            host=device.management_ip,
+            port=device.management_port or 830,
+        )
+    )
 
 
 if __name__ == "__main__":
