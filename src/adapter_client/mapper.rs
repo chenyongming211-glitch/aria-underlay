@@ -5,7 +5,28 @@ use crate::planner::device_plan::DeviceDesiredState;
 use crate::proto::adapter;
 use crate::state::DeviceShadowState;
 use crate::tx::{choose_strategy, CapabilityFlags, TransactionMode};
-use crate::{UnderlayError, UnderlayResult};
+use crate::{AdapterErrorDetail, UnderlayError, UnderlayResult};
+
+pub fn extract_adapter_errors(errors: Vec<adapter::AdapterError>) -> Option<UnderlayError> {
+    let mut errors = errors;
+    if errors.is_empty() {
+        return None;
+    }
+    let first = errors.remove(0);
+    let additional = errors
+        .into_iter()
+        .map(|e| AdapterErrorDetail {
+            code: e.code,
+            message: e.message,
+        })
+        .collect();
+    Some(UnderlayError::AdapterOperation {
+        code: first.code,
+        message: first.message,
+        retryable: first.retryable,
+        errors: additional,
+    })
+}
 
 pub fn device_ref_from_info(info: &DeviceInfo) -> adapter::DeviceRef {
     adapter::DeviceRef {
@@ -84,6 +105,7 @@ pub fn shadow_state_from_proto(proto: adapter::ObservedDeviceState, warnings: Ve
                 code: "INVALID_VLAN_ID".into(),
                 message: format!("adapter returned invalid VLAN id {}", vlan.vlan_id),
                 retryable: false,
+                errors: Vec::new(),
             }
         })?;
         vlans.insert(
@@ -112,12 +134,8 @@ pub fn shadow_state_from_proto(proto: adapter::ObservedDeviceState, warnings: Ve
 }
 
 pub fn adapter_result_to_outcome(proto: adapter::AdapterResult) -> UnderlayResult<AdapterOutcome> {
-    if let Some(error) = proto.errors.into_iter().next() {
-        return Err(UnderlayError::AdapterOperation {
-            code: error.code,
-            message: error.message,
-            retryable: error.retryable,
-        });
+    if let Some(error) = extract_adapter_errors(proto.errors) {
+        return Err(error);
     }
 
     Ok(AdapterOutcome {
@@ -217,6 +235,7 @@ fn interface_from_proto(proto: adapter::InterfaceConfig) -> UnderlayResult<Inter
         code: "MISSING_PORT_MODE".into(),
         message: format!("adapter returned interface {} without port mode", proto.name),
         retryable: false,
+        errors: Vec::new(),
     })?;
 
     Ok(InterfaceConfig {
@@ -231,6 +250,7 @@ fn interface_from_proto(proto: adapter::InterfaceConfig) -> UnderlayResult<Inter
                     code: "INVALID_ADMIN_STATE".into(),
                     message: "adapter returned invalid admin state".into(),
                     retryable: false,
+                    errors: Vec::new(),
                 })
             }
         },
@@ -247,12 +267,14 @@ fn port_mode_from_proto(proto: adapter::PortMode) -> UnderlayResult<PortMode> {
                 code: "MISSING_ACCESS_VLAN".into(),
                 message: "adapter returned access port without access vlan".into(),
                 retryable: false,
+                errors: Vec::new(),
             })?;
             Ok(PortMode::Access {
                 vlan_id: u16::try_from(vlan_id).map_err(|_| UnderlayError::AdapterOperation {
                     code: "INVALID_VLAN_ID".into(),
                     message: format!("adapter returned invalid access VLAN id {vlan_id}"),
                     retryable: false,
+                    errors: Vec::new(),
                 })?,
             })
         }
@@ -264,6 +286,7 @@ fn port_mode_from_proto(proto: adapter::PortMode) -> UnderlayResult<PortMode> {
                         code: "INVALID_VLAN_ID".into(),
                         message: format!("adapter returned invalid native VLAN id {vlan}"),
                         retryable: false,
+                        errors: Vec::new(),
                     })
                 })
                 .transpose()?,
@@ -275,6 +298,7 @@ fn port_mode_from_proto(proto: adapter::PortMode) -> UnderlayResult<PortMode> {
                         code: "INVALID_VLAN_ID".into(),
                         message: format!("adapter returned invalid allowed VLAN id {vlan}"),
                         retryable: false,
+                        errors: Vec::new(),
                     })
                 })
                 .collect::<UnderlayResult<Vec<_>>>()?,
@@ -283,6 +307,7 @@ fn port_mode_from_proto(proto: adapter::PortMode) -> UnderlayResult<PortMode> {
             code: "INVALID_PORT_MODE".into(),
             message: "adapter returned invalid port mode".into(),
             retryable: false,
+            errors: Vec::new(),
         }),
     }
 }

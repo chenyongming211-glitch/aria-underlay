@@ -125,9 +125,14 @@ class NetconfBackedDriver:
                 native_vlan=mode["native_vlan"],
                 allowed_vlans=mode["allowed_vlans"],
             )
+        if mode["kind"] == "access":
+            return pb2.PortMode(
+                kind=pb2.PORT_MODE_KIND_ACCESS,
+                access_vlan=mode["access_vlan"],
+                allowed_vlans=mode["allowed_vlans"],
+            )
 
-        return pb2.PortMode(
-            kind=pb2.PORT_MODE_KIND_ACCESS,
-            access_vlan=mode["access_vlan"],
-            allowed_vlans=mode["allowed_vlans"],
+        raise AdapterError(
+            code="INVALID_PORT_MODE",
+            message=f"unknown port mode kind: {mode['kind']}",
         )

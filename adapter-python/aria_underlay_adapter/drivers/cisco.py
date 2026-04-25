@@ -1,6 +1,5 @@
-from aria_underlay_adapter.drivers.fake import FakeDriver
+class CiscoDriver:
+    """Not yet implemented."""
 
-
-class CiscoDriver(FakeDriver):
-    pass
-
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError("CiscoDriver is not yet implemented")

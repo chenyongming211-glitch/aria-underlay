@@ -1,6 +1,5 @@
-from aria_underlay_adapter.drivers.fake import FakeDriver
+class H3cDriver:
+    """Not yet implemented."""
 
-
-class H3cDriver(FakeDriver):
-    pass
-
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError("H3cDriver is not yet implemented")

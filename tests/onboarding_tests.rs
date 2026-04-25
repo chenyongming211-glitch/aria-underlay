@@ -40,6 +40,7 @@ fn auth_failed_adapter_error_maps_to_auth_failed_state() {
         code: "AUTH_FAILED".into(),
         message: "bad credentials".into(),
         retryable: false,
+        errors: vec![],
     };
 
     assert_eq!(
@@ -54,6 +55,7 @@ fn unreachable_adapter_error_maps_to_unreachable_state() {
         code: "DEVICE_UNREACHABLE".into(),
         message: "timeout".into(),
         retryable: true,
+        errors: vec![],
     };
 
     assert_eq!(

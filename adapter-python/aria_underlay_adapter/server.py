@@ -99,6 +99,21 @@ class UnderlayAdapterService(pb2_grpc.UnderlayAdapterServicer):
                     warnings=["break-glass force unlock is disabled"],
                 )
             )
+        driver = self._registry.select(request.device)
+        try:
+            driver.force_unlock(
+                device=request.device,
+                lock_owner=request.lock_owner,
+                reason=request.reason,
+            )
+        except AdapterError as error:
+            return pb2.ForceUnlockResponse(
+                result=pb2.AdapterResult(
+                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
+                    changed=False,
+                    errors=[error.to_proto(pb2)],
+                )
+            )
         return pb2.ForceUnlockResponse(
             result=pb2.AdapterResult(
                 status=pb2.ADAPTER_OPERATION_STATUS_COMMITTED,

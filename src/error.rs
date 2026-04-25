@@ -1,3 +1,9 @@
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdapterErrorDetail {
+    pub code: String,
+    pub message: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum UnderlayError {
     #[error("device already exists: {0}")]
@@ -17,6 +23,8 @@ pub enum UnderlayError {
         code: String,
         message: String,
         retryable: bool,
+        #[allow(dead_code)]
+        errors: Vec<AdapterErrorDetail>,
     },
 
     #[error("invalid intent: {0}")]

@@ -1,6 +1,5 @@
-from aria_underlay_adapter.drivers.fake import FakeDriver
+class HuaweiDriver:
+    """Not yet implemented."""
 
-
-class HuaweiDriver(FakeDriver):
-    pass
-
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError("HuaweiDriver is not yet implemented")

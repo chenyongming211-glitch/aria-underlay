@@ -1,6 +1,5 @@
-from aria_underlay_adapter.drivers.fake import FakeDriver
+class RuijieDriver:
+    """Not yet implemented."""
 
-
-class RuijieDriver(FakeDriver):
-    pass
-
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError("RuijieDriver is not yet implemented")
