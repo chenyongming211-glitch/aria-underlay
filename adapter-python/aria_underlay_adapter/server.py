@@ -109,7 +109,7 @@ class UnderlayAdapterService(pb2_grpc.UnderlayAdapterServicer):
 
 def serve() -> None:
     config = AdapterConfig.from_env()
-    registry = DriverRegistry(default_driver=FakeDriver())
+    registry = DriverRegistry(default_driver=FakeDriver(profile=config.fake_profile))
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=8))
     pb2_grpc.add_UnderlayAdapterServicer_to_server(
         UnderlayAdapterService(registry),

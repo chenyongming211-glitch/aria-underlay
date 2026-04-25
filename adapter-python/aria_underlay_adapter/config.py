@@ -9,6 +9,7 @@ class AdapterConfig:
     listen: str
     artifact_dir: str
     fake_mode: bool
+    fake_profile: str
 
     @classmethod
     def from_env(cls) -> "AdapterConfig":
@@ -19,5 +20,5 @@ class AdapterConfig:
                 "/tmp/aria-underlay-adapter/artifacts",
             ),
             fake_mode=os.getenv("ARIA_UNDERLAY_ADAPTER_FAKE", "1") == "1",
+            fake_profile=os.getenv("ARIA_UNDERLAY_FAKE_PROFILE", "confirmed"),
         )
-
