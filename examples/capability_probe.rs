@@ -6,6 +6,8 @@ use aria_underlay::model::{DeviceId, DeviceRole, Vendor};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let adapter_endpoint = std::env::var("ARIA_UNDERLAY_ADAPTER_ENDPOINT")
+        .unwrap_or_else(|_| "http://127.0.0.1:50051".into());
     let inventory = DeviceInventory::default();
     let registration = DeviceRegistrationService::new(inventory.clone());
     let onboarding = DeviceOnboardingService::new(inventory.clone());
@@ -22,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         role: DeviceRole::LeafA,
         secret_ref: "local/test-device".into(),
         host_key_policy: HostKeyPolicy::TrustOnFirstUse,
-        adapter_endpoint: "http://127.0.0.1:50051".into(),
+        adapter_endpoint,
     })?;
 
     let state = onboarding.onboard_device(device_id.clone()).await?;
@@ -33,4 +35,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

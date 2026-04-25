@@ -9,7 +9,6 @@ import structlog
 
 from aria_underlay_adapter.config import AdapterConfig
 from aria_underlay_adapter.drivers.base import DriverRegistry
-from aria_underlay_adapter.drivers.fake import FakeDriver
 
 _PROTO_DIR = Path(__file__).resolve().parent / "proto"
 if str(_PROTO_DIR) not in sys.path:
@@ -23,6 +22,8 @@ except ImportError as exc:  # pragma: no cover - exercised before proto generati
         "generated protobuf modules are missing; run grpcio-tools for "
         "proto/aria_underlay_adapter.proto before starting the adapter"
     ) from exc
+
+from aria_underlay_adapter.drivers.fake import FakeDriver
 
 
 log = structlog.get_logger(__name__)
