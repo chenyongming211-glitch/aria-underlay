@@ -51,14 +51,62 @@ class FakeDriver(DeviceDriver):
             return pb2.BACKEND_KIND_CLI
         return pb2.BACKEND_KIND_UNSPECIFIED
 
-    def get_current_state(self, device, scope):
-        raise NotImplementedError
+    def get_current_state(self, request):
+        try:
+            state = self._backend.get_current_state()
+        except AdapterError as error:
+            return pb2.GetCurrentStateResponse(errors=[error.to_proto(pb2)])
+
+        return pb2.GetCurrentStateResponse(
+            state=pb2.ObservedDeviceState(
+                device_id=request.device.device_id,
+                vlans=[
+                    pb2.VlanConfig(
+                        vlan_id=vlan["vlan_id"],
+                        name=vlan["name"],
+                        description=vlan["description"],
+                    )
+                    for vlan in state["vlans"]
+                ],
+                interfaces=[
+                    pb2.InterfaceConfig(
+                        name=iface["name"],
+                        admin_state=pb2.ADMIN_STATE_UP
+                        if iface["admin_state"] == "up"
+                        else pb2.ADMIN_STATE_DOWN,
+                        description=iface["description"],
+                        mode=pb2.PortMode(
+                            kind=pb2.PORT_MODE_KIND_ACCESS,
+                            access_vlan=iface["mode"]["access_vlan"],
+                            allowed_vlans=iface["mode"]["allowed_vlans"],
+                        ),
+                    )
+                    for iface in state["interfaces"]
+                ],
+            )
+        )
 
     def dry_run(self, device, desired_state):
         raise NotImplementedError
 
-    def prepare(self, tx_id, device, desired_state):
-        raise NotImplementedError
+    def prepare(self, request):
+        try:
+            self._backend.prepare_candidate()
+        except AdapterError as error:
+            return pb2.PrepareResponse(
+                result=pb2.AdapterResult(
+                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
+                    changed=False,
+                    errors=[error.to_proto(pb2)],
+                )
+            )
+
+        return pb2.PrepareResponse(
+            result=pb2.AdapterResult(
+                status=pb2.ADAPTER_OPERATION_STATUS_PREPARED,
+                changed=True,
+            )
+        )
 
     def commit(self, tx_id, device):
         raise NotImplementedError

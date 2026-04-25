@@ -38,9 +38,8 @@ class UnderlayAdapterService(pb2_grpc.UnderlayAdapterServicer):
         return driver.get_capabilities(request)
 
     def GetCurrentState(self, request, context):
-        return pb2.GetCurrentStateResponse(
-            state=pb2.ObservedDeviceState(device_id=request.device.device_id)
-        )
+        driver = self._registry.select(request.device)
+        return driver.get_current_state(request)
 
     def DryRun(self, request, context):
         return pb2.DryRunResponse(
@@ -51,12 +50,8 @@ class UnderlayAdapterService(pb2_grpc.UnderlayAdapterServicer):
         )
 
     def Prepare(self, request, context):
-        return pb2.PrepareResponse(
-            result=pb2.AdapterResult(
-                status=pb2.ADAPTER_OPERATION_STATUS_PREPARED,
-                changed=False,
-            )
-        )
+        driver = self._registry.select(request.device)
+        return driver.prepare(request)
 
     def Commit(self, request, context):
         return pb2.CommitResponse(

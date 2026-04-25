@@ -34,7 +34,7 @@ class MockNetconfBackend:
         self.profile = profile
 
     def get_capabilities(self) -> MockCapability:
-        if self.profile == "confirmed":
+        if self.profile in {"confirmed", "lock_failed", "validate_failed"}:
             return MockCapability(
                 model="fake-confirmed-switch",
                 os_version="fake-1.0",
@@ -134,3 +134,63 @@ class MockNetconfBackend:
             raw_error_summary=self.profile,
             retryable=False,
         )
+
+    def get_current_state(self) -> dict:
+        self.get_capabilities()
+        return {
+            "vlans": [
+                {
+                    "vlan_id": 100,
+                    "name": "prod",
+                    "description": "production vlan",
+                }
+            ],
+            "interfaces": [
+                {
+                    "name": "GE1/0/1",
+                    "admin_state": "up",
+                    "description": "server uplink",
+                    "mode": {
+                        "kind": "access",
+                        "access_vlan": 100,
+                        "native_vlan": None,
+                        "allowed_vlans": [],
+                    },
+                }
+            ],
+        }
+
+    def lock_candidate(self) -> None:
+        if self.profile == "lock_failed":
+            raise AdapterError(
+                code="LOCK_FAILED",
+                message="mock candidate lock failed",
+                normalized_error="candidate lock failed",
+                raw_error_summary="mock profile lock_failed",
+                retryable=True,
+            )
+
+    def edit_candidate(self) -> None:
+        self.get_capabilities()
+
+    def validate_candidate(self) -> None:
+        if self.profile == "validate_failed":
+            raise AdapterError(
+                code="VALIDATE_FAILED",
+                message="mock candidate validate failed",
+                normalized_error="candidate validate failed",
+                raw_error_summary="mock profile validate_failed",
+                retryable=False,
+            )
+
+    def unlock_candidate(self) -> None:
+        return None
+
+    def prepare_candidate(self) -> None:
+        self.lock_candidate()
+        try:
+            self.edit_candidate()
+            self.validate_candidate()
+        except Exception:
+            self.unlock_candidate()
+            raise

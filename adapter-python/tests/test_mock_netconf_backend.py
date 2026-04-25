@@ -8,6 +8,8 @@ from aria_underlay_adapter.errors import AdapterError
     ("profile", "supports_candidate", "supports_confirmed_commit", "backends"),
     [
         ("confirmed", True, True, ["netconf"]),
+        ("lock_failed", True, True, ["netconf"]),
+        ("validate_failed", True, True, ["netconf"]),
         ("candidate_only", True, False, ["netconf"]),
         ("running_only", False, False, ["netconf"]),
         ("cli_only", False, False, ["cli"]),
@@ -37,3 +39,24 @@ def test_mock_error_profiles(profile, code, retryable):
 
     assert exc.value.code == code
     assert exc.value.retryable is retryable
+
+
+def test_mock_current_state_contains_vlan_and_interface():
+    state = MockNetconfBackend("confirmed").get_current_state()
+
+    assert state["vlans"][0]["vlan_id"] == 100
+    assert state["interfaces"][0]["name"] == "GE1/0/1"
+
+
+def test_lock_failed_profile_fails_prepare():
+    with pytest.raises(AdapterError) as exc:
+        MockNetconfBackend("lock_failed").prepare_candidate()
+
+    assert exc.value.code == "LOCK_FAILED"
+
+
+def test_validate_failed_profile_fails_prepare():
+    with pytest.raises(AdapterError) as exc:
+        MockNetconfBackend("validate_failed").prepare_candidate()
+
+    assert exc.value.code == "VALIDATE_FAILED"

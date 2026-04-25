@@ -55,6 +55,8 @@ cli_only
 auth_failed
 unreachable
 unsupported
+lock_failed
+validate_failed
 ```
 
 语义：
@@ -68,6 +70,8 @@ unsupported
 | `auth_failed` | 模拟认证失败 |
 | `unreachable` | 模拟设备不可达 |
 | `unsupported` | 可连通但不支持任何可用策略 |
+| `lock_failed` | 支持 confirmed-commit 能力，但 lock candidate 失败 |
+| `validate_failed` | 支持 confirmed-commit 能力，但 validate candidate 失败 |
 
 ## 5. 环境变量
 
@@ -93,6 +97,8 @@ confirmed
 - `cli_only` profile 返回 CLI backend。
 - `auth_failed` 返回标准化 `AdapterError`。
 - `unreachable` 返回标准化 `AdapterError`。
+- `GetCurrentState` 能返回稳定的 mock VLAN / interface 状态。
+- `Prepare` 能模拟 lock / validate 成功与失败。
 - GitHub Actions 保持 Rust / Python / Sprint 0 Integration 全部通过。
 
 ## 7. Sprint 1B 入口条件
@@ -106,4 +112,3 @@ confirmed
 - 明确测试接口。
 - 确认是否允许 lock / unlock。
 - 确认是否允许 confirmed-commit。
-
