@@ -57,6 +57,18 @@ ARIA_UNDERLAY_SECRET_FILE=/etc/aria-underlay/secrets.json
 
 如果 `secret_ref` 找不到或内容不完整，adapter 必须返回标准化 `SECRET_NOT_FOUND`，不能让 gRPC 请求变成未分类的 transport error。
 
+Rust 侧已经补出第一版产品初始化入口：
+
+```text
+InitializeUnderlaySite
+  -> create local secret_ref
+  -> register LeafA / LeafB
+  -> trigger onboarding
+  -> summarize site status
+```
+
+该入口第一版使用内存 secret store，占住产品初始化边界。后续接入 Aria Controller 时，需要把该 store 替换为正式 secret provider / metadata store。
+
 ## 3. 本阶段明确不做
 
 - 不做真实 VLAN/interface XML renderer。
@@ -91,6 +103,9 @@ ARIA_UNDERLAY_SECRET_FILE=/etc/aria-underlay/secrets.json
 ## 5. 验收标准
 
 - fake adapter 的现有 CI 全部保持绿色。
+- `Product Initialization` CI 覆盖 2 台交换机初始化：
+  - `confirmed` profile -> `Ready`。
+  - `running_only` profile 且允许 degraded -> `ReadyWithDegradedDevice`。
 - `capability_from_raw` 覆盖：
   - `candidate`
   - `validate:1.0`

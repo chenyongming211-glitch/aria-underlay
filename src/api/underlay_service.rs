@@ -6,7 +6,10 @@ use crate::api::response::{
     ApplyIntentResponse, DeviceOnboardingResponse, DriftAuditResponse, DryRunResponse,
     RefreshStateResponse,
 };
-use crate::device::{RegisterDeviceRequest, RegisterDeviceResponse};
+use crate::device::{
+    InitializeUnderlaySiteRequest, InitializeUnderlaySiteResponse, RegisterDeviceRequest,
+    RegisterDeviceResponse,
+};
 use crate::model::DeviceId;
 use crate::state::DeviceShadowState;
 use crate::tx::recovery::RecoveryReport;
@@ -14,6 +17,11 @@ use crate::UnderlayResult;
 
 #[async_trait]
 pub trait UnderlayService: Send + Sync {
+    async fn initialize_underlay_site(
+        &self,
+        request: InitializeUnderlaySiteRequest,
+    ) -> UnderlayResult<InitializeUnderlaySiteResponse>;
+
     async fn register_device(
         &self,
         request: RegisterDeviceRequest,
@@ -50,4 +58,3 @@ pub trait UnderlayService: Send + Sync {
         request: ForceUnlockRequest,
     ) -> UnderlayResult<ForceUnlockResponse>;
 }
-
