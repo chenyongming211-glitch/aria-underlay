@@ -2,7 +2,9 @@ use async_trait::async_trait;
 
 use crate::adapter_client::AdapterClient;
 use crate::api::force_unlock::{ForceUnlockRequest, ForceUnlockResponse};
-use crate::api::request::{ApplyIntentRequest, DriftAuditRequest, RefreshStateRequest};
+use crate::api::request::{
+    ApplyDomainIntentRequest, ApplyIntentRequest, DriftAuditRequest, RefreshStateRequest,
+};
 use crate::api::response::{
     ApplyIntentResponse, ApplyStatus, DeviceApplyResult, DeviceOnboardingResponse,
     DriftAuditResponse, DryRunResponse, RefreshStateResponse,
@@ -17,6 +19,7 @@ use crate::engine::dry_run::{build_dry_run_plan, DryRunPlan};
 use crate::intent::validation::validate_switch_pair_intent;
 use crate::model::DeviceId;
 use crate::planner::device_plan::{plan_switch_pair, DeviceDesiredState};
+use crate::planner::domain_plan::plan_underlay_domain;
 use crate::state::DeviceShadowState;
 use crate::tx::recovery::RecoveryReport;
 use crate::{UnderlayError, UnderlayResult};
@@ -37,6 +40,53 @@ impl AriaUnderlayService {
         let desired_states = plan_switch_pair(&request.intent);
         let current_states = self.fetch_current_states(&desired_states).await?;
         build_dry_run_plan(&desired_states, &current_states)
+    }
+
+    async fn dry_run_domain_plan(
+        &self,
+        request: &ApplyDomainIntentRequest,
+    ) -> UnderlayResult<DryRunPlan> {
+        let desired_states = plan_underlay_domain(&request.intent)?;
+        let current_states = self.fetch_current_states(&desired_states).await?;
+        build_dry_run_plan(&desired_states, &current_states)
+    }
+
+    pub async fn apply_domain_intent(
+        &self,
+        request: ApplyDomainIntentRequest,
+    ) -> UnderlayResult<ApplyIntentResponse> {
+        let trace_id = request
+            .trace_id
+            .clone()
+            .unwrap_or_else(|| request.request_id.clone());
+        let plan = self.dry_run_domain_plan(&request).await?;
+        let device_results = device_results_from_plan(&plan);
+
+        if plan.is_noop() {
+            return Ok(ApplyIntentResponse {
+                request_id: request.request_id,
+                trace_id,
+                tx_id: None,
+                status: ApplyStatus::NoOpSuccess,
+                strategy: None,
+                device_results,
+                warnings: Vec::new(),
+            });
+        }
+
+        Err(UnderlayError::UnsupportedTransactionStrategy)
+    }
+
+    pub async fn dry_run_domain(
+        &self,
+        request: ApplyDomainIntentRequest,
+    ) -> UnderlayResult<DryRunResponse> {
+        let plan = self.dry_run_domain_plan(&request).await?;
+        Ok(DryRunResponse {
+            device_results: device_results_from_plan(&plan),
+            noop: plan.is_noop(),
+            change_sets: plan.change_sets,
+        })
     }
 
     async fn fetch_current_states(
