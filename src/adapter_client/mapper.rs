@@ -1,8 +1,11 @@
 use crate::device::capability::BackendKind;
 use crate::device::{DeviceCapabilityProfile, DeviceInfo};
-use crate::model::Vendor;
+use crate::model::{AdminState, DeviceId, InterfaceConfig, PortMode, Vendor, VlanConfig};
+use crate::planner::device_plan::DeviceDesiredState;
 use crate::proto::adapter;
+use crate::state::DeviceShadowState;
 use crate::tx::{choose_strategy, CapabilityFlags, TransactionMode};
+use crate::{UnderlayError, UnderlayResult};
 
 pub fn device_ref_from_info(info: &DeviceInfo) -> adapter::DeviceRef {
     adapter::DeviceRef {
@@ -52,6 +55,99 @@ pub fn capability_from_proto(proto: adapter::DeviceCapability) -> DeviceCapabili
     }
 }
 
+pub fn desired_state_to_proto(desired: &DeviceDesiredState) -> adapter::DesiredDeviceState {
+    adapter::DesiredDeviceState {
+        device_id: desired.device_id.0.clone(),
+        vlans: desired
+            .vlans
+            .values()
+            .map(|vlan| adapter::VlanConfig {
+                vlan_id: u32::from(vlan.vlan_id),
+                name: vlan.name.clone(),
+                description: vlan.description.clone(),
+            })
+            .collect(),
+        interfaces: desired
+            .interfaces
+            .values()
+            .map(interface_to_proto)
+            .collect(),
+    }
+}
+
+pub fn shadow_state_from_proto(proto: adapter::ObservedDeviceState) -> UnderlayResult<DeviceShadowState> {
+    let mut vlans = std::collections::BTreeMap::new();
+    for vlan in proto.vlans {
+        let vlan_id = u16::try_from(vlan.vlan_id).map_err(|_| {
+            UnderlayError::AdapterOperation {
+                code: "INVALID_VLAN_ID".into(),
+                message: format!("adapter returned invalid VLAN id {}", vlan.vlan_id),
+                retryable: false,
+            }
+        })?;
+        vlans.insert(
+            vlan_id,
+            VlanConfig {
+                vlan_id,
+                name: vlan.name,
+                description: vlan.description,
+            },
+        );
+    }
+
+    let mut interfaces = std::collections::BTreeMap::new();
+    for iface in proto.interfaces {
+        let interface = interface_from_proto(iface)?;
+        interfaces.insert(interface.name.clone(), interface);
+    }
+
+    Ok(DeviceShadowState {
+        device_id: DeviceId(proto.device_id),
+        revision: 0,
+        vlans,
+        interfaces,
+    })
+}
+
+pub fn adapter_result_to_outcome(proto: adapter::AdapterResult) -> UnderlayResult<AdapterOutcome> {
+    if let Some(error) = proto.errors.into_iter().next() {
+        return Err(UnderlayError::AdapterOperation {
+            code: error.code,
+            message: error.message,
+            retryable: error.retryable,
+        });
+    }
+
+    Ok(AdapterOutcome {
+        status: adapter_status_from_i32(proto.status),
+        changed: proto.changed,
+        warnings: proto.warnings,
+        normalized_state: proto
+            .normalized_state
+            .map(shadow_state_from_proto)
+            .transpose()?,
+    })
+}
+
+#[derive(Debug, Clone)]
+pub struct AdapterOutcome {
+    pub status: AdapterOperationStatus,
+    pub changed: bool,
+    pub warnings: Vec<String>,
+    pub normalized_state: Option<DeviceShadowState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdapterOperationStatus {
+    Unspecified,
+    NoChange,
+    Prepared,
+    Committed,
+    RolledBack,
+    Failed,
+    InDoubt,
+}
+
 fn vendor_to_proto(vendor: Vendor) -> adapter::Vendor {
     match vendor {
         Vendor::Huawei => adapter::Vendor::Huawei,
@@ -79,6 +175,127 @@ fn backend_from_i32(value: i32) -> Option<BackendKind> {
         adapter::BackendKind::Netmiko => Some(BackendKind::Netmiko),
         adapter::BackendKind::Cli => Some(BackendKind::Cli),
         _ => None,
+    }
+}
+
+fn interface_to_proto(interface: &InterfaceConfig) -> adapter::InterfaceConfig {
+    adapter::InterfaceConfig {
+        name: interface.name.clone(),
+        admin_state: match interface.admin_state {
+            AdminState::Up => adapter::AdminState::Up as i32,
+            AdminState::Down => adapter::AdminState::Down as i32,
+        },
+        description: interface.description.clone(),
+        mode: Some(port_mode_to_proto(&interface.mode)),
+    }
+}
+
+fn port_mode_to_proto(mode: &PortMode) -> adapter::PortMode {
+    match mode {
+        PortMode::Access { vlan_id } => adapter::PortMode {
+            kind: adapter::PortModeKind::Access as i32,
+            access_vlan: Some(u32::from(*vlan_id)),
+            native_vlan: None,
+            allowed_vlans: Vec::new(),
+        },
+        PortMode::Trunk {
+            native_vlan,
+            allowed_vlans,
+        } => adapter::PortMode {
+            kind: adapter::PortModeKind::Trunk as i32,
+            access_vlan: None,
+            native_vlan: native_vlan.map(u32::from),
+            allowed_vlans: allowed_vlans.iter().map(|vlan| u32::from(*vlan)).collect(),
+        },
+    }
+}
+
+fn interface_from_proto(proto: adapter::InterfaceConfig) -> UnderlayResult<InterfaceConfig> {
+    let mode = proto.mode.ok_or_else(|| UnderlayError::AdapterOperation {
+        code: "MISSING_PORT_MODE".into(),
+        message: format!("adapter returned interface {} without port mode", proto.name),
+        retryable: false,
+    })?;
+
+    Ok(InterfaceConfig {
+        name: proto.name,
+        admin_state: match adapter::AdminState::try_from(proto.admin_state)
+            .unwrap_or(adapter::AdminState::Unspecified)
+        {
+            adapter::AdminState::Up => AdminState::Up,
+            adapter::AdminState::Down => AdminState::Down,
+            _ => {
+                return Err(UnderlayError::AdapterOperation {
+                    code: "INVALID_ADMIN_STATE".into(),
+                    message: "adapter returned invalid admin state".into(),
+                    retryable: false,
+                })
+            }
+        },
+        description: proto.description,
+        mode: port_mode_from_proto(mode)?,
+    })
+}
+
+fn port_mode_from_proto(proto: adapter::PortMode) -> UnderlayResult<PortMode> {
+    match adapter::PortModeKind::try_from(proto.kind).unwrap_or(adapter::PortModeKind::Unspecified)
+    {
+        adapter::PortModeKind::Access => {
+            let vlan_id = proto.access_vlan.ok_or_else(|| UnderlayError::AdapterOperation {
+                code: "MISSING_ACCESS_VLAN".into(),
+                message: "adapter returned access port without access vlan".into(),
+                retryable: false,
+            })?;
+            Ok(PortMode::Access {
+                vlan_id: u16::try_from(vlan_id).map_err(|_| UnderlayError::AdapterOperation {
+                    code: "INVALID_VLAN_ID".into(),
+                    message: format!("adapter returned invalid access VLAN id {vlan_id}"),
+                    retryable: false,
+                })?,
+            })
+        }
+        adapter::PortModeKind::Trunk => Ok(PortMode::Trunk {
+            native_vlan: proto
+                .native_vlan
+                .map(|vlan| {
+                    u16::try_from(vlan).map_err(|_| UnderlayError::AdapterOperation {
+                        code: "INVALID_VLAN_ID".into(),
+                        message: format!("adapter returned invalid native VLAN id {vlan}"),
+                        retryable: false,
+                    })
+                })
+                .transpose()?,
+            allowed_vlans: proto
+                .allowed_vlans
+                .into_iter()
+                .map(|vlan| {
+                    u16::try_from(vlan).map_err(|_| UnderlayError::AdapterOperation {
+                        code: "INVALID_VLAN_ID".into(),
+                        message: format!("adapter returned invalid allowed VLAN id {vlan}"),
+                        retryable: false,
+                    })
+                })
+                .collect::<UnderlayResult<Vec<_>>>()?,
+        }),
+        _ => Err(UnderlayError::AdapterOperation {
+            code: "INVALID_PORT_MODE".into(),
+            message: "adapter returned invalid port mode".into(),
+            retryable: false,
+        }),
+    }
+}
+
+fn adapter_status_from_i32(value: i32) -> AdapterOperationStatus {
+    match adapter::AdapterOperationStatus::try_from(value)
+        .unwrap_or(adapter::AdapterOperationStatus::Unspecified)
+    {
+        adapter::AdapterOperationStatus::NoChange => AdapterOperationStatus::NoChange,
+        adapter::AdapterOperationStatus::Prepared => AdapterOperationStatus::Prepared,
+        adapter::AdapterOperationStatus::Committed => AdapterOperationStatus::Committed,
+        adapter::AdapterOperationStatus::RolledBack => AdapterOperationStatus::RolledBack,
+        adapter::AdapterOperationStatus::Failed => AdapterOperationStatus::Failed,
+        adapter::AdapterOperationStatus::InDoubt => AdapterOperationStatus::InDoubt,
+        _ => AdapterOperationStatus::Unspecified,
     }
 }
 
