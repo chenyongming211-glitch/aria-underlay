@@ -7,12 +7,12 @@ use crate::api::response::{
     ApplyIntentResponse, ApplyStatus, DeviceApplyResult, DeviceOnboardingResponse,
     DriftAuditResponse, DryRunResponse, RefreshStateResponse,
 };
+use crate::api::underlay_service::UnderlayService;
 use crate::device::{
     DeviceInventory, DeviceOnboardingService, DeviceRegistrationService,
     InitializeUnderlaySiteRequest, InitializeUnderlaySiteResponse, RegisterDeviceRequest,
     RegisterDeviceResponse,
 };
-use crate::api::underlay_service::UnderlayService;
 use crate::engine::dry_run::{build_dry_run_plan, DryRunPlan};
 use crate::intent::validation::validate_switch_pair_intent;
 use crate::model::DeviceId;
