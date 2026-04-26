@@ -144,8 +144,9 @@ impl AriaUnderlayService {
             }
             Err(err) => {
                 let (code, message) = journal_error_fields(&err);
+                let phase = failed_apply_phase(&journal_record.phase);
                 journal_record = journal_record
-                    .with_phase(failed_apply_phase(&journal_record.phase))
+                    .with_phase(phase)
                     .with_error(code, message);
                 self.journal.put(&journal_record)?;
                 return Err(err);
@@ -561,8 +562,9 @@ impl UnderlayService for AriaUnderlayService {
             }
             Err(err) => {
                 let (code, message) = journal_error_fields(&err);
+                let phase = failed_apply_phase(&journal_record.phase);
                 journal_record = journal_record
-                    .with_phase(failed_apply_phase(&journal_record.phase))
+                    .with_phase(phase)
                     .with_error(code, message);
                 self.journal.put(&journal_record)?;
                 return Err(err);
