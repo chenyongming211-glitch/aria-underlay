@@ -176,7 +176,7 @@ class MockNetconfBackend:
     def unlock_candidate(self) -> None:
         return None
 
-    def prepare_candidate(self) -> None:
+    def prepare_candidate(self, desired_state=None) -> None:
         self.lock_candidate()
         try:
             self.edit_candidate()

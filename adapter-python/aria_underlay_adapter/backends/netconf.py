@@ -32,6 +32,17 @@ class NcclientNetconfBackend:
 
     def get_capabilities(self) -> BackendCapability:
         try:
+            with self._connect() as session:
+                raw = [str(capability) for capability in session.server_capabilities]
+        except AdapterError:
+            raise
+        except Exception as exc:
+            raise _adapter_error_from_ncclient_exception(exc) from exc
+
+        return capability_from_raw(raw)
+
+    def _connect(self):
+        try:
             from ncclient import manager
         except ImportError as exc:  # pragma: no cover - dependency exists in CI package
             raise AdapterError(
@@ -42,24 +53,18 @@ class NcclientNetconfBackend:
                 retryable=False,
             ) from exc
 
-        try:
-            with manager.connect(
-                host=self.host,
-                port=self.port,
-                username=self.username,
-                password=self.password,
-                key_filename=self.key_path,
-                hostkey_verify=self.hostkey_verify,
-                look_for_keys=self.look_for_keys,
-                allow_agent=False,
-                passphrase=self.passphrase,
-                timeout=self.timeout_secs,
-            ) as session:
-                raw = [str(capability) for capability in session.server_capabilities]
-        except Exception as exc:
-            raise _adapter_error_from_ncclient_exception(exc) from exc
-
-        return capability_from_raw(raw)
+        return manager.connect(
+            host=self.host,
+            port=self.port,
+            username=self.username,
+            password=self.password,
+            key_filename=self.key_path,
+            hostkey_verify=self.hostkey_verify,
+            look_for_keys=self.look_for_keys,
+            allow_agent=False,
+            passphrase=self.passphrase,
+            timeout=self.timeout_secs,
+        )
 
     def get_current_state(self) -> dict:
         raise AdapterError(
@@ -70,14 +75,87 @@ class NcclientNetconfBackend:
             retryable=False,
         )
 
-    def prepare_candidate(self) -> None:
+    def prepare_candidate(self, desired_state=None) -> None:
+        if desired_state is None:
+            raise AdapterError(
+                code="MISSING_DESIRED_STATE",
+                message="NETCONF prepare requires desired state",
+                normalized_error="desired state missing",
+                raw_error_summary="PrepareRequest.desired_state is empty",
+                retryable=False,
+            )
+
+        try:
+            with self._connect() as session:
+                self._lock_candidate(session)
+                try:
+                    self._edit_candidate(session, desired_state)
+                    self._validate_candidate(session)
+                except AdapterError:
+                    self._discard_candidate(session)
+                    raise
+                except Exception as exc:
+                    self._discard_candidate(session)
+                    raise _adapter_error_from_ncclient_exception(exc) from exc
+                finally:
+                    self._unlock_candidate(session)
+        except AdapterError:
+            raise
+        except Exception as exc:
+            raise _adapter_error_from_ncclient_exception(exc) from exc
+
+    def _lock_candidate(self, session) -> None:
+        try:
+            session.lock(target="candidate")
+        except Exception as exc:
+            raise _adapter_operation_error(
+                code="NETCONF_LOCK_FAILED",
+                message="NETCONF candidate lock failed",
+                exc=exc,
+                retryable=True,
+            ) from exc
+
+    def _unlock_candidate(self, session) -> None:
+        try:
+            session.unlock(target="candidate")
+        except Exception as exc:
+            raise _adapter_operation_error(
+                code="NETCONF_UNLOCK_FAILED",
+                message="NETCONF candidate unlock failed",
+                exc=exc,
+                retryable=True,
+            ) from exc
+
+    def _discard_candidate(self, session) -> None:
+        try:
+            session.discard_changes()
+        except Exception as exc:
+            raise _adapter_operation_error(
+                code="NETCONF_DISCARD_FAILED",
+                message="NETCONF discard-changes failed",
+                exc=exc,
+                retryable=True,
+            ) from exc
+
+    def _edit_candidate(self, session, desired_state) -> None:
         raise AdapterError(
-            code="NETCONF_PREPARE_NOT_IMPLEMENTED",
-            message="real NETCONF prepare is not implemented yet",
-            normalized_error="prepare operation missing",
-            raw_error_summary="candidate edit/validate lands after renderer and parser",
+            code="NETCONF_EDIT_CONFIG_NOT_IMPLEMENTED",
+            message="real NETCONF edit-config rendering is not implemented yet",
+            normalized_error="edit-config renderer missing",
+            raw_error_summary="candidate lock is wired; XML renderer/edit-config lands next",
             retryable=False,
         )
+
+    def _validate_candidate(self, session) -> None:
+        try:
+            session.validate(source="candidate")
+        except Exception as exc:
+            raise _adapter_operation_error(
+                code="NETCONF_VALIDATE_FAILED",
+                message="NETCONF candidate validate failed",
+                exc=exc,
+                retryable=False,
+            ) from exc
 
     def commit_candidate(self) -> None:
         raise AdapterError(
@@ -166,4 +244,20 @@ def _adapter_error_from_ncclient_exception(exc: Exception) -> AdapterError:
         normalized_error="netconf connect failed",
         raw_error_summary=message,
         retryable=True,
+    )
+
+
+def _adapter_operation_error(
+    code: str,
+    message: str,
+    exc: Exception,
+    retryable: bool,
+) -> AdapterError:
+    raw = str(exc) or exc.__class__.__name__
+    return AdapterError(
+        code=code,
+        message=message,
+        normalized_error=message.lower(),
+        raw_error_summary=raw,
+        retryable=retryable,
     )

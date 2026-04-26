@@ -11,6 +11,7 @@ from aria_underlay_adapter.backends.netconf import (
     NetconfBackend,
     capability_from_raw,
 )
+from aria_underlay_adapter.errors import AdapterError
 
 
 def test_capability_from_raw_detects_confirmed_commit_11():
@@ -42,3 +43,86 @@ def test_capability_from_raw_detects_running_rollback_profile():
 
 def test_legacy_netconf_backend_name_points_to_ncclient_backend():
     assert NetconfBackend is NcclientNetconfBackend
+
+
+def test_prepare_candidate_locks_discards_and_unlocks_when_edit_not_implemented():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    try:
+        backend.prepare_candidate(desired_state=object())
+    except AdapterError as error:
+        assert error.code == "NETCONF_EDIT_CONFIG_NOT_IMPLEMENTED"
+    else:
+        raise AssertionError("prepare should fail closed until edit-config is implemented")
+
+    assert session.calls == [
+        ("lock", "candidate"),
+        ("discard_changes",),
+        ("unlock", "candidate"),
+    ]
+
+
+def test_prepare_candidate_lock_failure_does_not_discard_or_unlock():
+    session = _RecordingSession(fail_lock=True)
+    backend = _BackendWithSession(session)
+
+    try:
+        backend.prepare_candidate(desired_state=object())
+    except AdapterError as error:
+        assert error.code == "NETCONF_LOCK_FAILED"
+        assert error.retryable is True
+    else:
+        raise AssertionError("lock failure should fail closed")
+
+    assert session.calls == [("lock", "candidate")]
+
+
+def test_prepare_candidate_requires_desired_state_before_touching_device():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    try:
+        backend.prepare_candidate(desired_state=None)
+    except AdapterError as error:
+        assert error.code == "MISSING_DESIRED_STATE"
+    else:
+        raise AssertionError("missing desired state should fail closed")
+
+    assert session.calls == []
+
+
+class _BackendWithSession(NcclientNetconfBackend):
+    def __init__(self, session):
+        super().__init__(host="127.0.0.1")
+        object.__setattr__(self, "_session", session)
+
+    def _connect(self):
+        return self._session
+
+
+class _RecordingSession:
+    def __init__(self, fail_lock=False):
+        self.calls = []
+        self.fail_lock = fail_lock
+        self.server_capabilities = [BASE_10, CANDIDATE]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def lock(self, target):
+        self.calls.append(("lock", target))
+        if self.fail_lock:
+            raise RuntimeError("candidate already locked")
+
+    def discard_changes(self):
+        self.calls.append(("discard_changes",))
+
+    def unlock(self, target):
+        self.calls.append(("unlock", target))
+
+    def validate(self, source):
+        self.calls.append(("validate", source))
