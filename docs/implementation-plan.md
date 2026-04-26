@@ -1055,6 +1055,7 @@ Sprint 7 目标：
 - 实现 rollback artifact GC。
 - 接入 RFC-002 event mapper。
 - 接入 RFC-015 audit mapper。
+- 第一阶段先落地本地结构化 telemetry 载体：`UnderlayEvent`、`AuditRecord`、`MetricSample`。
 
 验收：
 
@@ -1066,6 +1067,7 @@ Sprint 7 目标：
 - force unlock 开启后必须带 reason。
 - terminal transaction 可按 retention 清理。
 - `InDoubt` 永不自动清理。
+- 事务事件至少包含 `request_id`、`trace_id`、`tx_id`、`device_id`、phase、strategy、result、错误摘要。
 
 ## 15. 测试计划
 

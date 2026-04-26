@@ -285,7 +285,7 @@ MLAG 双 IP 是两个 endpoint、两个独立 ACID 事务。
 | Recovery 可恢复 | 进程崩溃、session 断开后不能丢状态 | journal、rollback artifact、confirmed-commit 信息必须持久化 | 启动时扫描 journal，根据 phase 执行 recover / cancel / verify；artifact 需要 checksum、retention、权限隔离，必要时压缩存储 |
 | InDoubt 严格处理 | 无法判断设备最终状态时不能返回成功 | `InDoubt` 不自动清理，不自动当成功，必须告警和人工处理 | 标记后阻塞后续对该 endpoint 的写事务；提供 break-glass `ForceResolve` 类 API，拆分为人工确认 committed、rolled back 或继续保持 in-doubt |
 | 凭据安全 | 私有化交付不能泄露设备密码 | inventory、journal、audit 只保存 `secret_ref`，不落明文密码 | 日志中任何敏感字段打印前必须脱敏；支持从外部 secret store 动态获取；journal / artifact 不得包含密码、私钥或 token |
-| 可观测性 | 现场排障必须能追踪每次下发 | 所有事务事件要有 `request_id`、`tx_id`、`trace_id`、phase、错误摘要 | 接入 Aria RFC-002 事件模型和 RFC-015 审计视图；记录 adapter RPC 名称、延迟、结果、重试次数和降级原因 |
+| 可观测性 | 现场排障必须能追踪每次下发 | 所有事务事件要有 `request_id`、`tx_id`、`trace_id`、`device_id`、phase、strategy、result、错误摘要 | 第一阶段先定义本地 `UnderlayEvent`、`AuditRecord`、`MetricSample`；后续接入 Aria RFC-002 事件模型和 RFC-015 审计视图；记录 adapter RPC 名称、延迟、结果、重试次数和降级原因 |
 | 测试优先 | 没真实交换机时更依赖 mock 覆盖 | mock adapter 必须覆盖 prepare / commit / verify / recover / rollback 失败路径 | 增加 crash / restart、session drop、timeout、adapter 返回 `InDoubt` 的混沌测试；真实设备阶段验证 capability 歧义、命名空间差异、CLI 降级 |
 | Isolation / 并发控制 | 防止多个 apply 同时写同一 endpoint 导致状态交叉 | 同一 endpoint 必须单 writer；Rust 本地锁 + 设备侧 lock | 按 `DeviceId` 固定顺序加锁；lock 重试使用指数退避；force unlock 仅作为 break-glass 能力，默认关闭且必须审计 |
 
