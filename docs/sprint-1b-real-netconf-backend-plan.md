@@ -247,3 +247,15 @@ expected_strategy
   - `rollback-on-error`
   - `writable-running`
 - 保存输出到 capability report。
+
+## 10. P2 真实联调文档入口
+
+真实交换机未到位前，P2 只维护用例和记录模板，不写假结论：
+
+- [真实交换机联调用例计划](real-switch-integration-plan.md)
+- [设备 Capability 探测报告模板](device-capability-report.md)
+- [Vendor 差异记录说明](vendor/README.md)
+- [Huawei 适配记录](vendor/huawei.md)
+- [H3C 适配记录](vendor/h3c.md)
+- [Cisco 适配记录](vendor/cisco.md)
+- [Ruijie 适配记录](vendor/ruijie.md)
