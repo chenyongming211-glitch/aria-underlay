@@ -428,7 +428,7 @@ impl AriaUnderlayService {
                 .commit_with_context(&managed.info, &rpc_context, strategy)
                 .await
             {
-                Ok(commit) if commit.status == AdapterOperationStatus::Committed => {}
+                Ok(commit) if commit_status_matches_strategy(commit.status, strategy) => {}
                 Ok(commit) => {
                     self.rollback_after_endpoint_failure(
                         &mut client,
@@ -493,6 +493,45 @@ impl AriaUnderlayService {
                     return Err(err);
                 }
             }
+
+            if strategy == TransactionStrategy::ConfirmedCommit {
+                *journal_record = journal_record.clone().with_phase(TxPhase::FinalConfirming);
+                self.journal.put(journal_record)?;
+                match client
+                    .final_confirm_with_context(&managed.info, &rpc_context)
+                    .await
+                {
+                    Ok(confirm) if confirm.status == AdapterOperationStatus::Committed => {}
+                    Ok(confirm) => {
+                        self.rollback_after_endpoint_failure(
+                            &mut client,
+                            &managed.info,
+                            &rpc_context,
+                            journal_record,
+                        )
+                        .await?;
+                        return Err(UnderlayError::AdapterOperation {
+                            code: "UNEXPECTED_FINAL_CONFIRM_STATUS".into(),
+                            message: format!(
+                                "adapter returned final confirm status {:?}",
+                                confirm.status
+                            ),
+                            retryable: false,
+                            errors: Vec::new(),
+                        });
+                    }
+                    Err(err) => {
+                        self.rollback_after_endpoint_failure(
+                            &mut client,
+                            &managed.info,
+                            &rpc_context,
+                            journal_record,
+                        )
+                        .await?;
+                        return Err(err);
+                    }
+                }
+            }
         }
 
         selected_strategy.ok_or(UnderlayError::UnsupportedTransactionStrategy)
@@ -508,7 +547,10 @@ impl AriaUnderlayService {
         *journal_record = journal_record.clone().with_phase(TxPhase::RollingBack);
         self.journal.put(journal_record)?;
 
-        match client.rollback_with_context(device, context).await {
+        match client
+            .rollback_with_context(device, context, journal_record.strategy)
+            .await
+        {
             Ok(outcome)
                 if matches!(
                     outcome.status,
@@ -607,6 +649,18 @@ fn recover_phase_from_adapter_status(
             TxPhase::RolledBack
         }
         _ => TxPhase::InDoubt,
+    }
+}
+
+fn commit_status_matches_strategy(
+    status: AdapterOperationStatus,
+    strategy: TransactionStrategy,
+) -> bool {
+    match strategy {
+        TransactionStrategy::ConfirmedCommit => {
+            status == AdapterOperationStatus::ConfirmedCommitPending
+        }
+        _ => status == AdapterOperationStatus::Committed,
     }
 }
 

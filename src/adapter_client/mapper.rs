@@ -50,6 +50,7 @@ pub fn capability_from_proto(proto: adapter::DeviceCapability, warnings: Vec<Str
         supports_candidate: proto.supports_candidate,
         supports_validate: proto.supports_validate,
         supports_confirmed_commit: proto.supports_confirmed_commit,
+        supports_persist_id: proto.supports_persist_id,
         supports_rollback_on_error: proto.supports_rollback_on_error,
         supports_writable_running: proto.supports_writable_running,
         supports_cli_fallback: supported_backends
@@ -178,6 +179,7 @@ pub enum AdapterOperationStatus {
     RolledBack,
     Failed,
     InDoubt,
+    ConfirmedCommitPending,
 }
 
 fn vendor_to_proto(vendor: Vendor) -> adapter::Vendor {
@@ -334,6 +336,9 @@ fn adapter_status_from_i32(value: i32) -> AdapterOperationStatus {
         adapter::AdapterOperationStatus::RolledBack => AdapterOperationStatus::RolledBack,
         adapter::AdapterOperationStatus::Failed => AdapterOperationStatus::Failed,
         adapter::AdapterOperationStatus::InDoubt => AdapterOperationStatus::InDoubt,
+        adapter::AdapterOperationStatus::ConfirmedCommitPending => {
+            AdapterOperationStatus::ConfirmedCommitPending
+        }
         _ => AdapterOperationStatus::Unspecified,
     }
 }

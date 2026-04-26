@@ -8,8 +8,9 @@ use crate::device::{DeviceCapabilityProfile, DeviceInfo};
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::proto::adapter::underlay_adapter_client::UnderlayAdapterClient;
 use crate::proto::adapter::{
-    CommitRequest, ForceUnlockRequest, GetCapabilitiesRequest, GetCurrentStateRequest,
-    PrepareRequest, RecoverRequest, RequestContext, RollbackRequest, VerifyRequest,
+    CommitRequest, FinalConfirmRequest, ForceUnlockRequest, GetCapabilitiesRequest,
+    GetCurrentStateRequest, PrepareRequest, RecoverRequest, RequestContext, RollbackRequest,
+    VerifyRequest,
 };
 use crate::state::DeviceShadowState;
 use crate::tx::{TransactionStrategy, TxContext};
@@ -151,6 +152,7 @@ impl AdapterClient {
                 context: Some(context.clone()),
                 device: Some(device_ref_from_info(device)),
                 strategy: strategy_to_proto(strategy) as i32,
+                confirm_timeout_secs: 120,
             })
             .await
             .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?
@@ -166,20 +168,51 @@ impl AdapterClient {
         adapter_result_to_outcome(result)
     }
 
-    pub async fn rollback(&mut self, device: &DeviceInfo) -> UnderlayResult<AdapterOutcome> {
-        self.rollback_with_context(device, &request_context(device)).await
-    }
-
-    pub async fn rollback_with_context(
+    pub async fn final_confirm_with_context(
         &mut self,
         device: &DeviceInfo,
         context: &RequestContext,
     ) -> UnderlayResult<AdapterOutcome> {
         let response = self
             .inner
+            .final_confirm(FinalConfirmRequest {
+                context: Some(context.clone()),
+                device: Some(device_ref_from_info(device)),
+            })
+            .await
+            .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?
+            .into_inner();
+
+        let result = response.result.ok_or_else(|| UnderlayError::AdapterOperation {
+            code: "MISSING_ADAPTER_RESULT".into(),
+            message: "adapter returned no final confirm result".into(),
+            retryable: false,
+            errors: Vec::new(),
+        })?;
+
+        adapter_result_to_outcome(result)
+    }
+
+    pub async fn rollback(&mut self, device: &DeviceInfo) -> UnderlayResult<AdapterOutcome> {
+        self.rollback_with_context(device, &request_context(device), None)
+            .await
+    }
+
+    pub async fn rollback_with_context(
+        &mut self,
+        device: &DeviceInfo,
+        context: &RequestContext,
+        strategy: Option<TransactionStrategy>,
+    ) -> UnderlayResult<AdapterOutcome> {
+        let response = self
+            .inner
             .rollback(RollbackRequest {
                 context: Some(context.clone()),
                 device: Some(device_ref_from_info(device)),
+                strategy: strategy
+                    .map(strategy_to_proto)
+                    .unwrap_or(crate::proto::adapter::TransactionStrategy::Unspecified)
+                    as i32,
             })
             .await
             .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?

@@ -16,6 +16,7 @@ fn confirmed_commit_strategy_wins_when_supported() {
             supports_candidate: true,
             supports_validate: true,
             supports_confirmed_commit: true,
+            supports_persist_id: true,
             supports_rollback_on_error: false,
             supports_writable_running: false,
             supports_cli_fallback: false,

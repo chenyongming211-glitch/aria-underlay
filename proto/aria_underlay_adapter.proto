@@ -8,6 +8,7 @@ service UnderlayAdapter {
   rpc DryRun(DryRunRequest) returns (DryRunResponse);
   rpc Prepare(PrepareRequest) returns (PrepareResponse);
   rpc Commit(CommitRequest) returns (CommitResponse);
+  rpc FinalConfirm(FinalConfirmRequest) returns (FinalConfirmResponse);
   rpc Rollback(RollbackRequest) returns (RollbackResponse);
   rpc Verify(VerifyRequest) returns (VerifyResponse);
   rpc Recover(RecoverRequest) returns (RecoverResponse);
@@ -48,6 +49,7 @@ enum AdapterOperationStatus {
   ADAPTER_OPERATION_STATUS_ROLLED_BACK = 4;
   ADAPTER_OPERATION_STATUS_FAILED = 5;
   ADAPTER_OPERATION_STATUS_IN_DOUBT = 6;
+  ADAPTER_OPERATION_STATUS_CONFIRMED_COMMIT_PENDING = 7;
 }
 
 enum AdminState {
@@ -197,15 +199,26 @@ message CommitRequest {
   RequestContext context = 1;
   DeviceRef device = 2;
   TransactionStrategy strategy = 3;
+  uint32 confirm_timeout_secs = 4;
 }
 
 message CommitResponse {
   AdapterResult result = 1;
 }
 
+message FinalConfirmRequest {
+  RequestContext context = 1;
+  DeviceRef device = 2;
+}
+
+message FinalConfirmResponse {
+  AdapterResult result = 1;
+}
+
 message RollbackRequest {
   RequestContext context = 1;
   DeviceRef device = 2;
+  TransactionStrategy strategy = 3;
 }
 
 message RollbackResponse {

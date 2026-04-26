@@ -201,18 +201,38 @@ class NcclientNetconfBackend:
                 retryable=False,
             ) from exc
 
-    def commit_candidate(self, strategy=None, tx_id: str | None = None) -> None:
+    def commit_candidate(
+        self,
+        strategy=None,
+        tx_id: str | None = None,
+        confirm_timeout_secs: int = 120,
+    ) -> None:
         if strategy == TRANSACTION_STRATEGY_CONFIRMED_COMMIT:
-            raise AdapterError(
-                code="NETCONF_CONFIRMED_COMMIT_NOT_IMPLEMENTED",
-                message="NETCONF confirmed-commit is not implemented yet",
-                normalized_error="confirmed commit operation missing",
-                raw_error_summary=(
-                    "confirmed-commit requires a distinct final-confirm phase before "
-                    "it can be enabled safely"
-                ),
-                retryable=False,
-            )
+            if not tx_id:
+                raise AdapterError(
+                    code="MISSING_TX_ID",
+                    message="NETCONF confirmed-commit requires tx_id as persist token",
+                    normalized_error="tx_id missing",
+                    raw_error_summary="CommitRequest.context.tx_id is empty",
+                    retryable=False,
+                )
+            try:
+                with self._connect() as session:
+                    session.commit(
+                        confirmed=True,
+                        timeout=confirm_timeout_secs or 120,
+                        persist=tx_id,
+                    )
+            except AdapterError:
+                raise
+            except Exception as exc:
+                raise _adapter_operation_error(
+                    code="NETCONF_CONFIRMED_COMMIT_FAILED",
+                    message="NETCONF confirmed-commit failed",
+                    exc=exc,
+                    retryable=True,
+                ) from exc
+            return
 
         if strategy != TRANSACTION_STRATEGY_CANDIDATE_COMMIT:
             raise AdapterError(
@@ -236,12 +256,73 @@ class NcclientNetconfBackend:
                 retryable=True,
             ) from exc
 
-    def rollback_candidate(self) -> None:
+    def final_confirm(self, tx_id: str | None = None) -> None:
+        if not tx_id:
+            raise AdapterError(
+                code="MISSING_TX_ID",
+                message="NETCONF final confirm requires tx_id as persist-id",
+                normalized_error="tx_id missing",
+                raw_error_summary="FinalConfirmRequest.context.tx_id is empty",
+                retryable=False,
+            )
+
+        try:
+            with self._connect() as session:
+                session.commit(persist_id=tx_id)
+        except AdapterError:
+            raise
+        except Exception as exc:
+            raise _adapter_operation_error(
+                code="NETCONF_FINAL_CONFIRM_FAILED",
+                message="NETCONF final confirm failed",
+                exc=exc,
+                retryable=True,
+            ) from exc
+
+    def rollback_candidate(self, strategy=None, tx_id: str | None = None) -> None:
+        if strategy == TRANSACTION_STRATEGY_CONFIRMED_COMMIT:
+            if not tx_id:
+                raise AdapterError(
+                    code="MISSING_TX_ID",
+                    message="NETCONF cancel-commit requires tx_id as persist-id",
+                    normalized_error="tx_id missing",
+                    raw_error_summary="RollbackRequest.context.tx_id is empty",
+                    retryable=False,
+                )
+            try:
+                with self._connect() as session:
+                    session.cancel_commit(persist_id=tx_id)
+            except AdapterError:
+                raise
+            except Exception as exc:
+                raise _adapter_operation_error(
+                    code="NETCONF_CANCEL_COMMIT_FAILED",
+                    message="NETCONF cancel-commit failed",
+                    exc=exc,
+                    retryable=True,
+                ) from exc
+            return
+
+        if strategy == TRANSACTION_STRATEGY_CANDIDATE_COMMIT:
+            try:
+                with self._connect() as session:
+                    session.discard_changes()
+            except AdapterError:
+                raise
+            except Exception as exc:
+                raise _adapter_operation_error(
+                    code="NETCONF_DISCARD_FAILED",
+                    message="NETCONF discard-changes failed",
+                    exc=exc,
+                    retryable=True,
+                ) from exc
+            return
+
         raise AdapterError(
-            code="NETCONF_ROLLBACK_NOT_IMPLEMENTED",
-            message="real NETCONF rollback is not implemented yet",
-            normalized_error="rollback operation missing",
-            raw_error_summary="discard/cancel commit lands after transaction wiring",
+            code="NETCONF_ROLLBACK_STRATEGY_UNSUPPORTED",
+            message="NETCONF rollback strategy is unsupported",
+            normalized_error="unsupported rollback strategy",
+            raw_error_summary=f"strategy={strategy!r}, tx_id={tx_id or ''}",
             retryable=False,
         )
 

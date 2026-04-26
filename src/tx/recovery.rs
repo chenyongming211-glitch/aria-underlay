@@ -53,9 +53,11 @@ fn recovery_action_for_phase(phase: &TxPhase) -> RecoveryAction {
         TxPhase::Started | TxPhase::Preparing | TxPhase::Prepared => {
             RecoveryAction::DiscardPreparedChanges
         }
-        TxPhase::Committing | TxPhase::Verifying | TxPhase::RollingBack | TxPhase::Recovering => {
-            RecoveryAction::AdapterRecover
-        }
+        TxPhase::Committing
+        | TxPhase::Verifying
+        | TxPhase::FinalConfirming
+        | TxPhase::RollingBack
+        | TxPhase::Recovering => RecoveryAction::AdapterRecover,
         TxPhase::InDoubt => RecoveryAction::ManualIntervention,
         TxPhase::Committed | TxPhase::RolledBack | TxPhase::Failed => RecoveryAction::Noop,
     }

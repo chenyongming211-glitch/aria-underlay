@@ -17,6 +17,7 @@ pub enum TxPhase {
     Prepared,
     Committing,
     Verifying,
+    FinalConfirming,
     Recovering,
     Committed,
     RollingBack,

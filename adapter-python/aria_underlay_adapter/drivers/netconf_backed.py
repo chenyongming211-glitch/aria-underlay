@@ -92,9 +92,13 @@ class NetconfBackedDriver:
             )
         )
 
-    def commit(self, tx_id, device, strategy=None):
+    def commit(self, tx_id, device, strategy=None, confirm_timeout_secs=120):
         try:
-            self._backend.commit_candidate(strategy=strategy, tx_id=tx_id)
+            self._backend.commit_candidate(
+                strategy=strategy,
+                tx_id=tx_id,
+                confirm_timeout_secs=confirm_timeout_secs or 120,
+            )
         except AdapterError as error:
             return pb2.CommitResponse(
                 result=pb2.AdapterResult(
@@ -106,14 +110,37 @@ class NetconfBackedDriver:
 
         return pb2.CommitResponse(
             result=pb2.AdapterResult(
+                status=(
+                    pb2.ADAPTER_OPERATION_STATUS_CONFIRMED_COMMIT_PENDING
+                    if strategy == pb2.TRANSACTION_STRATEGY_CONFIRMED_COMMIT
+                    else pb2.ADAPTER_OPERATION_STATUS_COMMITTED
+                ),
+                changed=True,
+            )
+        )
+
+    def final_confirm(self, tx_id, device):
+        try:
+            self._backend.final_confirm(tx_id=tx_id)
+        except AdapterError as error:
+            return pb2.FinalConfirmResponse(
+                result=pb2.AdapterResult(
+                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
+                    changed=False,
+                    errors=[error.to_proto(pb2)],
+                )
+            )
+
+        return pb2.FinalConfirmResponse(
+            result=pb2.AdapterResult(
                 status=pb2.ADAPTER_OPERATION_STATUS_COMMITTED,
                 changed=True,
             )
         )
 
-    def rollback(self, tx_id, device):
+    def rollback(self, tx_id, device, strategy=None):
         try:
-            self._backend.rollback_candidate()
+            self._backend.rollback_candidate(strategy=strategy, tx_id=tx_id)
         except AdapterError as error:
             return pb2.RollbackResponse(
                 result=pb2.AdapterResult(

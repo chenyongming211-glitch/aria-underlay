@@ -143,22 +143,41 @@ def test_commit_candidate_commits_for_candidate_strategy():
         tx_id="tx-1",
     )
 
-    assert session.calls == [("commit",)]
+    assert session.calls == [("commit", {})]
 
 
-def test_commit_candidate_rejects_confirmed_commit_until_final_confirm_exists():
+def test_commit_candidate_starts_confirmed_commit_with_persist_token():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    backend.commit_candidate(
+        strategy=TRANSACTION_STRATEGY_CONFIRMED_COMMIT,
+        tx_id="tx-1",
+        confirm_timeout_secs=120,
+    )
+
+    assert session.calls == [
+        (
+            "commit",
+            {
+                "confirmed": True,
+                "timeout": 120,
+                "persist": "tx-1",
+            },
+        )
+    ]
+
+
+def test_commit_candidate_rejects_confirmed_commit_without_tx_id():
     session = _RecordingSession()
     backend = _BackendWithSession(session)
 
     try:
-        backend.commit_candidate(
-            strategy=TRANSACTION_STRATEGY_CONFIRMED_COMMIT,
-            tx_id="tx-1",
-        )
+        backend.commit_candidate(strategy=TRANSACTION_STRATEGY_CONFIRMED_COMMIT, tx_id="")
     except AdapterError as error:
-        assert error.code == "NETCONF_CONFIRMED_COMMIT_NOT_IMPLEMENTED"
+        assert error.code == "MISSING_TX_ID"
     else:
-        raise AssertionError("confirmed commit must fail closed until final confirm exists")
+        raise AssertionError("confirmed commit requires tx_id persist token")
 
     assert session.calls == []
 
@@ -192,7 +211,34 @@ def test_commit_candidate_maps_device_commit_failure():
     else:
         raise AssertionError("commit failure should fail closed")
 
-    assert session.calls == [("commit",)]
+    assert session.calls == [("commit", {})]
+
+
+def test_final_confirm_commits_persist_id():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    backend.final_confirm(tx_id="tx-1")
+
+    assert session.calls == [("commit", {"persist_id": "tx-1"})]
+
+
+def test_rollback_candidate_discards_candidate_strategy():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    backend.rollback_candidate(strategy=TRANSACTION_STRATEGY_CANDIDATE_COMMIT, tx_id="tx-1")
+
+    assert session.calls == [("discard_changes",)]
+
+
+def test_rollback_candidate_cancels_confirmed_commit_strategy():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    backend.rollback_candidate(strategy=TRANSACTION_STRATEGY_CONFIRMED_COMMIT, tx_id="tx-1")
+
+    assert session.calls == [("cancel_commit", {"persist_id": "tx-1"})]
 
 
 class _BackendWithSession(NcclientNetconfBackend):
@@ -234,10 +280,13 @@ class _RecordingSession:
     def validate(self, source):
         self.calls.append(("validate", source))
 
-    def commit(self):
-        self.calls.append(("commit",))
+    def commit(self, **kwargs):
+        self.calls.append(("commit", kwargs))
         if self.fail_commit:
             raise RuntimeError("commit failed")
+
+    def cancel_commit(self, **kwargs):
+        self.calls.append(("cancel_commit", kwargs))
 
 
 class _StaticRenderer:

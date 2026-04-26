@@ -185,7 +185,12 @@ class MockNetconfBackend:
             self.unlock_candidate()
             raise
 
-    def commit_candidate(self, strategy=None, tx_id: str | None = None) -> None:
+    def commit_candidate(
+        self,
+        strategy=None,
+        tx_id: str | None = None,
+        confirm_timeout_secs: int = 120,
+    ) -> None:
         self.get_capabilities()
         if self.profile == "commit_failed":
             raise AdapterError(
@@ -196,7 +201,10 @@ class MockNetconfBackend:
                 retryable=True,
             )
 
-    def rollback_candidate(self) -> None:
+    def final_confirm(self, tx_id: str | None = None) -> None:
+        self.get_capabilities()
+
+    def rollback_candidate(self, strategy=None, tx_id: str | None = None) -> None:
         self.get_capabilities()
 
     def verify_running(self, desired_state) -> None:

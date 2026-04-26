@@ -32,13 +32,18 @@ pub struct CapabilityFlags {
     pub supports_candidate: bool,
     pub supports_validate: bool,
     pub supports_confirmed_commit: bool,
+    pub supports_persist_id: bool,
     pub supports_rollback_on_error: bool,
     pub supports_writable_running: bool,
     pub supports_cli_fallback: bool,
 }
 
 pub fn choose_strategy(flags: CapabilityFlags, mode: TransactionMode) -> TransactionStrategy {
-    if flags.supports_candidate && flags.supports_validate && flags.supports_confirmed_commit {
+    if flags.supports_candidate
+        && flags.supports_validate
+        && flags.supports_confirmed_commit
+        && flags.supports_persist_id
+    {
         return TransactionStrategy::ConfirmedCommit;
     }
 

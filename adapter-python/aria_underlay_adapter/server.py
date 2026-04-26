@@ -68,6 +68,14 @@ class UnderlayAdapterService(pb2_grpc.UnderlayAdapterServicer):
             tx_id=request.context.tx_id if request.context else "",
             device=request.device,
             strategy=request.strategy,
+            confirm_timeout_secs=request.confirm_timeout_secs,
+        )
+
+    def FinalConfirm(self, request, context):
+        driver = self._registry.select(request.device)
+        return driver.final_confirm(
+            tx_id=request.context.tx_id if request.context else "",
+            device=request.device,
         )
 
     def Rollback(self, request, context):
@@ -75,6 +83,7 @@ class UnderlayAdapterService(pb2_grpc.UnderlayAdapterServicer):
         return driver.rollback(
             tx_id=request.context.tx_id if request.context else "",
             device=request.device,
+            strategy=request.strategy,
         )
 
     def Verify(self, request, context):
