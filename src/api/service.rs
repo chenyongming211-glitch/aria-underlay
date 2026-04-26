@@ -23,7 +23,7 @@ use crate::model::DeviceId;
 use crate::planner::device_plan::{plan_switch_pair, DeviceDesiredState};
 use crate::planner::domain_plan::plan_underlay_domain;
 use crate::state::DeviceShadowState;
-use crate::tx::recovery::RecoveryReport;
+use crate::tx::recovery::{classify_recovery, RecoveryAction, RecoveryReport};
 use crate::tx::{
     EndpointLockTable, InMemoryTxJournalStore, TransactionStrategy, TxContext, TxJournalRecord,
     TxJournalStore, TxPhase,
@@ -313,6 +313,63 @@ impl AriaUnderlayService {
 
         selected_strategy.ok_or(UnderlayError::UnsupportedTransactionStrategy)
     }
+
+    async fn recover_record(
+        &self,
+        record: &TxJournalRecord,
+        action: RecoveryAction,
+    ) -> UnderlayResult<TxPhase> {
+        if record.devices.is_empty() {
+            return Ok(match action {
+                RecoveryAction::DiscardPreparedChanges => TxPhase::RolledBack,
+                _ => TxPhase::InDoubt,
+            });
+        }
+
+        let _endpoint_guard = self.endpoint_locks.acquire_many(&record.devices).await?;
+        let tx_context = TxContext {
+            tx_id: record.tx_id.clone(),
+            request_id: record.request_id.clone(),
+            trace_id: record.trace_id.clone(),
+        };
+        let mut merged_phase = None;
+
+        for device_id in &record.devices {
+            let managed = self.inventory.get(device_id)?;
+            let mut client = AdapterClient::connect(managed.info.adapter_endpoint.clone()).await?;
+            let rpc_context = tx_request_context(&managed.info, &tx_context);
+            let outcome = client
+                .recover_with_context(&managed.info, &rpc_context)
+                .await?;
+            let phase = recover_phase_from_adapter_status(action, outcome.status);
+            merged_phase = Some(merge_recovery_phase(merged_phase, phase));
+        }
+
+        Ok(merged_phase.unwrap_or(TxPhase::InDoubt))
+    }
+}
+
+fn recover_phase_from_adapter_status(
+    action: RecoveryAction,
+    status: AdapterOperationStatus,
+) -> TxPhase {
+    match (action, status) {
+        (_, AdapterOperationStatus::RolledBack) => TxPhase::RolledBack,
+        (RecoveryAction::AdapterRecover, AdapterOperationStatus::Committed) => TxPhase::Committed,
+        (RecoveryAction::DiscardPreparedChanges, AdapterOperationStatus::NoChange) => {
+            TxPhase::RolledBack
+        }
+        _ => TxPhase::InDoubt,
+    }
+}
+
+fn merge_recovery_phase(current: Option<TxPhase>, next: TxPhase) -> TxPhase {
+    match (current, next) {
+        (None, phase) => phase,
+        (Some(left), right) if left == right => left,
+        (Some(TxPhase::InDoubt), _) | (_, TxPhase::InDoubt) => TxPhase::InDoubt,
+        _ => TxPhase::InDoubt,
+    }
 }
 
 #[async_trait]
@@ -448,20 +505,64 @@ impl UnderlayService for AriaUnderlayService {
 
     async fn recover_pending_transactions(&self) -> UnderlayResult<RecoveryReport> {
         let recoverable = self.journal.list_recoverable()?;
-        let in_doubt = recoverable
+        let decisions = recoverable
+            .iter()
+            .map(classify_recovery)
+            .collect::<Vec<_>>();
+        let mut recovered = 0;
+
+        for (record, decision) in recoverable.iter().zip(decisions.iter()) {
+            match decision.action {
+                RecoveryAction::Noop => {}
+                RecoveryAction::ManualIntervention => {
+                    if record.phase != TxPhase::InDoubt {
+                        self.journal
+                            .put(&record.clone().with_phase(TxPhase::InDoubt))?;
+                    }
+                }
+                RecoveryAction::DiscardPreparedChanges | RecoveryAction::AdapterRecover => {
+                    self.journal
+                        .put(&record.clone().with_phase(TxPhase::Recovering))?;
+
+                    match self.recover_record(record, decision.action).await {
+                        Ok(phase) => {
+                            let terminal =
+                                matches!(phase, TxPhase::Committed | TxPhase::RolledBack);
+                            self.journal.put(&record.clone().with_phase(phase))?;
+                            if terminal {
+                                recovered += 1;
+                            }
+                        }
+                        Err(err) => {
+                            let (code, message) = journal_error_fields(&err);
+                            self.journal.put(
+                                &record
+                                    .clone()
+                                    .with_phase(TxPhase::InDoubt)
+                                    .with_error(code, message),
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+
+        let pending_records = self.journal.list_recoverable()?;
+        let in_doubt = pending_records
             .iter()
             .filter(|record| record.phase == TxPhase::InDoubt)
             .count();
-        let tx_ids = recoverable
+        let tx_ids = pending_records
             .iter()
             .map(|record| record.tx_id.clone())
             .collect::<Vec<_>>();
 
         Ok(RecoveryReport {
-            recovered: 0,
+            recovered,
             in_doubt,
-            pending: recoverable.len(),
+            pending: pending_records.len(),
             tx_ids,
+            decisions,
         })
     }
 

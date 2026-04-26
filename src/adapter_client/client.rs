@@ -8,8 +8,8 @@ use crate::device::{DeviceCapabilityProfile, DeviceInfo};
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::proto::adapter::underlay_adapter_client::UnderlayAdapterClient;
 use crate::proto::adapter::{
-    CommitRequest, GetCapabilitiesRequest, GetCurrentStateRequest, PrepareRequest, RequestContext,
-    RollbackRequest, VerifyRequest,
+    CommitRequest, GetCapabilitiesRequest, GetCurrentStateRequest, PrepareRequest, RecoverRequest,
+    RequestContext, RollbackRequest, VerifyRequest,
 };
 use crate::state::DeviceShadowState;
 use crate::tx::{TransactionStrategy, TxContext};
@@ -188,6 +188,40 @@ impl AdapterClient {
         let result = response.result.ok_or_else(|| UnderlayError::AdapterOperation {
             code: "MISSING_ADAPTER_RESULT".into(),
             message: "adapter returned no rollback result".into(),
+            retryable: false,
+            errors: Vec::new(),
+        })?;
+
+        adapter_result_to_outcome(result)
+    }
+
+    pub async fn recover(
+        &mut self,
+        device: &DeviceInfo,
+        tx: &TxContext,
+    ) -> UnderlayResult<AdapterOutcome> {
+        self.recover_with_context(device, &tx_request_context(device, tx))
+            .await
+    }
+
+    pub async fn recover_with_context(
+        &mut self,
+        device: &DeviceInfo,
+        context: &RequestContext,
+    ) -> UnderlayResult<AdapterOutcome> {
+        let response = self
+            .inner
+            .recover(RecoverRequest {
+                context: Some(context.clone()),
+                device: Some(device_ref_from_info(device)),
+            })
+            .await
+            .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?
+            .into_inner();
+
+        let result = response.result.ok_or_else(|| UnderlayError::AdapterOperation {
+            code: "MISSING_ADAPTER_RESULT".into(),
+            message: "adapter returned no recover result".into(),
             retryable: false,
             errors: Vec::new(),
         })?;
