@@ -99,3 +99,78 @@ def test_verify_failed_profile_fails_verify():
         MockNetconfBackend("verify_failed").verify_running(desired_state=None)
 
     assert exc.value.code == "VERIFY_FAILED"
+
+
+def test_verify_running_accepts_matching_scoped_state():
+    scope = SimpleNamespace(
+        full=False,
+        vlan_ids=[100],
+        interface_names=["GE1/0/1"],
+    )
+
+    MockNetconfBackend("confirmed").verify_running(
+        desired_state=_desired_state(),
+        scope=scope,
+    )
+
+
+def test_verify_running_detects_vlan_mismatch():
+    desired = _desired_state(vlan_name="wrong")
+    scope = SimpleNamespace(full=False, vlan_ids=[100], interface_names=[])
+
+    with pytest.raises(AdapterError) as exc:
+        MockNetconfBackend("confirmed").verify_running(
+            desired_state=desired,
+            scope=scope,
+        )
+
+    assert exc.value.code == "VERIFY_MISMATCH"
+    assert "VLAN 100 name mismatch" in exc.value.message
+
+
+def test_verify_running_detects_interface_mismatch():
+    desired = _desired_state(interface_description="wrong")
+    scope = SimpleNamespace(full=False, vlan_ids=[], interface_names=["GE1/0/1"])
+
+    with pytest.raises(AdapterError) as exc:
+        MockNetconfBackend("confirmed").verify_running(
+            desired_state=desired,
+            scope=scope,
+        )
+
+    assert exc.value.code == "VERIFY_MISMATCH"
+    assert "interface GE1/0/1 description mismatch" in exc.value.message
+
+
+def test_verify_running_empty_scope_is_noop():
+    scope = SimpleNamespace(full=False, vlan_ids=[], interface_names=[])
+
+    MockNetconfBackend("confirmed").verify_running(
+        desired_state=_desired_state(vlan_name="wrong", interface_description="wrong"),
+        scope=scope,
+    )
+
+
+def _desired_state(vlan_name="prod", interface_description="server uplink"):
+    return SimpleNamespace(
+        vlans=[
+            SimpleNamespace(
+                vlan_id=100,
+                name=vlan_name,
+                description="production vlan",
+            )
+        ],
+        interfaces=[
+            SimpleNamespace(
+                name="GE1/0/1",
+                admin_state=1,
+                description=interface_description,
+                mode=SimpleNamespace(
+                    kind=1,
+                    access_vlan=100,
+                    native_vlan=None,
+                    allowed_vlans=[],
+                ),
+            )
+        ],
+    )

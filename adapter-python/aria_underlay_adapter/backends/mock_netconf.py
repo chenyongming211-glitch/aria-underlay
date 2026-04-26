@@ -218,6 +218,12 @@ class MockNetconfBackend:
                 raw_error_summary="mock profile verify_failed",
                 retryable=False,
             )
+        if desired_state is None:
+            return
+
+        observed = self.get_current_state(scope=scope)
+        _verify_vlans(desired_state, observed, scope)
+        _verify_interfaces(desired_state, observed, scope)
 
 
 def _filter_state_by_scope(state: dict, scope=None) -> dict:
@@ -239,3 +245,160 @@ def _filter_state_by_scope(state: dict, scope=None) -> dict:
             if interface["name"] in interface_names
         ],
     }
+
+
+def _verify_vlans(desired_state, observed: dict, scope=None) -> None:
+    observed_by_id = {vlan["vlan_id"]: vlan for vlan in observed["vlans"]}
+    for desired_vlan in _desired_vlans_in_scope(desired_state, scope):
+        vlan_id = _field(desired_vlan, "vlan_id")
+        observed_vlan = observed_by_id.get(vlan_id)
+        if observed_vlan is None:
+            raise _verify_mismatch(
+                f"VLAN {vlan_id} missing from observed scoped state",
+            )
+        expected_name = _optional_field(desired_vlan, "name")
+        expected_description = _optional_field(desired_vlan, "description")
+        if observed_vlan.get("name") != expected_name:
+            raise _verify_mismatch(
+                f"VLAN {vlan_id} name mismatch: expected {expected_name!r}, "
+                f"got {observed_vlan.get('name')!r}",
+            )
+        if observed_vlan.get("description") != expected_description:
+            raise _verify_mismatch(
+                f"VLAN {vlan_id} description mismatch: expected "
+                f"{expected_description!r}, got {observed_vlan.get('description')!r}",
+            )
+
+
+def _verify_interfaces(desired_state, observed: dict, scope=None) -> None:
+    observed_by_name = {interface["name"]: interface for interface in observed["interfaces"]}
+    for desired_interface in _desired_interfaces_in_scope(desired_state, scope):
+        name = _field(desired_interface, "name")
+        observed_interface = observed_by_name.get(name)
+        if observed_interface is None:
+            raise _verify_mismatch(
+                f"interface {name} missing from observed scoped state",
+            )
+        expected_admin_state = _admin_state_to_text(_field(desired_interface, "admin_state"))
+        expected_description = _optional_field(desired_interface, "description")
+        expected_mode = _mode_to_dict(_field(desired_interface, "mode"))
+
+        if observed_interface.get("admin_state") != expected_admin_state:
+            raise _verify_mismatch(
+                f"interface {name} admin state mismatch: expected "
+                f"{expected_admin_state!r}, got {observed_interface.get('admin_state')!r}",
+            )
+        if observed_interface.get("description") != expected_description:
+            raise _verify_mismatch(
+                f"interface {name} description mismatch: expected "
+                f"{expected_description!r}, got {observed_interface.get('description')!r}",
+            )
+        if _normalize_mode(observed_interface.get("mode")) != _normalize_mode(expected_mode):
+            raise _verify_mismatch(
+                f"interface {name} mode mismatch: expected {expected_mode!r}, "
+                f"got {observed_interface.get('mode')!r}",
+            )
+
+
+def _desired_vlans_in_scope(desired_state, scope=None):
+    if scope is not None and not getattr(scope, "full", False) and not getattr(scope, "vlan_ids", []):
+        return
+    vlan_ids = set(getattr(scope, "vlan_ids", [])) if scope is not None else set()
+    for vlan in getattr(desired_state, "vlans", []):
+        if getattr(scope, "full", False) or scope is None or _field(vlan, "vlan_id") in vlan_ids:
+            yield vlan
+
+
+def _desired_interfaces_in_scope(desired_state, scope=None):
+    if (
+        scope is not None
+        and not getattr(scope, "full", False)
+        and not getattr(scope, "interface_names", [])
+    ):
+        return
+    interface_names = (
+        set(getattr(scope, "interface_names", [])) if scope is not None else set()
+    )
+    for interface in getattr(desired_state, "interfaces", []):
+        if (
+            getattr(scope, "full", False)
+            or scope is None
+            or _field(interface, "name") in interface_names
+        ):
+            yield interface
+
+
+def _field(message, name):
+    if isinstance(message, dict):
+        return message[name]
+    return getattr(message, name)
+
+
+def _optional_field(message, name):
+    if isinstance(message, dict):
+        value = message.get(name)
+    elif hasattr(message, "HasField"):
+        try:
+            value = getattr(message, name) if message.HasField(name) else None
+        except ValueError:
+            value = getattr(message, name)
+    else:
+        value = getattr(message, name, None)
+
+    return None if value == "" else value
+
+
+def _admin_state_to_text(value) -> str:
+    if value in {"up", "UP", 1}:
+        return "up"
+    if value in {"down", "DOWN", 2}:
+        return "down"
+    return str(value).lower()
+
+
+def _mode_to_dict(mode) -> dict:
+    if isinstance(mode, dict):
+        return mode
+
+    kind = _field(mode, "kind")
+    if kind in {"access", "ACCESS", 1}:
+        return {
+            "kind": "access",
+            "access_vlan": _optional_field(mode, "access_vlan"),
+            "native_vlan": None,
+            "allowed_vlans": [],
+        }
+    if kind in {"trunk", "TRUNK", 2}:
+        return {
+            "kind": "trunk",
+            "access_vlan": None,
+            "native_vlan": _optional_field(mode, "native_vlan"),
+            "allowed_vlans": list(getattr(mode, "allowed_vlans", [])),
+        }
+    return {"kind": kind}
+
+
+def _normalize_mode(mode) -> dict:
+    if mode["kind"] == "trunk":
+        return {
+            "kind": "trunk",
+            "access_vlan": None,
+            "native_vlan": mode.get("native_vlan"),
+            "allowed_vlans": sorted(set(mode.get("allowed_vlans", []))),
+        }
+    return {
+        "kind": "access",
+        "access_vlan": mode.get("access_vlan"),
+        "native_vlan": None,
+        "allowed_vlans": [],
+    }
+
+
+def _verify_mismatch(message: str) -> AdapterError:
+    return AdapterError(
+        code="VERIFY_MISMATCH",
+        message=message,
+        normalized_error="running state does not match desired state",
+        raw_error_summary=message,
+        retryable=False,
+    )
