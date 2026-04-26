@@ -6,7 +6,9 @@ use aria_underlay::model::DeviceId;
 use aria_underlay::tx::{
     InMemoryTxJournalStore, TxContext, TxJournalRecord, TxJournalStore, TxPhase,
 };
-use aria_underlay::tx::recovery::{classify_recovery, RecoveryAction, RecoveryReport};
+use aria_underlay::tx::recovery::{
+    classify_recovery, in_doubt_records_for_devices, RecoveryAction, RecoveryReport,
+};
 
 #[test]
 fn recovery_report_defaults_to_zero() {
@@ -105,4 +107,30 @@ fn recovery_classification_is_phase_aware() {
         classify_recovery(&base.with_phase(TxPhase::Committed)).action,
         RecoveryAction::Noop
     );
+}
+
+#[test]
+fn in_doubt_records_for_devices_only_returns_blocking_devices() {
+    let records = vec![
+        journal_record("tx-leaf-a", TxPhase::InDoubt, "leaf-a"),
+        journal_record("tx-leaf-b", TxPhase::Prepared, "leaf-b"),
+        journal_record("tx-leaf-c", TxPhase::InDoubt, "leaf-c"),
+    ];
+
+    let blocking = in_doubt_records_for_devices(&records, &[DeviceId("leaf-a".into())]);
+
+    assert_eq!(blocking.len(), 1);
+    assert_eq!(blocking[0].tx_id, "tx-leaf-a");
+}
+
+fn journal_record(tx_id: &str, phase: TxPhase, device_id: &str) -> TxJournalRecord {
+    TxJournalRecord::started(
+        &TxContext {
+            tx_id: tx_id.into(),
+            request_id: format!("req-{tx_id}"),
+            trace_id: format!("trace-{tx_id}"),
+        },
+        vec![DeviceId(device_id.into())],
+    )
+    .with_phase(phase)
 }

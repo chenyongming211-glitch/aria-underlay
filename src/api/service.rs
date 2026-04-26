@@ -13,7 +13,7 @@ use crate::api::response::{
 };
 use crate::api::underlay_service::UnderlayService;
 use crate::device::{
-    DeviceInventory, DeviceOnboardingService, DeviceRegistrationService,
+    DeviceInfo, DeviceInventory, DeviceOnboardingService, DeviceRegistrationService,
     InitializeUnderlaySiteRequest, InitializeUnderlaySiteResponse, RegisterDeviceRequest,
     RegisterDeviceResponse,
 };
@@ -22,8 +22,11 @@ use crate::intent::validation::validate_switch_pair_intent;
 use crate::model::DeviceId;
 use crate::planner::device_plan::{plan_switch_pair, DeviceDesiredState};
 use crate::planner::domain_plan::plan_underlay_domain;
+use crate::proto::adapter::RequestContext;
 use crate::state::DeviceShadowState;
-use crate::tx::recovery::{classify_recovery, RecoveryAction, RecoveryReport};
+use crate::tx::recovery::{
+    classify_recovery, in_doubt_records_for_devices, RecoveryAction, RecoveryReport,
+};
 use crate::tx::{
     EndpointLockTable, InMemoryTxJournalStore, TransactionStrategy, TxContext, TxJournalRecord,
     TxJournalStore, TxPhase,
@@ -98,6 +101,7 @@ impl AriaUnderlayService {
             .endpoint_locks
             .acquire_many(&desired_device_ids(&desired_states))
             .await?;
+        self.ensure_no_in_doubt_for_devices(&desired_device_ids(&desired_states))?;
         let plan = self.dry_run_desired_states(&desired_states).await?;
         let device_results = device_results_from_plan(&plan);
 
@@ -141,7 +145,7 @@ impl AriaUnderlayService {
             Err(err) => {
                 let (code, message) = journal_error_fields(&err);
                 journal_record = journal_record
-                    .with_phase(TxPhase::Failed)
+                    .with_phase(failed_apply_phase(&journal_record.phase))
                     .with_error(code, message);
                 self.journal.put(&journal_record)?;
                 return Err(err);
@@ -232,10 +236,30 @@ impl AriaUnderlayService {
             *journal_record = journal_record.clone().with_strategy(strategy);
             self.journal.put(journal_record)?;
 
-            let prepare = client
+            let prepare = match client
                 .prepare_with_context(&managed.info, &rpc_context, desired)
-                .await?;
+                .await
+            {
+                Ok(prepare) => prepare,
+                Err(err) => {
+                    self.rollback_after_endpoint_failure(
+                        &mut client,
+                        &managed.info,
+                        &rpc_context,
+                        journal_record,
+                    )
+                    .await?;
+                    return Err(err);
+                }
+            };
             if prepare.status != AdapterOperationStatus::Prepared {
+                self.rollback_after_endpoint_failure(
+                    &mut client,
+                    &managed.info,
+                    &rpc_context,
+                    journal_record,
+                )
+                .await?;
                 return Err(UnderlayError::AdapterOperation {
                     code: "UNEXPECTED_PREPARE_STATUS".into(),
                     message: format!("adapter returned prepare status {:?}", prepare.status),
@@ -254,11 +278,13 @@ impl AriaUnderlayService {
             {
                 Ok(commit) if commit.status == AdapterOperationStatus::Committed => {}
                 Ok(commit) => {
-                    *journal_record = journal_record.clone().with_phase(TxPhase::RollingBack);
-                    self.journal.put(journal_record)?;
-                    let _ = client
-                        .rollback_with_context(&managed.info, &rpc_context)
-                        .await;
+                    self.rollback_after_endpoint_failure(
+                        &mut client,
+                        &managed.info,
+                        &rpc_context,
+                        journal_record,
+                    )
+                    .await?;
                     return Err(UnderlayError::AdapterOperation {
                         code: "UNEXPECTED_COMMIT_STATUS".into(),
                         message: format!("adapter returned commit status {:?}", commit.status),
@@ -267,11 +293,13 @@ impl AriaUnderlayService {
                     });
                 }
                 Err(err) => {
-                    *journal_record = journal_record.clone().with_phase(TxPhase::RollingBack);
-                    self.journal.put(journal_record)?;
-                    let _ = client
-                        .rollback_with_context(&managed.info, &rpc_context)
-                        .await;
+                    self.rollback_after_endpoint_failure(
+                        &mut client,
+                        &managed.info,
+                        &rpc_context,
+                        journal_record,
+                    )
+                    .await?;
                     return Err(err);
                 }
             }
@@ -288,11 +316,13 @@ impl AriaUnderlayService {
                         AdapterOperationStatus::NoChange | AdapterOperationStatus::Committed
                     ) => {}
                 Ok(verify) => {
-                    *journal_record = journal_record.clone().with_phase(TxPhase::RollingBack);
-                    self.journal.put(journal_record)?;
-                    let _ = client
-                        .rollback_with_context(&managed.info, &rpc_context)
-                        .await;
+                    self.rollback_after_endpoint_failure(
+                        &mut client,
+                        &managed.info,
+                        &rpc_context,
+                        journal_record,
+                    )
+                    .await?;
                     return Err(UnderlayError::AdapterOperation {
                         code: "UNEXPECTED_VERIFY_STATUS".into(),
                         message: format!("adapter returned verify status {:?}", verify.status),
@@ -301,17 +331,82 @@ impl AriaUnderlayService {
                     });
                 }
                 Err(err) => {
-                    *journal_record = journal_record.clone().with_phase(TxPhase::RollingBack);
-                    self.journal.put(journal_record)?;
-                    let _ = client
-                        .rollback_with_context(&managed.info, &rpc_context)
-                        .await;
+                    self.rollback_after_endpoint_failure(
+                        &mut client,
+                        &managed.info,
+                        &rpc_context,
+                        journal_record,
+                    )
+                    .await?;
                     return Err(err);
                 }
             }
         }
 
         selected_strategy.ok_or(UnderlayError::UnsupportedTransactionStrategy)
+    }
+
+    async fn rollback_after_endpoint_failure(
+        &self,
+        client: &mut AdapterClient,
+        device: &DeviceInfo,
+        context: &RequestContext,
+        journal_record: &mut TxJournalRecord,
+    ) -> UnderlayResult<()> {
+        *journal_record = journal_record.clone().with_phase(TxPhase::RollingBack);
+        self.journal.put(journal_record)?;
+
+        match client.rollback_with_context(device, context).await {
+            Ok(outcome)
+                if matches!(
+                    outcome.status,
+                    AdapterOperationStatus::RolledBack | AdapterOperationStatus::NoChange
+                ) =>
+            {
+                *journal_record = journal_record.clone().with_phase(TxPhase::RolledBack);
+                self.journal.put(journal_record)?;
+            }
+            Ok(outcome) => {
+                *journal_record = journal_record
+                    .clone()
+                    .with_phase(TxPhase::InDoubt)
+                    .with_error(
+                        "UNEXPECTED_ROLLBACK_STATUS",
+                        format!("adapter returned rollback status {:?}", outcome.status),
+                    );
+                self.journal.put(journal_record)?;
+            }
+            Err(err) => {
+                let (code, message) = journal_error_fields(&err);
+                *journal_record = journal_record
+                    .clone()
+                    .with_phase(TxPhase::InDoubt)
+                    .with_error(code, message);
+                self.journal.put(journal_record)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn ensure_no_in_doubt_for_devices(&self, device_ids: &[DeviceId]) -> UnderlayResult<()> {
+        let recoverable = self.journal.list_recoverable()?;
+        let blocking = in_doubt_records_for_devices(&recoverable, device_ids);
+        if blocking.is_empty() {
+            return Ok(());
+        }
+
+        let tx_ids = blocking
+            .iter()
+            .map(|record| record.tx_id.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        Err(UnderlayError::AdapterOperation {
+            code: "TX_IN_DOUBT".into(),
+            message: format!("endpoint has unresolved in-doubt transaction(s): {tx_ids}"),
+            retryable: false,
+            errors: Vec::new(),
+        })
     }
 
     async fn recover_record(
@@ -372,6 +467,13 @@ fn merge_recovery_phase(current: Option<TxPhase>, next: TxPhase) -> TxPhase {
     }
 }
 
+fn failed_apply_phase(current: &TxPhase) -> TxPhase {
+    match current {
+        TxPhase::RolledBack | TxPhase::InDoubt => current.clone(),
+        _ => TxPhase::Failed,
+    }
+}
+
 #[async_trait]
 impl UnderlayService for AriaUnderlayService {
     async fn initialize_underlay_site(
@@ -416,6 +518,7 @@ impl UnderlayService for AriaUnderlayService {
             .endpoint_locks
             .acquire_many(&desired_device_ids(&desired_states))
             .await?;
+        self.ensure_no_in_doubt_for_devices(&desired_device_ids(&desired_states))?;
         let plan = self.dry_run_desired_states(&desired_states).await?;
         let device_results = device_results_from_plan(&plan);
 
@@ -459,7 +562,7 @@ impl UnderlayService for AriaUnderlayService {
             Err(err) => {
                 let (code, message) = journal_error_fields(&err);
                 journal_record = journal_record
-                    .with_phase(TxPhase::Failed)
+                    .with_phase(failed_apply_phase(&journal_record.phase))
                     .with_error(code, message);
                 self.journal.put(&journal_record)?;
                 return Err(err);

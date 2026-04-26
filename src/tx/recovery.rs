@@ -1,3 +1,6 @@
+use std::collections::BTreeSet;
+
+use crate::model::DeviceId;
 use crate::tx::journal::{TxJournalRecord, TxPhase};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -30,6 +33,19 @@ pub fn classify_recovery(record: &TxJournalRecord) -> RecoveryDecision {
         phase: record.phase.clone(),
         action: recovery_action_for_phase(&record.phase),
     }
+}
+
+pub fn in_doubt_records_for_devices(
+    records: &[TxJournalRecord],
+    device_ids: &[DeviceId],
+) -> Vec<TxJournalRecord> {
+    let requested = device_ids.iter().collect::<BTreeSet<_>>();
+    records
+        .iter()
+        .filter(|record| record.phase == TxPhase::InDoubt)
+        .filter(|record| record.devices.iter().any(|device_id| requested.contains(device_id)))
+        .cloned()
+        .collect()
 }
 
 fn recovery_action_for_phase(phase: &TxPhase) -> RecoveryAction {
