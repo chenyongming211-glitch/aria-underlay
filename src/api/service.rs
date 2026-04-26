@@ -97,7 +97,12 @@ impl AriaUnderlayService {
             .clone()
             .unwrap_or_else(|| request_id.clone());
         let desired_states = plan_underlay_domain(&request.intent)?;
-        self.apply_desired_states(request_id, trace_id, desired_states)
+        self.apply_desired_states(
+            request_id,
+            trace_id,
+            desired_states,
+            request.options.allow_degraded_atomicity,
+        )
             .await
     }
 
@@ -141,12 +146,18 @@ impl AriaUnderlayService {
         request_id: String,
         trace_id: String,
         desired_states: Vec<DeviceDesiredState>,
+        allow_degraded_atomicity: bool,
     ) -> UnderlayResult<ApplyIntentResponse> {
         let mut device_results = Vec::with_capacity(desired_states.len());
 
         for desired in &desired_states {
             device_results.push(
-                self.apply_single_endpoint_state(&request_id, &trace_id, desired)
+                self.apply_single_endpoint_state(
+                    &request_id,
+                    &trace_id,
+                    desired,
+                    allow_degraded_atomicity,
+                )
                     .await,
             );
         }
@@ -183,6 +194,7 @@ impl AriaUnderlayService {
         request_id: &str,
         trace_id: &str,
         desired: &DeviceDesiredState,
+        allow_degraded_atomicity: bool,
     ) -> DeviceApplyResult {
         let _endpoint_guard = match self
             .endpoint_locks
@@ -248,6 +260,7 @@ impl AriaUnderlayService {
                 &plan,
                 &tx_context,
                 &mut journal_record,
+                allow_degraded_atomicity,
             )
             .await
         {
@@ -267,12 +280,16 @@ impl AriaUnderlayService {
                 DeviceApplyResult {
                     device_id: desired.device_id.clone(),
                     changed: true,
-                    status: ApplyStatus::Success,
+                    status: if strategy.is_degraded() {
+                        ApplyStatus::SuccessWithWarning
+                    } else {
+                        ApplyStatus::Success
+                    },
                     tx_id: Some(tx_context.tx_id),
                     strategy: Some(strategy),
                     error_code: None,
                     error_message: None,
-                    warnings: Vec::new(),
+                    warnings: degraded_strategy_warnings(strategy),
                 }
             }
             Err(err) => {
@@ -302,6 +319,7 @@ impl AriaUnderlayService {
         plan: &DryRunPlan,
         tx_context: &TxContext,
         journal_record: &mut TxJournalRecord,
+        allow_degraded_atomicity: bool,
     ) -> UnderlayResult<TransactionStrategy> {
         let mut selected_strategy = None;
 
@@ -330,6 +348,17 @@ impl AriaUnderlayService {
             let strategy = capability.recommended_strategy;
             if !strategy.is_supported() {
                 return Err(UnderlayError::UnsupportedTransactionStrategy);
+            }
+            if strategy.is_degraded() && !allow_degraded_atomicity {
+                return Err(UnderlayError::AdapterOperation {
+                    code: "DEGRADED_ATOMICITY_NOT_ALLOWED".into(),
+                    message: format!(
+                        "device {} requires degraded transaction strategy {:?}, but request disallows degraded atomicity",
+                        desired.device_id.0, strategy
+                    ),
+                    retryable: false,
+                    errors: Vec::new(),
+                });
             }
             selected_strategy.get_or_insert(strategy);
             *journal_record = journal_record.clone().with_strategy(strategy);
@@ -613,7 +642,12 @@ impl UnderlayService for AriaUnderlayService {
             .clone()
             .unwrap_or_else(|| request_id.clone());
         let desired_states = plan_switch_pair(&request.intent);
-        self.apply_desired_states(request_id, trace_id, desired_states)
+        self.apply_desired_states(
+            request_id,
+            trace_id,
+            desired_states,
+            request.options.allow_degraded_atomicity,
+        )
             .await
     }
 
@@ -755,14 +789,31 @@ fn aggregate_apply_status(device_results: &[DeviceApplyResult]) -> ApplyStatus {
         ApplyStatus::InDoubt
     } else if device_results
         .iter()
-        .all(|result| matches!(result.status, ApplyStatus::Success | ApplyStatus::NoOpSuccess))
+        .all(|result| {
+            matches!(
+                result.status,
+                ApplyStatus::Success | ApplyStatus::SuccessWithWarning | ApplyStatus::NoOpSuccess
+            )
+        })
     {
-        ApplyStatus::Success
+        if device_results
+            .iter()
+            .any(|result| result.status == ApplyStatus::SuccessWithWarning)
+        {
+            ApplyStatus::SuccessWithWarning
+        } else {
+            ApplyStatus::Success
+        }
     } else if device_results.len() == 1 {
         device_results[0].status.clone()
     } else if device_results
         .iter()
-        .any(|result| matches!(result.status, ApplyStatus::Success | ApplyStatus::NoOpSuccess))
+        .any(|result| {
+            matches!(
+                result.status,
+                ApplyStatus::Success | ApplyStatus::SuccessWithWarning | ApplyStatus::NoOpSuccess
+            )
+        })
     {
         ApplyStatus::SuccessWithWarning
     } else if device_results
@@ -807,6 +858,17 @@ fn apply_status_for_failed_phase(phase: &TxPhase) -> ApplyStatus {
     }
 }
 
+fn degraded_strategy_warnings(strategy: TransactionStrategy) -> Vec<String> {
+    if strategy.is_degraded() {
+        vec![format!(
+            "degraded transaction strategy {:?}; atomicity is weaker than confirmed commit",
+            strategy
+        )]
+    } else {
+        Vec::new()
+    }
+}
+
 fn journal_error_fields(error: &UnderlayError) -> (String, String) {
     match error {
         UnderlayError::AdapterOperation { code, message, .. } => (code.clone(), message.clone()),
@@ -826,5 +888,52 @@ fn journal_error_fields(error: &UnderlayError) -> (String, String) {
         }
         UnderlayError::DeviceNotFound(device_id) => ("DEVICE_NOT_FOUND".into(), device_id.clone()),
         UnderlayError::Internal(message) => ("INTERNAL".into(), message.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn result(status: ApplyStatus) -> DeviceApplyResult {
+        DeviceApplyResult {
+            device_id: DeviceId("leaf-a".into()),
+            changed: status != ApplyStatus::NoOpSuccess,
+            status,
+            tx_id: None,
+            strategy: None,
+            error_code: None,
+            error_message: None,
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn aggregate_success_with_warning_is_successful_but_warns() {
+        let status = aggregate_apply_status(&[
+            result(ApplyStatus::SuccessWithWarning),
+            result(ApplyStatus::Success),
+        ]);
+
+        assert_eq!(status, ApplyStatus::SuccessWithWarning);
+    }
+
+    #[test]
+    fn aggregate_all_degraded_successes_do_not_become_failed() {
+        let status = aggregate_apply_status(&[
+            result(ApplyStatus::SuccessWithWarning),
+            result(ApplyStatus::SuccessWithWarning),
+        ]);
+
+        assert_eq!(status, ApplyStatus::SuccessWithWarning);
+    }
+
+    #[test]
+    fn degraded_strategy_warning_only_for_degraded_strategies() {
+        assert!(degraded_strategy_warnings(TransactionStrategy::ConfirmedCommit).is_empty());
+        assert_eq!(
+            degraded_strategy_warnings(TransactionStrategy::RunningRollbackOnError).len(),
+            1
+        );
     }
 }
