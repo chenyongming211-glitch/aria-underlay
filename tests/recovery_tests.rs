@@ -80,6 +80,42 @@ async fn recover_pending_transactions_marks_unrecoverable_records_in_doubt() {
     assert_eq!(started.error_code.as_deref(), Some("DEVICE_NOT_FOUND"));
 }
 
+#[tokio::test]
+async fn recover_pending_transactions_marks_adapter_recovery_failure_in_doubt() {
+    let journal = Arc::new(InMemoryTxJournalStore::default());
+    journal
+        .put(
+            &TxJournalRecord::started(
+                &TxContext {
+                    tx_id: "tx-commit-lost-session".into(),
+                    request_id: "req-commit-lost-session".into(),
+                    trace_id: "trace-commit-lost-session".into(),
+                },
+                vec![DeviceId("leaf-a".into())],
+            )
+            .with_phase(TxPhase::Committing),
+        )
+        .expect("committing journal record should be stored");
+
+    let service = AriaUnderlayService::new_with_journal(DeviceInventory::default(), journal.clone());
+    let report = service
+        .recover_pending_transactions()
+        .await
+        .expect("recovery scan should complete with in-doubt result");
+
+    assert_eq!(report.recovered, 0);
+    assert_eq!(report.in_doubt, 1);
+    assert_eq!(report.pending, 1);
+    assert_eq!(report.decisions[0].action, RecoveryAction::AdapterRecover);
+
+    let record = journal
+        .get("tx-commit-lost-session")
+        .expect("journal get should succeed")
+        .expect("journal record should still exist");
+    assert_eq!(record.phase, TxPhase::InDoubt);
+    assert_eq!(record.error_code.as_deref(), Some("DEVICE_NOT_FOUND"));
+}
+
 #[test]
 fn recovery_classification_is_phase_aware() {
     let base = TxJournalRecord::started(
