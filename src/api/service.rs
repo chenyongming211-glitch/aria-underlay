@@ -25,8 +25,8 @@ use crate::planner::domain_plan::plan_underlay_domain;
 use crate::state::DeviceShadowState;
 use crate::tx::recovery::RecoveryReport;
 use crate::tx::{
-    InMemoryTxJournalStore, TransactionStrategy, TxContext, TxJournalRecord, TxJournalStore,
-    TxPhase,
+    EndpointLockTable, InMemoryTxJournalStore, TransactionStrategy, TxContext, TxJournalRecord,
+    TxJournalStore, TxPhase,
 };
 use crate::{UnderlayError, UnderlayResult};
 
@@ -34,6 +34,7 @@ use crate::{UnderlayError, UnderlayResult};
 pub struct AriaUnderlayService {
     inventory: DeviceInventory,
     journal: Arc<dyn TxJournalStore>,
+    endpoint_locks: EndpointLockTable,
 }
 
 impl AriaUnderlayService {
@@ -41,6 +42,7 @@ impl AriaUnderlayService {
         Self {
             inventory,
             journal: Arc::new(InMemoryTxJournalStore::default()),
+            endpoint_locks: EndpointLockTable::default(),
         }
     }
 
@@ -48,7 +50,23 @@ impl AriaUnderlayService {
         inventory: DeviceInventory,
         journal: Arc<dyn TxJournalStore>,
     ) -> Self {
-        Self { inventory, journal }
+        Self {
+            inventory,
+            journal,
+            endpoint_locks: EndpointLockTable::default(),
+        }
+    }
+
+    pub fn new_with_journal_and_locks(
+        inventory: DeviceInventory,
+        journal: Arc<dyn TxJournalStore>,
+        endpoint_locks: EndpointLockTable,
+    ) -> Self {
+        Self {
+            inventory,
+            journal,
+            endpoint_locks,
+        }
     }
 
     async fn dry_run_plan(&self, request: &ApplyIntentRequest) -> UnderlayResult<DryRunPlan> {
@@ -76,6 +94,10 @@ impl AriaUnderlayService {
             .clone()
             .unwrap_or_else(|| request_id.clone());
         let desired_states = plan_underlay_domain(&request.intent)?;
+        let _endpoint_guard = self
+            .endpoint_locks
+            .acquire_many(&desired_device_ids(&desired_states))
+            .await?;
         let plan = self.dry_run_desired_states(&desired_states).await?;
         let device_results = device_results_from_plan(&plan);
 
@@ -311,6 +333,10 @@ impl UnderlayService for AriaUnderlayService {
             .clone()
             .unwrap_or_else(|| request_id.clone());
         let desired_states = plan_switch_pair(&request.intent);
+        let _endpoint_guard = self
+            .endpoint_locks
+            .acquire_many(&desired_device_ids(&desired_states))
+            .await?;
         let plan = self.dry_run_desired_states(&desired_states).await?;
         let device_results = device_results_from_plan(&plan);
 
@@ -428,6 +454,13 @@ fn changed_device_ids(plan: &DryRunPlan) -> Vec<DeviceId> {
         .iter()
         .filter(|change_set| !change_set.is_empty())
         .map(|change_set| change_set.device_id.clone())
+        .collect()
+}
+
+fn desired_device_ids(desired_states: &[DeviceDesiredState]) -> Vec<DeviceId> {
+    desired_states
+        .iter()
+        .map(|desired| desired.device_id.clone())
         .collect()
 }
 

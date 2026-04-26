@@ -1,7 +1,11 @@
 use aria_underlay::model::DeviceId;
 use aria_underlay::tx::{
-    choose_strategy, CapabilityFlags, JsonFileTxJournalStore, TransactionMode,
+    choose_strategy, CapabilityFlags, EndpointLockTable, JsonFileTxJournalStore, TransactionMode,
     TransactionStrategy, TxContext, TxJournalRecord, TxJournalStore, TxPhase,
+};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
 
 #[test]
@@ -104,6 +108,61 @@ fn file_journal_sanitizes_transaction_id_path() {
     assert!(store.get("../bad/tx").expect("journal get should succeed").is_some());
 
     std::fs::remove_dir_all(root).ok();
+}
+
+#[tokio::test]
+async fn endpoint_lock_serializes_same_endpoint_writers() {
+    let locks = EndpointLockTable::default();
+    let first_guard = locks
+        .acquire_many(&[DeviceId("leaf-a".into())])
+        .await
+        .expect("first lock should be acquired");
+    let acquired = Arc::new(AtomicBool::new(false));
+    let second_acquired = acquired.clone();
+    let second_locks = locks.clone();
+
+    let second = tokio::spawn(async move {
+        let _guard = second_locks
+            .acquire_many(&[DeviceId("leaf-a".into())])
+            .await
+            .expect("second lock should eventually be acquired");
+        second_acquired.store(true, Ordering::SeqCst);
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(!acquired.load(Ordering::SeqCst));
+
+    drop(first_guard);
+    second.await.expect("second lock task should finish");
+    assert!(acquired.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn endpoint_lock_orders_multiple_endpoints_without_deadlock() {
+    let locks = EndpointLockTable::default();
+    let first_locks = locks.clone();
+    let second_locks = locks.clone();
+
+    let first = tokio::spawn(async move {
+        let _guard = first_locks
+            .acquire_many(&[DeviceId("leaf-b".into()), DeviceId("leaf-a".into())])
+            .await
+            .expect("first multi endpoint lock should be acquired");
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    });
+    let second = tokio::spawn(async move {
+        let _guard = second_locks
+            .acquire_many(&[DeviceId("leaf-a".into()), DeviceId("leaf-b".into())])
+            .await
+            .expect("second multi endpoint lock should be acquired");
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        first.await.expect("first lock task should finish");
+        second.await.expect("second lock task should finish");
+    })
+    .await
+    .expect("ordered endpoint locking should not deadlock");
 }
 
 fn temp_journal_dir(name: &str) -> std::path::PathBuf {
