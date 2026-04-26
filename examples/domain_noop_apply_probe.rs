@@ -8,6 +8,7 @@ use aria_underlay::intent::{
     ManagementEndpointIntent, SwitchMemberIntent, UnderlayDomainIntent, UnderlayTopology,
 };
 use aria_underlay::model::{AdminState, DeviceId, DeviceRole, PortMode, Vendor};
+use aria_underlay::state::drift::DriftPolicy;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,6 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         options: ApplyOptions {
             dry_run: false,
             allow_degraded_atomicity: false,
+            drift_policy: DriftPolicy::ReportOnly,
         },
     };
 

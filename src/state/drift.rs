@@ -3,11 +3,17 @@ use serde::{Deserialize, Serialize};
 use crate::model::{DeviceId, InterfaceConfig, VlanConfig};
 use crate::state::shadow::DeviceShadowState;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DriftPolicy {
     ReportOnly,
     BlockNewTransaction,
     AutoReconcile,
+}
+
+impl Default for DriftPolicy {
+    fn default() -> Self {
+        Self::ReportOnly
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -13,9 +13,10 @@ use crate::api::response::{
 };
 use crate::api::underlay_service::UnderlayService;
 use crate::device::{
-    DeviceInfo, DeviceInventory, DeviceOnboardingService, DeviceRegistrationService,
-    InMemorySecretStore, InitializeUnderlaySiteRequest, InitializeUnderlaySiteResponse,
-    RegisterDeviceRequest, RegisterDeviceResponse, SecretStore, UnderlaySiteInitializationService,
+    DeviceInfo, DeviceInventory, DeviceLifecycleState, DeviceOnboardingService,
+    DeviceRegistrationService, InMemorySecretStore, InitializeUnderlaySiteRequest,
+    InitializeUnderlaySiteResponse, RegisterDeviceRequest, RegisterDeviceResponse, SecretStore,
+    UnderlaySiteInitializationService,
 };
 use crate::engine::dry_run::{build_dry_run_plan, DryRunPlan};
 use crate::intent::validation::validate_switch_pair_intent;
@@ -23,7 +24,7 @@ use crate::model::DeviceId;
 use crate::planner::device_plan::{plan_switch_pair, DeviceDesiredState};
 use crate::planner::domain_plan::plan_underlay_domain;
 use crate::proto::adapter::RequestContext;
-use crate::state::drift::{detect_drift, DriftReport};
+use crate::state::drift::{detect_drift, DriftPolicy, DriftReport};
 use crate::state::{
     DeviceShadowState, InMemoryShadowStateStore, ShadowStateStore,
 };
@@ -152,8 +153,9 @@ impl AriaUnderlayService {
             trace_id,
             desired_states,
             request.options.allow_degraded_atomicity,
+            request.options.drift_policy,
         )
-            .await
+        .await
     }
 
     pub async fn dry_run_domain(
@@ -211,6 +213,7 @@ impl AriaUnderlayService {
         trace_id: String,
         desired_states: Vec<DeviceDesiredState>,
         allow_degraded_atomicity: bool,
+        drift_policy: DriftPolicy,
     ) -> UnderlayResult<ApplyIntentResponse> {
         let mut device_results = Vec::with_capacity(desired_states.len());
 
@@ -221,8 +224,9 @@ impl AriaUnderlayService {
                     &trace_id,
                     desired,
                     allow_degraded_atomicity,
+                    drift_policy,
                 )
-                    .await,
+                .await,
             );
         }
 
@@ -259,6 +263,7 @@ impl AriaUnderlayService {
         trace_id: &str,
         desired: &DeviceDesiredState,
         allow_degraded_atomicity: bool,
+        drift_policy: DriftPolicy,
     ) -> DeviceApplyResult {
         let _endpoint_guard = match self
             .endpoint_locks
@@ -269,14 +274,16 @@ impl AriaUnderlayService {
             Err(err) => return device_error_result(&desired.device_id, false, None, None, err),
         };
 
-        if let Err(err) = self.ensure_no_in_doubt_for_devices(std::slice::from_ref(&desired.device_id)) {
-            return device_error_result(
-                &desired.device_id,
-                false,
-                None,
-                None,
-                err,
-            );
+        if let Err(err) =
+            self.ensure_no_in_doubt_for_devices(std::slice::from_ref(&desired.device_id))
+        {
+            return device_error_result(&desired.device_id, false, None, None, err);
+        }
+        if let Err(err) = self.ensure_drift_policy_allows_apply(
+            std::slice::from_ref(&desired.device_id),
+            drift_policy,
+        ) {
+            return device_error_result(&desired.device_id, false, None, None, err);
         }
 
         let plan = match self
@@ -654,6 +661,52 @@ impl AriaUnderlayService {
         })
     }
 
+    fn ensure_drift_policy_allows_apply(
+        &self,
+        device_ids: &[DeviceId],
+        policy: DriftPolicy,
+    ) -> UnderlayResult<()> {
+        if policy == DriftPolicy::ReportOnly {
+            return Ok(());
+        }
+
+        let drifted_devices = device_ids
+            .iter()
+            .filter_map(|device_id| match self.inventory.get(device_id) {
+                Ok(managed) if managed.info.lifecycle_state == DeviceLifecycleState::Drifted => {
+                    Some(Ok(device_id.0.clone()))
+                }
+                Ok(_) => None,
+                Err(err) => Some(Err(err)),
+            })
+            .collect::<UnderlayResult<Vec<_>>>()?;
+
+        if drifted_devices.is_empty() {
+            return Ok(());
+        }
+
+        let device_list = drifted_devices.join(",");
+        match policy {
+            DriftPolicy::BlockNewTransaction => Err(UnderlayError::AdapterOperation {
+                code: "DRIFT_BLOCKED".into(),
+                message: format!(
+                    "device has unresolved out-of-band drift: {device_list}"
+                ),
+                retryable: false,
+                errors: Vec::new(),
+            }),
+            DriftPolicy::AutoReconcile => Err(UnderlayError::AdapterOperation {
+                code: "DRIFT_AUTORECONCILE_UNIMPLEMENTED".into(),
+                message: format!(
+                    "auto reconcile is not implemented for drifted device(s): {device_list}"
+                ),
+                retryable: false,
+                errors: Vec::new(),
+            }),
+            DriftPolicy::ReportOnly => Ok(()),
+        }
+    }
+
     async fn recover_record(
         &self,
         record: &TxJournalRecord,
@@ -781,8 +834,9 @@ impl UnderlayService for AriaUnderlayService {
             trace_id,
             desired_states,
             request.options.allow_degraded_atomicity,
+            request.options.drift_policy,
         )
-            .await
+        .await
     }
 
     async fn dry_run(&self, request: ApplyIntentRequest) -> UnderlayResult<DryRunResponse> {
@@ -1074,6 +1128,8 @@ fn journal_error_fields(error: &UnderlayError) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::device::HostKeyPolicy;
+    use crate::model::{DeviceRole, Vendor};
 
     fn result(status: ApplyStatus) -> DeviceApplyResult {
         DeviceApplyResult {
@@ -1115,5 +1171,78 @@ mod tests {
             degraded_strategy_warnings(TransactionStrategy::RunningRollbackOnError).len(),
             1
         );
+    }
+
+    #[test]
+    fn report_only_drift_policy_does_not_block_drifted_device() {
+        let service = service_with_device_state(DeviceLifecycleState::Drifted);
+
+        service
+            .ensure_drift_policy_allows_apply(
+                &[DeviceId("leaf-a".into())],
+                DriftPolicy::ReportOnly,
+            )
+            .expect("report-only drift policy should not block apply");
+    }
+
+    #[test]
+    fn block_new_transaction_policy_blocks_drifted_device() {
+        let service = service_with_device_state(DeviceLifecycleState::Drifted);
+
+        let err = service
+            .ensure_drift_policy_allows_apply(
+                &[DeviceId("leaf-a".into())],
+                DriftPolicy::BlockNewTransaction,
+            )
+            .expect_err("block-new-transaction should reject drifted device");
+
+        match err {
+            UnderlayError::AdapterOperation { code, retryable, .. } => {
+                assert_eq!(code, "DRIFT_BLOCKED");
+                assert!(!retryable);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auto_reconcile_policy_fails_closed_when_drifted_device_exists() {
+        let service = service_with_device_state(DeviceLifecycleState::Drifted);
+
+        let err = service
+            .ensure_drift_policy_allows_apply(
+                &[DeviceId("leaf-a".into())],
+                DriftPolicy::AutoReconcile,
+            )
+            .expect_err("auto-reconcile is not implemented yet");
+
+        match err {
+            UnderlayError::AdapterOperation { code, retryable, .. } => {
+                assert_eq!(code, "DRIFT_AUTORECONCILE_UNIMPLEMENTED");
+                assert!(!retryable);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    fn service_with_device_state(state: DeviceLifecycleState) -> AriaUnderlayService {
+        let inventory = DeviceInventory::default();
+        inventory
+            .insert(DeviceInfo {
+                tenant_id: "tenant-a".into(),
+                site_id: "site-a".into(),
+                id: DeviceId("leaf-a".into()),
+                management_ip: "127.0.0.1".into(),
+                management_port: 830,
+                vendor_hint: Some(Vendor::Unknown),
+                model_hint: None,
+                role: DeviceRole::LeafA,
+                secret_ref: "local/tenant-a/site-a/leaf-a".into(),
+                host_key_policy: HostKeyPolicy::TrustOnFirstUse,
+                adapter_endpoint: "http://127.0.0.1:50051".into(),
+                lifecycle_state: state,
+            })
+            .expect("device insert should succeed");
+        AriaUnderlayService::new(inventory)
     }
 }

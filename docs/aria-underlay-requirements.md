@@ -855,6 +855,12 @@ AutoReconcile
 
 关键 underlay 资源可以配置 `BlockNewTransaction`。
 
+第一阶段实现边界：
+
+- `ApplyOptions.drift_policy` 默认 `ReportOnly`，用于客户现场先告警、不中断普通交付。
+- 当调用方显式设置 `BlockNewTransaction` 时，如果设备 lifecycle 已被巡检标记为 `Drifted`，新的 apply 必须 fail-closed，返回 `DRIFT_BLOCKED`。
+- `AutoReconcile` 只有在后续实现自动修复闭环后才能启用；当前遇到 `Drifted` 设备必须返回 `DRIFT_AUTORECONCILE_UNIMPLEMENTED`，不允许假装已修复。
+
 ## 11. 高性能与正确性并重的下发策略
 
 Aria Underlay 的性能优化不能绕过正确性校验。默认生产路径采用 `Normal` 模式，先保证不漏掉带外变更，再通过 scope 裁剪、合并 RPC 和 endpoint 并发优化性能。

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::intent::{SwitchPairIntent, UnderlayDomainIntent};
 use crate::model::DeviceId;
+use crate::state::drift::DriftPolicy;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyIntentRequest {
@@ -23,6 +24,8 @@ pub struct ApplyDomainIntentRequest {
 pub struct ApplyOptions {
     pub dry_run: bool,
     pub allow_degraded_atomicity: bool,
+    #[serde(default)]
+    pub drift_policy: DriftPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

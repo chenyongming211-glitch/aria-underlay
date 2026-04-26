@@ -1069,7 +1069,8 @@ Sprint 7 目标：
 - 带外 VLAN / interface 修改可被发现。
 - refresh / preflight / successful apply 能更新 shadow state。
 - expected shadow 与 observed running 的 VLAN / interface 差异能生成结构化 finding。
-- `BlockNewTransaction` 可阻断新事务。
+- `ApplyOptions.drift_policy = BlockNewTransaction` 时，`DeviceLifecycleState::Drifted` 的设备可阻断新事务。
+- `AutoReconcile` 在第一阶段必须 fail-closed，不能在未实现自动修复时假成功。
 - lock 占用时按退避策略重试。
 - force unlock 默认关闭。
 - force unlock 开启后必须带 reason。
