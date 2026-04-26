@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Protocol
 
 from aria_underlay_adapter.backends.base import BackendCapability
 from aria_underlay_adapter.errors import AdapterError
@@ -18,6 +18,10 @@ ROLLBACK_ON_ERROR = "urn:ietf:params:netconf:capability:rollback-on-error:1.0"
 WRITABLE_RUNNING = "urn:ietf:params:netconf:capability:writable-running:1.0"
 
 
+class CandidateConfigRenderer(Protocol):
+    def render_edit_config(self, desired_state) -> str: ...
+
+
 @dataclass(frozen=True)
 class NcclientNetconfBackend:
     host: str
@@ -29,6 +33,7 @@ class NcclientNetconfBackend:
     hostkey_verify: bool = False
     look_for_keys: bool = False
     timeout_secs: int = 30
+    config_renderer: CandidateConfigRenderer | None = None
 
     def get_capabilities(self) -> BackendCapability:
         try:
@@ -138,13 +143,50 @@ class NcclientNetconfBackend:
             ) from exc
 
     def _edit_candidate(self, session, desired_state) -> None:
-        raise AdapterError(
-            code="NETCONF_EDIT_CONFIG_NOT_IMPLEMENTED",
-            message="real NETCONF edit-config rendering is not implemented yet",
-            normalized_error="edit-config renderer missing",
-            raw_error_summary="candidate lock is wired; XML renderer/edit-config lands next",
-            retryable=False,
-        )
+        if self.config_renderer is None:
+            raise AdapterError(
+                code="NETCONF_RENDERER_NOT_CONFIGURED",
+                message="NETCONF edit-config renderer is not configured",
+                normalized_error="edit-config renderer missing",
+                raw_error_summary="candidate lock is wired; production renderer is required before edit-config",
+                retryable=False,
+            )
+
+        try:
+            config_xml = self.config_renderer.render_edit_config(desired_state)
+        except AdapterError:
+            raise
+        except Exception as exc:
+            raise _adapter_operation_error(
+                code="NETCONF_RENDERER_FAILED",
+                message="NETCONF edit-config renderer failed",
+                exc=exc,
+                retryable=False,
+            ) from exc
+
+        if not config_xml or not config_xml.strip():
+            raise AdapterError(
+                code="NETCONF_EMPTY_RENDERED_CONFIG",
+                message="NETCONF edit-config renderer returned empty config",
+                normalized_error="empty rendered config",
+                raw_error_summary="renderer output was empty",
+                retryable=False,
+            )
+
+        try:
+            session.edit_config(
+                target="candidate",
+                config=config_xml,
+                default_operation="merge",
+                error_option="rollback-on-error",
+            )
+        except Exception as exc:
+            raise _adapter_operation_error(
+                code="NETCONF_EDIT_CONFIG_FAILED",
+                message="NETCONF edit-config failed",
+                exc=exc,
+                retryable=False,
+            ) from exc
 
     def _validate_candidate(self, session) -> None:
         try:

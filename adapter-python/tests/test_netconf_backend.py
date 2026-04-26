@@ -45,16 +45,16 @@ def test_legacy_netconf_backend_name_points_to_ncclient_backend():
     assert NetconfBackend is NcclientNetconfBackend
 
 
-def test_prepare_candidate_locks_discards_and_unlocks_when_edit_not_implemented():
+def test_prepare_candidate_locks_discards_and_unlocks_when_renderer_missing():
     session = _RecordingSession()
     backend = _BackendWithSession(session)
 
     try:
         backend.prepare_candidate(desired_state=object())
     except AdapterError as error:
-        assert error.code == "NETCONF_EDIT_CONFIG_NOT_IMPLEMENTED"
+        assert error.code == "NETCONF_RENDERER_NOT_CONFIGURED"
     else:
-        raise AssertionError("prepare should fail closed until edit-config is implemented")
+        raise AssertionError("prepare should fail closed until renderer is configured")
 
     assert session.calls == [
         ("lock", "candidate"),
@@ -92,9 +92,49 @@ def test_prepare_candidate_requires_desired_state_before_touching_device():
     assert session.calls == []
 
 
+def test_prepare_candidate_edits_and_validates_when_renderer_is_configured():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session, config_renderer=_StaticRenderer("<config/>"))
+
+    backend.prepare_candidate(desired_state=object())
+
+    assert session.calls == [
+        ("lock", "candidate"),
+        (
+            "edit_config",
+            {
+                "target": "candidate",
+                "config": "<config/>",
+                "default_operation": "merge",
+                "error_option": "rollback-on-error",
+            },
+        ),
+        ("validate", "candidate"),
+        ("unlock", "candidate"),
+    ]
+
+
+def test_prepare_candidate_discards_and_unlocks_when_renderer_returns_empty_config():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session, config_renderer=_StaticRenderer(" "))
+
+    try:
+        backend.prepare_candidate(desired_state=object())
+    except AdapterError as error:
+        assert error.code == "NETCONF_EMPTY_RENDERED_CONFIG"
+    else:
+        raise AssertionError("empty renderer output should fail closed")
+
+    assert session.calls == [
+        ("lock", "candidate"),
+        ("discard_changes",),
+        ("unlock", "candidate"),
+    ]
+
+
 class _BackendWithSession(NcclientNetconfBackend):
-    def __init__(self, session):
-        super().__init__(host="127.0.0.1")
+    def __init__(self, session, config_renderer=None):
+        super().__init__(host="127.0.0.1", config_renderer=config_renderer)
         object.__setattr__(self, "_session", session)
 
     def _connect(self):
@@ -121,8 +161,19 @@ class _RecordingSession:
     def discard_changes(self):
         self.calls.append(("discard_changes",))
 
+    def edit_config(self, **kwargs):
+        self.calls.append(("edit_config", kwargs))
+
     def unlock(self, target):
         self.calls.append(("unlock", target))
 
     def validate(self, source):
         self.calls.append(("validate", source))
+
+
+class _StaticRenderer:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def render_edit_config(self, desired_state):
+        return self.payload
