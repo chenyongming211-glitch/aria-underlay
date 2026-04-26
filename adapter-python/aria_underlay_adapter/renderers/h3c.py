@@ -11,6 +11,7 @@ class H3cRenderer:
     them against Comware NETCONF/YANG documentation or a real device.
     """
 
+    production_ready = False
     VLAN_NAMESPACE = "urn:aria:underlay:renderer:h3c:vlan:skeleton"
     IFACE_NAMESPACE = "urn:aria:underlay:renderer:h3c:interface:skeleton"
 

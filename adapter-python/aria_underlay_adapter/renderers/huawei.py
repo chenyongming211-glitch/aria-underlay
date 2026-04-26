@@ -11,6 +11,7 @@ class HuaweiRenderer:
     confirms the exact YANG namespace and field mapping on real devices.
     """
 
+    production_ready = False
     VLAN_NAMESPACE = "urn:aria:underlay:renderer:huawei:vlan:skeleton"
     IFACE_NAMESPACE = "urn:aria:underlay:renderer:huawei:interface:skeleton"
 

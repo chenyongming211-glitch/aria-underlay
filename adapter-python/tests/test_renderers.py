@@ -37,6 +37,11 @@ def test_xml_renderer_escapes_text():
 
 
 @pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])
+def test_vendor_renderer_skeletons_are_not_production_ready(renderer):
+    assert renderer.production_ready is False
+
+
+@pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])
 def test_vendor_renderer_builds_vlan_create_xml(renderer):
     xml = render_xml(
         renderer.render_vlan_create(

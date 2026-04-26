@@ -21,6 +21,8 @@ TRANSACTION_STRATEGY_CANDIDATE_COMMIT = 2
 
 
 class CandidateConfigRenderer(Protocol):
+    production_ready: bool
+
     def render_edit_config(self, desired_state) -> str: ...
 
 
@@ -154,6 +156,17 @@ class NcclientNetconfBackend:
                 message="NETCONF edit-config renderer is not configured",
                 normalized_error="edit-config renderer missing",
                 raw_error_summary="candidate lock is wired; production renderer is required before edit-config",
+                retryable=False,
+            )
+        if not getattr(self.config_renderer, "production_ready", False):
+            raise AdapterError(
+                code="NETCONF_RENDERER_NOT_PRODUCTION_READY",
+                message="NETCONF edit-config renderer is not production ready",
+                normalized_error="edit-config renderer not production ready",
+                raw_error_summary=(
+                    "renderer exists but is still a skeleton or test renderer; "
+                    "refusing real edit-config"
+                ),
                 retryable=False,
             )
 

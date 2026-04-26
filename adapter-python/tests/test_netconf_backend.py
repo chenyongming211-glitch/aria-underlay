@@ -142,19 +142,22 @@ def test_prepare_candidate_edits_and_validates_when_renderer_is_configured():
     ]
 
 
-def test_prepare_candidate_uses_vendor_renderer_once_for_desired_state():
+def test_prepare_candidate_rejects_skeleton_vendor_renderer_before_edit_config():
     session = _RecordingSession()
     backend = _BackendWithSession(session, config_renderer=HuaweiRenderer())
 
-    backend.prepare_candidate(desired_state=_desired_state())
+    try:
+        backend.prepare_candidate(desired_state=_desired_state())
+    except AdapterError as error:
+        assert error.code == "NETCONF_RENDERER_NOT_PRODUCTION_READY"
+    else:
+        raise AssertionError("skeleton vendor renderer must not reach real edit-config")
 
-    edit_calls = [call for call in session.calls if call[0] == "edit_config"]
-    assert len(edit_calls) == 1
-    assert edit_calls[0][1]["target"] == "candidate"
-    assert edit_calls[0][1]["config"].startswith("<config")
-    assert "<ns0:id>100</ns0:id>" in edit_calls[0][1]["config"]
-    assert "<ns1:interface" in edit_calls[0][1]["config"]
-    assert session.calls[-2:] == [("validate", "candidate"), ("unlock", "candidate")]
+    assert session.calls == [
+        ("lock", "candidate"),
+        ("discard_changes",),
+        ("unlock", "candidate"),
+    ]
 
 
 def test_prepare_candidate_discards_and_unlocks_when_renderer_returns_empty_config():
@@ -331,6 +334,8 @@ class _RecordingSession:
 
 
 class _StaticRenderer:
+    production_ready = True
+
     def __init__(self, payload):
         self.payload = payload
 

@@ -8,6 +8,8 @@ from aria_underlay_adapter.renderers.xml import render_xml
 
 
 class VendorRenderer(Protocol):
+    production_ready: bool
+
     def render_vlan_create(self, vlan) -> XmlElement: ...
 
     def render_vlan_delete(self, vlan_id: int) -> XmlElement: ...

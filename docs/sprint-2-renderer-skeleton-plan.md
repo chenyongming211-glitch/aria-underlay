@@ -35,11 +35,16 @@ adapter-python/aria_underlay_adapter/renderers/
 - `render_xml()` 使用 `xml.etree.ElementTree` 输出 XML，自动处理 escape。
 - `VendorRenderer` Protocol 定义厂商渲染边界。
 - `HuaweiRenderer` / `H3cRenderer` 提供 VLAN/interface skeleton。
+- `HuaweiRenderer.production_ready = False`。
+- `H3cRenderer.production_ready = False`。
+- 真实 NETCONF backend 会拒绝 `production_ready = False` 的 renderer，返回 `NETCONF_RENDERER_NOT_PRODUCTION_READY`，防止 skeleton XML 被下发到设备。
 - 单元测试覆盖：
   - XML escape。
   - VLAN create。
   - VLAN delete。
   - access interface update。
+  - skeleton renderer 不是生产可用 renderer。
+  - 真实 NETCONF prepare 拒绝 skeleton renderer。
   - unknown port mode 拒绝。
 
 ## 3. 明确限制
@@ -67,7 +72,7 @@ Sprint 2 后续任务：
 3. 查询 Huawei CE / H3C Comware 的真实 VLAN 与接口 YANG namespace。
 4. 将 skeleton namespace 替换为真实 namespace。
 5. 增加 snapshot tests。
-6. 在 `NetconfBackedDriver.prepare()` 中只接入 renderer dry-run，不下发。
+6. 为真实 renderer 显式设置 `production_ready = True`，且必须有真实设备验证记录。
 7. 等真实设备确认后，再进入 candidate edit/validate。
 
 ## 5. 不做事项
