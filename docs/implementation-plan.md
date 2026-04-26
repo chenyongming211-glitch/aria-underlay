@@ -1053,6 +1053,7 @@ Sprint 7 目标：
 
 - 实现 Periodic Drift Auditor。
 - 实现 `ShadowStateStore`，先提供内存实现，后续可替换为 Aria metadata store。
+- `DriftAuditor` 支持两种输入：测试用 snapshot 列表，以及生产 worker 可接入的 `ShadowStateStore + DriftObservationSource`。
 - 实现结构化 `DriftReport`，至少包含 drift type、path、expected、actual、warnings。
 - 实现 `BlockNewTransaction`。
 - 实现 lock exponential backoff。

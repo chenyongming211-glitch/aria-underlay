@@ -860,6 +860,7 @@ AutoReconcile
 - `ApplyOptions.drift_policy` 默认 `ReportOnly`，用于客户现场先告警、不中断普通交付。
 - 当调用方显式设置 `BlockNewTransaction` 时，如果设备 lifecycle 已被巡检标记为 `Drifted`，新的 apply 必须 fail-closed，返回 `DRIFT_BLOCKED`。
 - `AutoReconcile` 只有在后续实现自动修复闭环后才能启用；当前遇到 `Drifted` 设备必须返回 `DRIFT_AUTORECONCILE_UNIMPLEMENTED`，不允许假装已修复。
+- 后台巡检实现应以 shadow store 中的 expected state 为基准，通过 observation source 拉取 observed state，输出结构化 `DriftReport`；测试可继续使用静态 snapshot 输入。
 
 ## 11. 高性能与正确性并重的下发策略
 

@@ -1,15 +1,23 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
+use async_trait::async_trait;
 use aria_underlay::model::{
     AdminState, DeviceId, InterfaceConfig, PortMode, VlanConfig,
 };
 use aria_underlay::state::drift::{detect_drift, DriftType};
-use aria_underlay::state::DeviceShadowState;
-use aria_underlay::worker::drift_auditor::{DriftAuditSnapshot, DriftAuditor};
+use aria_underlay::state::{DeviceShadowState, InMemoryShadowStateStore, ShadowStateStore};
+use aria_underlay::worker::drift_auditor::{
+    DriftAuditSnapshot, DriftAuditor, DriftObservationSource,
+};
+use aria_underlay::UnderlayResult;
 
 #[tokio::test]
 async fn drift_auditor_initially_reports_nothing() {
-    let reports = DriftAuditor::default().run_once().await;
+    let reports = DriftAuditor::default()
+        .run_once()
+        .await
+        .expect("empty drift audit should succeed");
     assert!(reports.is_empty());
 }
 
@@ -54,11 +62,54 @@ async fn drift_auditor_reports_only_drifted_snapshots() {
         expected: shadow_state("leaf-b", vec![vlan(100, "prod")], vec![]),
         observed: shadow_state("leaf-b", vec![], vec![]),
     };
-    let reports = DriftAuditor::new(vec![clean, drifted]).run_once().await;
+    let reports = DriftAuditor::new(vec![clean, drifted])
+        .run_once()
+        .await
+        .expect("snapshot drift audit should succeed");
 
     assert_eq!(reports.len(), 1);
     assert_eq!(reports[0].device_id.0, "leaf-b");
     assert_eq!(reports[0].findings[0].drift_type, DriftType::MissingVlan);
+}
+
+#[tokio::test]
+async fn drift_auditor_can_compare_shadow_store_with_observed_source() {
+    let expected_store = Arc::new(InMemoryShadowStateStore::default());
+    expected_store
+        .put(shadow_state("leaf-a", vec![vlan(100, "prod")], vec![]))
+        .expect("shadow state should be stored");
+
+    let observed_source = Arc::new(StaticObservationSource {
+        states: BTreeMap::from([(
+            DeviceId("leaf-a".into()),
+            shadow_state("leaf-a", vec![vlan(200, "manual")], vec![]),
+        )]),
+    });
+    let auditor = DriftAuditor::from_source(expected_store, observed_source);
+
+    let reports = auditor
+        .run_once()
+        .await
+        .expect("drift audit should succeed");
+
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].device_id.0, "leaf-a");
+    assert_eq!(reports[0].findings[0].drift_type, DriftType::MissingVlan);
+}
+
+#[derive(Debug)]
+struct StaticObservationSource {
+    states: BTreeMap<DeviceId, DeviceShadowState>,
+}
+
+#[async_trait]
+impl DriftObservationSource for StaticObservationSource {
+    async fn get_observed_state(&self, device_id: &DeviceId) -> UnderlayResult<DeviceShadowState> {
+        self.states
+            .get(device_id)
+            .cloned()
+            .ok_or_else(|| aria_underlay::UnderlayError::DeviceNotFound(device_id.0.clone()))
+    }
 }
 
 fn shadow_state(
