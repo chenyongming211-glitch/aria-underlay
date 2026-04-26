@@ -23,8 +23,10 @@ use crate::model::DeviceId;
 use crate::planner::device_plan::{plan_switch_pair, DeviceDesiredState};
 use crate::planner::domain_plan::plan_underlay_domain;
 use crate::proto::adapter::RequestContext;
-use crate::state::drift::DriftReport;
-use crate::state::DeviceShadowState;
+use crate::state::drift::{detect_drift, DriftReport};
+use crate::state::{
+    DeviceShadowState, InMemoryShadowStateStore, ShadowStateStore,
+};
 use crate::tx::recovery::{
     classify_recovery, in_doubt_records_for_devices, RecoveryAction, RecoveryReport,
 };
@@ -41,6 +43,7 @@ pub struct AriaUnderlayService {
     endpoint_locks: EndpointLockTable,
     lock_policy: LockAcquisitionPolicy,
     secret_store: Arc<dyn SecretStore>,
+    shadow_store: Arc<dyn ShadowStateStore>,
 }
 
 impl AriaUnderlayService {
@@ -51,6 +54,7 @@ impl AriaUnderlayService {
             endpoint_locks: EndpointLockTable::default(),
             lock_policy: LockAcquisitionPolicy::default(),
             secret_store: Arc::new(InMemorySecretStore::default()),
+            shadow_store: Arc::new(InMemoryShadowStateStore::default()),
         }
     }
 
@@ -64,6 +68,7 @@ impl AriaUnderlayService {
             endpoint_locks: EndpointLockTable::default(),
             lock_policy: LockAcquisitionPolicy::default(),
             secret_store: Arc::new(InMemorySecretStore::default()),
+            shadow_store: Arc::new(InMemoryShadowStateStore::default()),
         }
     }
 
@@ -78,6 +83,7 @@ impl AriaUnderlayService {
             endpoint_locks,
             lock_policy: LockAcquisitionPolicy::default(),
             secret_store: Arc::new(InMemorySecretStore::default()),
+            shadow_store: Arc::new(InMemoryShadowStateStore::default()),
         }
     }
 
@@ -94,6 +100,25 @@ impl AriaUnderlayService {
             endpoint_locks,
             lock_policy,
             secret_store,
+            shadow_store: Arc::new(InMemoryShadowStateStore::default()),
+        }
+    }
+
+    pub fn new_with_shadow_store(
+        inventory: DeviceInventory,
+        journal: Arc<dyn TxJournalStore>,
+        endpoint_locks: EndpointLockTable,
+        lock_policy: LockAcquisitionPolicy,
+        secret_store: Arc<dyn SecretStore>,
+        shadow_store: Arc<dyn ShadowStateStore>,
+    ) -> Self {
+        Self {
+            inventory,
+            journal,
+            endpoint_locks,
+            lock_policy,
+            secret_store,
+            shadow_store,
         }
     }
 
@@ -155,11 +180,9 @@ impl AriaUnderlayService {
             // Preflight diff needs an authoritative current view. If we scope this
             // only to desired objects, absent desired resources cannot be detected
             // as deletes. Post-commit verify is scoped by ChangeSet below.
-            current_states.push(
-                client
-                    .get_current_state(&managed.info)
-                    .await?,
-            );
+            let current = client.get_current_state(&managed.info).await?;
+            self.shadow_store.put(current.clone())?;
+            current_states.push(current);
         }
 
         Ok(current_states)
@@ -309,6 +332,12 @@ impl AriaUnderlayService {
                         err,
                     );
                 }
+                let mut warnings = degraded_strategy_warnings(strategy);
+                let shadow_state = DeviceShadowState::from_desired(desired, 0);
+                if let Err(err) = self.shadow_store.put(shadow_state) {
+                    let (_, message) = journal_error_fields(&err);
+                    warnings.push(format!("shadow state update failed: {message}"));
+                }
                 DeviceApplyResult {
                     device_id: desired.device_id.clone(),
                     changed: true,
@@ -321,7 +350,7 @@ impl AriaUnderlayService {
                     strategy: Some(strategy),
                     error_code: None,
                     error_message: None,
-                    warnings: degraded_strategy_warnings(strategy),
+                    warnings,
                 }
             }
             Err(err) => {
@@ -769,6 +798,15 @@ impl UnderlayService for AriaUnderlayService {
     }
 
     async fn get_device_state(&self, device_id: DeviceId) -> UnderlayResult<DeviceShadowState> {
+        let state = self.fetch_device_state_from_adapter(&device_id).await?;
+        self.shadow_store.put(state.clone())?;
+        Ok(state)
+    }
+
+    async fn fetch_device_state_from_adapter(
+        &self,
+        device_id: &DeviceId,
+    ) -> UnderlayResult<DeviceShadowState> {
         let managed = self.inventory.get(&device_id)?;
         let mut client = AdapterClient::connect(managed.info.adapter_endpoint.clone()).await?;
         client.get_current_state(&managed.info).await
@@ -844,12 +882,20 @@ impl UnderlayService for AriaUnderlayService {
         let mut drifted_devices = Vec::new();
 
         for device_id in request.device_ids {
-            let state = self.get_device_state(device_id.clone()).await?;
-            let report = DriftReport::from_adapter_warnings(device_id.clone(), state.warnings);
+            let observed = self.fetch_device_state_from_adapter(&device_id).await?;
+            let report = match self.shadow_store.get(&device_id)? {
+                Some(expected) => detect_drift(&expected, &observed),
+                None => DriftReport::from_adapter_warnings(
+                    device_id.clone(),
+                    observed.warnings.clone(),
+                ),
+            };
             if report.drift_detected {
                 self.inventory
                     .set_state(&device_id, crate::device::DeviceLifecycleState::Drifted)?;
                 drifted_devices.push(device_id);
+            } else {
+                self.shadow_store.put(observed)?;
             }
         }
 

@@ -882,6 +882,8 @@ apply intent
 
 说明：在没有资源 ownership index / tombstone 之前，preflight 不能只按 desired scope 读取。否则 desired 中已经删除的 VLAN/interface 不会被读到，diff 无法生成 delete 操作。第一阶段为了正确性，preflight 保持全量或“Aria 已纳管资源集合”级别的权威读取；性能优化先落在 post-commit scoped verify。
 
+第一阶段引入 `ShadowStateStore` 保存最近一次 refresh / preflight / successful apply 后的结构化状态。shadow 可作为 drift auditor 的 expected state，也可作为后续 Fast NoOp 的预判依据。
+
 第一阶段不允许只依赖 shadow 返回 `NoOpSuccess`。shadow 只能作为预判器，不能作为最终裁决者。原因是客户现场可能存在网工绕过 Aria 的带外变更。
 
 后续 `Normal v2` 可以在明确操作类型后优化：

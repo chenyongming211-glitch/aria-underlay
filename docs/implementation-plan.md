@@ -996,7 +996,13 @@ apply intent
 
 注意：preflight diff 不能仅按 desired scope 读取 current。delete 类变更的对象已经不在 desired 中，若只查 desired scope 会漏掉待删除资源。后续引入资源 ownership index 后，preflight 可从“Aria 管理过的资源集合”派生更小 scope。
 
-第一阶段不启用只基于 shadow 的 Fast NoOp。Fast 模式依赖 DriftAuditor、shadow freshness 和漂移策略稳定后再实现。
+第一阶段开始引入 `ShadowStateStore`，用于保存每个 endpoint 最近一次 refresh / preflight / successful apply 后的结构化状态。它的定位是：
+
+- 给 drift auditor 提供 expected shadow。
+- 给后续 ownership index / Fast NoOp 提供基础。
+- 记录 revision，方便后续判断 shadow freshness。
+
+但第一阶段不启用只基于 shadow 的 Fast NoOp。Fast 模式依赖 DriftAuditor、shadow freshness 和漂移策略稳定后再实现。
 
 ### 12.2 confirmed-commit 分层
 
@@ -1046,6 +1052,7 @@ Sprint 7 目标：
 任务：
 
 - 实现 Periodic Drift Auditor。
+- 实现 `ShadowStateStore`，先提供内存实现，后续可替换为 Aria metadata store。
 - 实现结构化 `DriftReport`，至少包含 drift type、path、expected、actual、warnings。
 - 实现 `BlockNewTransaction`。
 - 实现 lock exponential backoff。
@@ -1060,6 +1067,7 @@ Sprint 7 目标：
 验收：
 
 - 带外 VLAN / interface 修改可被发现。
+- refresh / preflight / successful apply 能更新 shadow state。
 - expected shadow 与 observed running 的 VLAN / interface 差异能生成结构化 finding。
 - `BlockNewTransaction` 可阻断新事务。
 - lock 占用时按退避策略重试。
