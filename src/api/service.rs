@@ -28,6 +28,7 @@ use crate::state::drift::{detect_drift, DriftPolicy, DriftReport};
 use crate::state::{
     DeviceShadowState, InMemoryShadowStateStore, ShadowStateStore,
 };
+use crate::telemetry::{EventSink, NoopEventSink, UnderlayEvent};
 use crate::tx::recovery::{
     classify_recovery, in_doubt_records_for_devices, RecoveryAction, RecoveryReport,
 };
@@ -45,6 +46,7 @@ pub struct AriaUnderlayService {
     lock_policy: LockAcquisitionPolicy,
     secret_store: Arc<dyn SecretStore>,
     shadow_store: Arc<dyn ShadowStateStore>,
+    event_sink: Arc<dyn EventSink>,
 }
 
 impl AriaUnderlayService {
@@ -56,6 +58,7 @@ impl AriaUnderlayService {
             lock_policy: LockAcquisitionPolicy::default(),
             secret_store: Arc::new(InMemorySecretStore::default()),
             shadow_store: Arc::new(InMemoryShadowStateStore::default()),
+            event_sink: Arc::new(NoopEventSink),
         }
     }
 
@@ -70,6 +73,7 @@ impl AriaUnderlayService {
             lock_policy: LockAcquisitionPolicy::default(),
             secret_store: Arc::new(InMemorySecretStore::default()),
             shadow_store: Arc::new(InMemoryShadowStateStore::default()),
+            event_sink: Arc::new(NoopEventSink),
         }
     }
 
@@ -85,6 +89,7 @@ impl AriaUnderlayService {
             lock_policy: LockAcquisitionPolicy::default(),
             secret_store: Arc::new(InMemorySecretStore::default()),
             shadow_store: Arc::new(InMemoryShadowStateStore::default()),
+            event_sink: Arc::new(NoopEventSink),
         }
     }
 
@@ -102,6 +107,7 @@ impl AriaUnderlayService {
             lock_policy,
             secret_store,
             shadow_store: Arc::new(InMemoryShadowStateStore::default()),
+            event_sink: Arc::new(NoopEventSink),
         }
     }
 
@@ -120,7 +126,13 @@ impl AriaUnderlayService {
             lock_policy,
             secret_store,
             shadow_store,
+            event_sink: Arc::new(NoopEventSink),
         }
+    }
+
+    pub fn with_event_sink(mut self, event_sink: Arc<dyn EventSink>) -> Self {
+        self.event_sink = event_sink;
+        self
     }
 
     async fn dry_run_plan(&self, request: &ApplyIntentRequest) -> UnderlayResult<DryRunPlan> {
@@ -230,6 +242,8 @@ impl AriaUnderlayService {
             );
         }
 
+        self.emit_apply_events(&request_id, &trace_id, &device_results);
+
         let status = aggregate_apply_status(&device_results);
         let tx_id = if device_results.len() == 1 {
             device_results[0].tx_id.clone()
@@ -255,6 +269,21 @@ impl AriaUnderlayService {
             device_results,
             warnings,
         })
+    }
+
+    fn emit_apply_events(
+        &self,
+        request_id: &str,
+        trace_id: &str,
+        device_results: &[DeviceApplyResult],
+    ) {
+        for result in device_results {
+            if let Some(event) =
+                UnderlayEvent::from_device_apply_result(request_id, trace_id, result)
+            {
+                self.event_sink.emit(event);
+            }
+        }
     }
 
     async fn apply_single_endpoint_state(
@@ -945,6 +974,11 @@ impl UnderlayService for AriaUnderlayService {
                 ),
             };
             if report.drift_detected {
+                self.event_sink.emit(UnderlayEvent::drift_detected(
+                    "drift-audit",
+                    "drift-audit",
+                    &report,
+                ));
                 self.inventory
                     .set_state(&device_id, crate::device::DeviceLifecycleState::Drifted)?;
                 drifted_devices.push(device_id);

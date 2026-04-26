@@ -1,10 +1,21 @@
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use aria_underlay::api::request::DriftAuditRequest;
+use aria_underlay::api::{AriaUnderlayService, UnderlayService};
 use aria_underlay::api::response::{ApplyStatus, DeviceApplyResult};
-use aria_underlay::model::DeviceId;
+use aria_underlay::device::{DeviceInfo, DeviceInventory, DeviceLifecycleState, HostKeyPolicy};
+use aria_underlay::model::{DeviceId, DeviceRole, Vendor};
+use aria_underlay::proto::adapter;
+use aria_underlay::proto::adapter::underlay_adapter_server::{
+    UnderlayAdapter, UnderlayAdapterServer,
+};
 use aria_underlay::state::drift::{DriftFinding, DriftReport, DriftType};
 use aria_underlay::telemetry::{
-    AuditRecord, MetricName, Metrics, UnderlayEvent, UnderlayEventKind,
+    AuditRecord, InMemoryEventSink, MetricName, Metrics, UnderlayEvent, UnderlayEventKind,
 };
 use aria_underlay::tx::{TransactionStrategy, TxPhase};
+use tonic::{Request, Response, Status};
 
 #[test]
 fn transaction_result_event_maps_committed_phase_to_completed_kind() {
@@ -125,6 +136,31 @@ fn drift_report_maps_to_drift_event() {
     assert_eq!(event.fields.get("first_path").map(String::as_str), Some("vlans.100"));
 }
 
+#[tokio::test]
+async fn service_emits_drift_event_to_configured_sink() {
+    let adapter_endpoint = start_drift_adapter().await;
+    let inventory = telemetry_inventory(adapter_endpoint);
+    let sink = Arc::new(InMemoryEventSink::default());
+    let service = AriaUnderlayService::new(inventory).with_event_sink(sink.clone());
+
+    let response = service
+        .run_drift_audit(DriftAuditRequest {
+            device_ids: vec![DeviceId("leaf-a".into())],
+        })
+        .await
+        .expect("drift audit should complete");
+
+    assert_eq!(response.drifted_devices, vec![DeviceId("leaf-a".into())]);
+    let events = sink.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, UnderlayEventKind::UnderlayDriftDetected);
+    assert_eq!(
+        events[0].device_id.as_ref().map(|id| id.0.as_str()),
+        Some("leaf-a")
+    );
+    assert_eq!(events[0].result.as_deref(), Some("drift_detected"));
+}
+
 #[test]
 fn metrics_records_transaction_outcomes() {
     let mut metrics = Metrics::default();
@@ -148,4 +184,129 @@ fn metric_value(samples: &[aria_underlay::telemetry::MetricSample], name: Metric
         .find(|sample| sample.name == name)
         .map(|sample| sample.value)
         .unwrap_or_default()
+}
+
+fn telemetry_inventory(adapter_endpoint: String) -> DeviceInventory {
+    let inventory = DeviceInventory::default();
+    inventory
+        .insert(DeviceInfo {
+            tenant_id: "tenant-a".into(),
+            site_id: "site-a".into(),
+            id: DeviceId("leaf-a".into()),
+            management_ip: "127.0.0.1".into(),
+            management_port: 830,
+            vendor_hint: Some(Vendor::Unknown),
+            model_hint: None,
+            role: DeviceRole::LeafA,
+            secret_ref: "local/leaf-a".into(),
+            host_key_policy: HostKeyPolicy::TrustOnFirstUse,
+            adapter_endpoint,
+            lifecycle_state: DeviceLifecycleState::Ready,
+        })
+        .expect("telemetry test device should be inserted");
+    inventory
+}
+
+async fn start_drift_adapter() -> String {
+    let listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("test adapter listener should bind");
+    let addr = listener.local_addr().expect("test adapter addr should exist");
+    drop(listener);
+    tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(UnderlayAdapterServer::new(DriftTelemetryFakeAdapter))
+            .serve(addr)
+            .await
+            .expect("test adapter server should run");
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    format!("http://{addr}")
+}
+
+#[derive(Debug)]
+struct DriftTelemetryFakeAdapter;
+
+#[async_trait]
+impl UnderlayAdapter for DriftTelemetryFakeAdapter {
+    async fn get_capabilities(
+        &self,
+        _request: Request<adapter::GetCapabilitiesRequest>,
+    ) -> Result<Response<adapter::GetCapabilitiesResponse>, Status> {
+        Ok(Response::new(adapter::GetCapabilitiesResponse {
+            capability: None,
+            warnings: Vec::new(),
+            errors: Vec::new(),
+        }))
+    }
+
+    async fn get_current_state(
+        &self,
+        _request: Request<adapter::GetCurrentStateRequest>,
+    ) -> Result<Response<adapter::GetCurrentStateResponse>, Status> {
+        Ok(Response::new(adapter::GetCurrentStateResponse {
+            state: Some(adapter::ObservedDeviceState {
+                device_id: "leaf-a".into(),
+                vlans: Vec::new(),
+                interfaces: Vec::new(),
+            }),
+            warnings: vec!["manual change detected by adapter".into()],
+            errors: Vec::new(),
+        }))
+    }
+
+    async fn dry_run(
+        &self,
+        _request: Request<adapter::DryRunRequest>,
+    ) -> Result<Response<adapter::DryRunResponse>, Status> {
+        Ok(Response::new(adapter::DryRunResponse { result: None }))
+    }
+
+    async fn prepare(
+        &self,
+        _request: Request<adapter::PrepareRequest>,
+    ) -> Result<Response<adapter::PrepareResponse>, Status> {
+        Ok(Response::new(adapter::PrepareResponse { result: None }))
+    }
+
+    async fn commit(
+        &self,
+        _request: Request<adapter::CommitRequest>,
+    ) -> Result<Response<adapter::CommitResponse>, Status> {
+        Ok(Response::new(adapter::CommitResponse { result: None }))
+    }
+
+    async fn final_confirm(
+        &self,
+        _request: Request<adapter::FinalConfirmRequest>,
+    ) -> Result<Response<adapter::FinalConfirmResponse>, Status> {
+        Ok(Response::new(adapter::FinalConfirmResponse { result: None }))
+    }
+
+    async fn rollback(
+        &self,
+        _request: Request<adapter::RollbackRequest>,
+    ) -> Result<Response<adapter::RollbackResponse>, Status> {
+        Ok(Response::new(adapter::RollbackResponse { result: None }))
+    }
+
+    async fn verify(
+        &self,
+        _request: Request<adapter::VerifyRequest>,
+    ) -> Result<Response<adapter::VerifyResponse>, Status> {
+        Ok(Response::new(adapter::VerifyResponse { result: None }))
+    }
+
+    async fn recover(
+        &self,
+        _request: Request<adapter::RecoverRequest>,
+    ) -> Result<Response<adapter::RecoverResponse>, Status> {
+        Ok(Response::new(adapter::RecoverResponse { result: None }))
+    }
+
+    async fn force_unlock(
+        &self,
+        _request: Request<adapter::ForceUnlockRequest>,
+    ) -> Result<Response<adapter::ForceUnlockResponse>, Status> {
+        Ok(Response::new(adapter::ForceUnlockResponse { result: None }))
+    }
 }
