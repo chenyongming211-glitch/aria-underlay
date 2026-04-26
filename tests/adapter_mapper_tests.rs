@@ -1,12 +1,13 @@
 use aria_underlay::adapter_client::mapper::{
     adapter_result_to_outcome, capability_from_proto, desired_state_to_proto, extract_adapter_errors,
-    shadow_state_from_proto, state_scope_from_change_set, state_scope_from_desired,
-    AdapterOperationStatus,
+    recovery_action_to_proto, shadow_state_from_proto, state_scope_from_change_set,
+    state_scope_from_desired, AdapterOperationStatus,
 };
 use aria_underlay::engine::diff::{ChangeOp, ChangeSet};
 use aria_underlay::model::{AdminState, DeviceId, InterfaceConfig, PortMode, VlanConfig};
 use aria_underlay::planner::device_plan::DeviceDesiredState;
 use aria_underlay::proto::adapter;
+use aria_underlay::tx::RecoveryAction;
 use aria_underlay::UnderlayError;
 use std::collections::BTreeMap;
 
@@ -137,6 +138,22 @@ fn maps_desired_state_to_proto() {
     assert_eq!(proto.device_id, "leaf-a");
     assert_eq!(proto.vlans[0].vlan_id, 100);
     assert_eq!(proto.interfaces[0].mode.as_ref().unwrap().allowed_vlans, vec![100, 200]);
+}
+
+#[test]
+fn maps_recovery_actions_to_proto() {
+    assert_eq!(
+        recovery_action_to_proto(RecoveryAction::DiscardPreparedChanges),
+        adapter::RecoveryAction::DiscardPreparedChanges
+    );
+    assert_eq!(
+        recovery_action_to_proto(RecoveryAction::AdapterRecover),
+        adapter::RecoveryAction::AdapterRecover
+    );
+    assert_eq!(
+        recovery_action_to_proto(RecoveryAction::ManualIntervention),
+        adapter::RecoveryAction::Unspecified
+    );
 }
 
 #[test]
