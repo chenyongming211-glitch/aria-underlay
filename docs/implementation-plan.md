@@ -1108,6 +1108,74 @@ Sprint 7 目标：
 - 所有 force unlock 必须人工授权。
 - Protobuf 字段只追加不重排。
 
+### 16.4 gRPC 事务通道演进决策
+
+当前阶段不直接上 gRPC 双向流。第一阶段仍以 unary RPC 为主，先把单 endpoint ACID、幂等、fail-closed、journal 和 recovery 做正确。
+
+最终形态预留为：
+
+```protobuf
+rpc ExecuteTransaction(stream TransactionCommand)
+    returns (stream TransactionEvent);
+```
+
+演进路线：
+
+| 阶段 | 形态 | 目标 | 是否当前实现 |
+| --- | --- | --- | --- |
+| 阶段 1 | unary RPC | 快速打通事务正确性 | 是 |
+| 阶段 2 | 事务租约 API | adapter 通过 `tx_handle` 持有 NETCONF session / candidate lock | 否 |
+| 阶段 3 | gRPC 双向流 | 最终高性能事务通道，支持实时事件和动态决策 | 否 |
+
+阶段 2 过渡接口建议：
+
+```text
+BeginTransaction
+PrepareTransaction
+CommitTransaction
+VerifyTransaction
+FinalConfirmTransaction
+AbortTransaction
+RecoverTransaction
+```
+
+阶段 3 双向流命令建议：
+
+```text
+Begin
+Prepare
+Commit
+Verify
+FinalConfirm
+Abort
+Recover
+KeepAlive
+Close
+```
+
+阶段 3 双向流事件建议：
+
+```text
+Started
+Prepared
+ConfirmedCommitPending
+Verified
+Committed
+RolledBack
+InDoubt
+Failed
+Progress
+AuditEvent
+```
+
+进入阶段 3 前必须满足：
+
+- 真实设备 NETCONF prepare / commit / verify 已联调。
+- Adapter recovery 和 `InDoubt` 处理已经成熟。
+- telemetry / audit 事件字段已经稳定。
+- Protobuf command/event 状态机已经文档化。
+- stream 断开、重复 command、乱序 command、超时和重连都有测试。
+
 ## 17. 立即开工顺序
 
 按这个顺序开始开发：

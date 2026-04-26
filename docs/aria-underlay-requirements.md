@@ -570,6 +570,74 @@ Adapter 返回结果不得只有 `success`。
 - `raw_error_summary`
 - `normalized_state`
 
+### 7.1 最终演进形态：gRPC 双向流事务
+
+第一阶段可以使用普通 unary RPC 或事务租约 API，但最终形态需要预留向 gRPC 双向流演进。
+
+目标接口形态：
+
+```protobuf
+rpc ExecuteTransaction(stream TransactionCommand)
+    returns (stream TransactionEvent);
+```
+
+该接口不是第一阶段强制实现项，而是 Aria Underlay 的长期目标。它的定位是让 Rust 主控在一个流式事务中向 Python Adapter 逐步发送 `Prepare`、`Commit`、`Verify`、`FinalConfirm`、`Abort` 等命令，同时 Adapter 在同一个 stream 生命周期内维护 NETCONF session、candidate lock、confirmed-commit 上下文和厂商驱动状态。
+
+最终需要支持的命令类型：
+
+```text
+Begin
+Prepare
+Commit
+Verify
+FinalConfirm
+Abort
+Recover
+KeepAlive
+Close
+```
+
+最终需要支持的事件类型：
+
+```text
+Started
+Prepared
+ConfirmedCommitPending
+Committed
+Verified
+RolledBack
+InDoubt
+Failed
+Progress
+AuditEvent
+```
+
+该形态的目标：
+
+- 单 endpoint 事务只建立一次 NETCONF / SSH 会话。
+- Adapter 在事务期间持有 candidate lock，避免多次握手和重复 lock/unlock。
+- Rust 可以根据中间事件动态决策，例如 validate 失败立即 abort。
+- 每个阶段实时返回结构化事件，便于接入 Aria RFC-002 事件模型和 RFC-015 审计视图。
+- 后续兼容复杂厂商适配、CLI 降级、长耗时 verify 和交互式 recovery。
+
+设计约束：
+
+- stream 中断必须进入可恢复状态，不能静默成功。
+- 每条 command 必须携带 `request_id`、`tx_id`、`trace_id`、`device_id` 和单调递增 `command_seq`。
+- Adapter 必须校验 command 顺序，不允许乱序 commit 或重复 final confirm 造成状态错乱。
+- 关键阶段仍必须写 journal；双向流不能削弱 Durability。
+- `InDoubt` 必须阻断该 endpoint 后续事务，直到 recover 或人工 force resolve。
+
+演进策略：
+
+```text
+阶段 1：unary RPC，先保证正确性
+阶段 2：事务租约 API，adapter 通过 tx_handle 持有 NETCONF session
+阶段 3：ExecuteTransaction 双向流，作为最终高性能事务通道
+```
+
+在阶段 1 和阶段 2 中，Protobuf 字段设计必须避免与阶段 3 冲突。新增字段只追加不重排，错误码、事件名、事务阶段名要尽量沿用最终流式协议。
+
 ## 8. 可观测性与审计需求
 
 物理交换机每一次配置变更必须进入 Aria 统一可观测体系。

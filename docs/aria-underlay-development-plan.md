@@ -1008,6 +1008,89 @@ Recover
 ForceUnlock
 ```
 
+第一阶段这些 RPC 可以保持 unary 形态，重点是把事务状态、错误码、journal 和 fail-closed 行为做正确。
+
+### 12.1.1 最终目标：ExecuteTransaction 双向流
+
+长期最终形态预留为 gRPC 双向流：
+
+```protobuf
+rpc ExecuteTransaction(stream TransactionCommand)
+    returns (stream TransactionEvent);
+```
+
+采用该形态后，Rust 主控不再为一次设备事务反复调用多个独立 RPC，而是在同一个 stream 中发送事务命令：
+
+```text
+Begin
+Prepare
+Commit
+Verify
+FinalConfirm
+Abort
+Recover
+Close
+```
+
+Python Adapter 在这个 stream 生命周期内维护：
+
+- 一个 NETCONF session。
+- candidate lock。
+- confirmed-commit persist token。
+- 厂商 driver 上下文。
+- rollback artifact / running backup 引用。
+
+事件流返回：
+
+```text
+Started
+Prepared
+ConfirmedCommitPending
+Verified
+Committed
+RolledBack
+InDoubt
+Failed
+AuditEvent
+Progress
+```
+
+这个方案的价值：
+
+- 把单 endpoint 事务的 NETCONF 握手次数从多次降到一次。
+- Rust 可以基于中间结果动态决策。
+- Adapter 可以自然持有设备 lock，减少重复 lock/unlock。
+- 事务事件天然适合接入 telemetry 和 audit。
+- 更适合后续复杂厂商适配、CLI 降级和长耗时 recovery。
+
+但它不是当前阶段主路径。原因：
+
+- 需要定义严格 command/event 状态机。
+- stream 中断、半关闭、超时和恢复更复杂。
+- Python Adapter 会从无状态服务演进为短生命周期有状态事务执行器。
+- 测试需要覆盖乱序 command、重复 command、断流、重连、recover。
+
+因此当前开发顺序保持：
+
+```text
+阶段 1：unary RPC，保证正确性
+阶段 2：事务租约 API，adapter 通过 tx_handle 复用 NETCONF session
+阶段 3：ExecuteTransaction 双向流，作为最终高性能事务通道
+```
+
+阶段 2 的事务租约 API 可以作为过渡：
+
+```text
+BeginTransaction -> tx_handle
+PrepareTransaction(tx_handle)
+CommitTransaction(tx_handle)
+VerifyTransaction(tx_handle)
+FinalConfirmTransaction(tx_handle)
+AbortTransaction(tx_handle)
+```
+
+它比双向流简单，但已经能解决重复 NETCONF 握手问题。阶段 3 再把这些命令收敛到一个双向流里。
+
 ### 12.2 Protobuf 核心对象
 
 第一版至少定义：
