@@ -127,6 +127,24 @@ Python Adapter 可以进程无状态，但事务产物不能无状态。
 - backend kind。
 - rollback artifact reference。
 
+### 2.5 ACID Must Be Preserved
+
+产品开发阶段必须把事务性作为硬要求，单 management endpoint 的配置下发必须满足 ACID 四个特性。
+
+开发检查表：
+
+- Atomicity：单 endpoint 内 prepare、commit、verify、finalize 不能半成功；失败必须 rollback / recover / InDoubt。
+- Consistency：事务前后必须满足 intent validation、capability check、structured diff 和 post-commit verify。
+- Isolation：同一 endpoint 只能有一个 writer；必须有 Rust 本地锁和设备侧 lock / 后端锁。
+- Durability：事务开始后必须写 journal；rollback artifact、running backup、confirmed commit 恢复信息必须可恢复。
+
+实现约束：
+
+- 不允许把“adapter RPC 返回成功”直接当作最终事务成功。
+- 不允许无 journal 的配置变更进入 running。
+- 不允许 `InDoubt` 事务被 GC 自动删除。
+- 不允许在降级模式中宣传强 ACID；必须明确说明削弱点和补偿方式。
+
 ## 3. 推荐目录结构
 
 ```text
@@ -899,6 +917,9 @@ Rust 单 endpoint CandidateCommit 跑通
 - Validate 失败时本 endpoint running 不变。
 - Journal 记录每个 phase。
 - 进程重启后能扫描未完成 journal。
+- Atomicity：任意 prepare/validate/commit 失败都不能静默成功。
+- Isolation：同一 endpoint 并发 apply 时只能有一个事务进入写路径。
+- Durability：事务开始后崩溃，重启后能从 journal 看见未完成事务。
 
 ## 12. Sprint 5 详细任务
 
@@ -923,6 +944,8 @@ ConfirmedCommit、Verify、FinalConfirm 和 InDoubt 处理跑通
 - confirmed 后 verify 失败时，执行 cancel。
 - Final confirm timeout 后能判断 converged / in-doubt。
 - `InDoubt` journal 不会被 GC。
+- Consistency：final confirm 前必须完成 desired subset verify。
+- Durability：confirmed commit 后进程崩溃，恢复流程能识别 pending / in-doubt。
 
 ## 13. Sprint 6 详细任务
 

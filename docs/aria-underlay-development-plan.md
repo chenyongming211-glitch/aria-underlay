@@ -471,6 +471,33 @@ Normalize 规则：
 
 ## 8. 事务策略
 
+### 8.0 ACID 设计底线
+
+配置下发必须以 ACID 为硬约束，不能只以“RPC 调用成功”为成功标准。
+
+ACID 边界：
+
+```text
+single management endpoint = one ACID transaction boundary
+multi endpoint apply = batch orchestration of independent ACID endpoint transactions
+```
+
+四个特性的落地要求：
+
+| ACID 特性 | Aria Underlay 落地要求 |
+| --- | --- |
+| Atomicity | 单 endpoint 内 `Prepare -> Commit -> Verify -> Finalize` 必须一起成功；失败必须 rollback / recover / InDoubt，不得静默成功 |
+| Consistency | intent validate、capability check、structured diff、post-commit verify 必须全部通过，事务后 running touched subtree 必须收敛到 desired subset |
+| Isolation | 同一 endpoint 必须单 writer；Rust 本地锁加设备侧 lock；并发 apply 不得交叉写配置、journal 或 artifact |
+| Durability | 事务开始后必须持久化 journal；rollback artifact / running backup / confirmed commit 恢复信息必须可用于进程重启后的 recovery |
+
+开发要求：
+
+- 每新增一个事务阶段，必须同步补 journal phase。
+- 每新增一种失败路径，必须明确返回 `Failed`、`RolledBack` 或 `InDoubt`。
+- 每新增一种降级策略，必须说明它满足哪些 ACID 能力，削弱了哪些能力。
+- 任何 adapter 返回的成功，都必须经过 Rust 主控的状态机确认后才能变成最终成功。
+
 ### 8.1 策略分级
 
 ```rust
