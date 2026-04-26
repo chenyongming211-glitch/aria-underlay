@@ -94,6 +94,42 @@ def test_commit_failed_profile_fails_commit():
     assert exc.value.code == "COMMIT_FAILED"
 
 
+def test_commit_candidate_publishes_candidate_state():
+    backend = MockNetconfBackend("confirmed")
+    desired = _desired_state(vlan_name="tenant-100")
+
+    backend.prepare_candidate(desired)
+    backend.commit_candidate(strategy=1, tx_id="tx-1")
+
+    state = backend.get_current_state()
+    assert state["vlans"][0]["name"] == "tenant-100"
+
+
+def test_rollback_confirmed_commit_restores_previous_running_state():
+    backend = MockNetconfBackend("confirmed")
+    desired = _desired_state(vlan_name="tenant-100")
+
+    backend.prepare_candidate(desired)
+    backend.commit_candidate(strategy=1, tx_id="tx-1")
+    backend.rollback_candidate(strategy=1, tx_id="tx-1")
+
+    state = backend.get_current_state()
+    assert state["vlans"][0]["name"] == "prod"
+
+
+def test_final_confirm_keeps_confirmed_running_state():
+    backend = MockNetconfBackend("confirmed")
+    desired = _desired_state(vlan_name="tenant-100")
+
+    backend.prepare_candidate(desired)
+    backend.commit_candidate(strategy=1, tx_id="tx-1")
+    backend.final_confirm(tx_id="tx-1")
+    backend.rollback_candidate(strategy=1, tx_id="tx-1")
+
+    state = backend.get_current_state()
+    assert state["vlans"][0]["name"] == "tenant-100"
+
+
 def test_verify_failed_profile_fails_verify():
     with pytest.raises(AdapterError) as exc:
         MockNetconfBackend("verify_failed").verify_running(desired_state=None)

@@ -16,6 +16,10 @@ WRITABLE_RUNNING = "urn:ietf:params:netconf:capability:writable-running:1.0"
 class MockNetconfBackend:
     def __init__(self, profile: str = "confirmed"):
         self.profile = profile
+        self._running = _default_running_state()
+        self._candidate = None
+        self._confirmed_before = None
+        self._pending_confirm_tx_id = None
 
     def get_capabilities(self) -> BackendCapability:
         if self.profile in {
@@ -127,29 +131,7 @@ class MockNetconfBackend:
 
     def get_current_state(self, scope=None) -> dict:
         self.get_capabilities()
-        state = {
-            "vlans": [
-                {
-                    "vlan_id": 100,
-                    "name": "prod",
-                    "description": "production vlan",
-                }
-            ],
-            "interfaces": [
-                {
-                    "name": "GE1/0/1",
-                    "admin_state": "up",
-                    "description": "server uplink",
-                    "mode": {
-                        "kind": "access",
-                        "access_vlan": 100,
-                        "native_vlan": None,
-                        "allowed_vlans": [],
-                    },
-                }
-            ],
-        }
-        return _filter_state_by_scope(state, scope)
+        return _filter_state_by_scope(self._running, scope)
 
     def lock_candidate(self) -> None:
         if self.profile == "lock_failed":
@@ -181,8 +163,10 @@ class MockNetconfBackend:
         self.lock_candidate()
         try:
             self.edit_candidate()
+            self._candidate = _merge_desired_state(self._running, desired_state)
             self.validate_candidate()
         except Exception:
+            self._candidate = None
             self.unlock_candidate()
             raise
 
@@ -201,12 +185,45 @@ class MockNetconfBackend:
                 raw_error_summary="mock profile commit_failed",
                 retryable=True,
             )
+        if self._candidate is not None:
+            if _is_confirmed_commit_strategy(strategy):
+                self._confirmed_before = _clone_state(self._running)
+                self._pending_confirm_tx_id = tx_id
+            self._running = _clone_state(self._candidate)
+            self._candidate = None
 
     def final_confirm(self, tx_id: str | None = None) -> None:
         self.get_capabilities()
+        if self._pending_confirm_tx_id and tx_id and self._pending_confirm_tx_id != tx_id:
+            raise AdapterError(
+                code="PERSIST_ID_MISMATCH",
+                message="mock final confirm persist-id mismatch",
+                normalized_error="persist-id mismatch",
+                raw_error_summary=(
+                    f"expected {self._pending_confirm_tx_id}, got {tx_id}"
+                ),
+                retryable=False,
+            )
+        self._confirmed_before = None
+        self._pending_confirm_tx_id = None
 
     def rollback_candidate(self, strategy=None, tx_id: str | None = None) -> None:
         self.get_capabilities()
+        if _is_confirmed_commit_strategy(strategy) and self._confirmed_before is not None:
+            if self._pending_confirm_tx_id and tx_id and self._pending_confirm_tx_id != tx_id:
+                raise AdapterError(
+                    code="PERSIST_ID_MISMATCH",
+                    message="mock cancel-commit persist-id mismatch",
+                    normalized_error="persist-id mismatch",
+                    raw_error_summary=(
+                        f"expected {self._pending_confirm_tx_id}, got {tx_id}"
+                    ),
+                    retryable=False,
+                )
+            self._running = _clone_state(self._confirmed_before)
+            self._confirmed_before = None
+            self._pending_confirm_tx_id = None
+        self._candidate = None
 
     def verify_running(self, desired_state, scope=None) -> None:
         self.get_capabilities()
@@ -245,6 +262,84 @@ def _filter_state_by_scope(state: dict, scope=None) -> dict:
             if interface["name"] in interface_names
         ],
     }
+
+
+def _default_running_state() -> dict:
+    return {
+        "vlans": [
+            {
+                "vlan_id": 100,
+                "name": "prod",
+                "description": "production vlan",
+            }
+        ],
+        "interfaces": [
+            {
+                "name": "GE1/0/1",
+                "admin_state": "up",
+                "description": "server uplink",
+                "mode": {
+                    "kind": "access",
+                    "access_vlan": 100,
+                    "native_vlan": None,
+                    "allowed_vlans": [],
+                },
+            }
+        ],
+    }
+
+
+def _clone_state(state: dict) -> dict:
+    return {
+        "vlans": [dict(vlan) for vlan in state["vlans"]],
+        "interfaces": [
+            {**interface, "mode": dict(interface["mode"])}
+            for interface in state["interfaces"]
+        ],
+    }
+
+
+def _merge_desired_state(running: dict, desired_state) -> dict:
+    if desired_state is None:
+        return _clone_state(running)
+
+    merged = _clone_state(running)
+    vlans_by_id = {vlan["vlan_id"]: vlan for vlan in merged["vlans"]}
+    for desired_vlan in getattr(desired_state, "vlans", []):
+        vlan_id = _field(desired_vlan, "vlan_id")
+        vlans_by_id[vlan_id] = {
+            "vlan_id": vlan_id,
+            "name": _optional_field(desired_vlan, "name"),
+            "description": _optional_field(desired_vlan, "description"),
+        }
+    merged["vlans"] = [
+        vlans_by_id[vlan_id]
+        for vlan_id in sorted(vlans_by_id)
+    ]
+
+    interfaces_by_name = {
+        interface["name"]: interface
+        for interface in merged["interfaces"]
+    }
+    for desired_interface in getattr(desired_state, "interfaces", []):
+        name = _field(desired_interface, "name")
+        interfaces_by_name[name] = {
+            "name": name,
+            "admin_state": _admin_state_to_text(_field(desired_interface, "admin_state")),
+            "description": _optional_field(desired_interface, "description"),
+            "mode": _mode_to_dict(_field(desired_interface, "mode")),
+        }
+    merged["interfaces"] = [
+        interfaces_by_name[name]
+        for name in sorted(interfaces_by_name)
+    ]
+    return merged
+
+
+def _is_confirmed_commit_strategy(strategy) -> bool:
+    if strategy in {"confirmed_commit", "CONFIRMED_COMMIT"}:
+        return True
+    return int(strategy or 0) == 1
 
 
 def _verify_vlans(desired_state, observed: dict, scope=None) -> None:
