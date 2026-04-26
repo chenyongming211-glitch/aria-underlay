@@ -1,4 +1,5 @@
 from aria_underlay_adapter.drivers.fake import FakeDriver
+from aria_underlay_adapter.drivers.error import AdapterErrorDriver
 from aria_underlay_adapter.errors import AdapterError
 from aria_underlay_adapter.proto import aria_underlay_adapter_pb2 as pb2
 from aria_underlay_adapter.server import UnderlayAdapterService
@@ -123,6 +124,60 @@ def test_force_unlock_calls_driver_when_break_glass_enabled():
             lock_owner="session-1",
             reason="test",
             break_glass_enabled=True,
+        ),
+        context=None,
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
+    assert response.result.errors[0].code == "NOT_IMPLEMENTED"
+
+
+def test_force_unlock_preserves_driver_failure_response():
+    service = UnderlayAdapterService(
+        _Registry(
+            AdapterErrorDriver(
+                AdapterError(
+                    code="SECRET_NOT_FOUND",
+                    message="secret not found",
+                    retryable=False,
+                )
+            )
+        )
+    )
+    response = service.ForceUnlock(
+        pb2.ForceUnlockRequest(
+            device=pb2.DeviceRef(device_id="leaf-a"),
+            lock_owner="session-1",
+            reason="test",
+            break_glass_enabled=True,
+        ),
+        context=None,
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
+    assert response.result.errors[0].code == "SECRET_NOT_FOUND"
+
+
+def test_service_dry_run_calls_driver_and_fails_closed_when_unimplemented():
+    service = UnderlayAdapterService(_Registry(FakeDriver(profile="confirmed")))
+    response = service.DryRun(
+        pb2.DryRunRequest(
+            device=pb2.DeviceRef(device_id="leaf-a"),
+            desired_state=pb2.DesiredDeviceState(device_id="leaf-a"),
+        ),
+        context=None,
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
+    assert response.result.errors[0].code == "NOT_IMPLEMENTED"
+
+
+def test_service_recover_calls_driver_and_fails_closed_when_unimplemented():
+    service = UnderlayAdapterService(_Registry(FakeDriver(profile="confirmed")))
+    response = service.Recover(
+        pb2.RecoverRequest(
+            context=pb2.RequestContext(tx_id="tx-1"),
+            device=pb2.DeviceRef(device_id="leaf-a"),
         ),
         context=None,
     )

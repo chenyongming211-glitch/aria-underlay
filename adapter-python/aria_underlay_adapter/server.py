@@ -47,12 +47,16 @@ class UnderlayAdapterService(pb2_grpc.UnderlayAdapterServicer):
         return driver.get_current_state(request)
 
     def DryRun(self, request, context):
-        return pb2.DryRunResponse(
-            result=pb2.AdapterResult(
-                status=pb2.ADAPTER_OPERATION_STATUS_NO_CHANGE,
-                changed=False,
+        driver = self._registry.select(request.device)
+        try:
+            return driver.dry_run(
+                device=request.device,
+                desired_state=request.desired_state,
             )
-        )
+        except AdapterError as error:
+            return pb2.DryRunResponse(result=_failed_result(error))
+        except NotImplementedError as error:
+            return pb2.DryRunResponse(result=_not_implemented_result("dry_run", error))
 
     def Prepare(self, request, context):
         driver = self._registry.select(request.device)
@@ -81,12 +85,16 @@ class UnderlayAdapterService(pb2_grpc.UnderlayAdapterServicer):
         )
 
     def Recover(self, request, context):
-        return pb2.RecoverResponse(
-            result=pb2.AdapterResult(
-                status=pb2.ADAPTER_OPERATION_STATUS_NO_CHANGE,
-                changed=False,
+        driver = self._registry.select(request.device)
+        try:
+            return driver.recover(
+                tx_id=request.context.tx_id if request.context else "",
+                device=request.device,
             )
-        )
+        except AdapterError as error:
+            return pb2.RecoverResponse(result=_failed_result(error))
+        except NotImplementedError as error:
+            return pb2.RecoverResponse(result=_not_implemented_result("recover", error))
 
     def ForceUnlock(self, request, context):
         if not request.break_glass_enabled:
@@ -99,7 +107,7 @@ class UnderlayAdapterService(pb2_grpc.UnderlayAdapterServicer):
             )
         driver = self._registry.select(request.device)
         try:
-            driver.force_unlock(
+            response = driver.force_unlock(
                 device=request.device,
                 lock_owner=request.lock_owner,
                 reason=request.reason,
@@ -112,6 +120,12 @@ class UnderlayAdapterService(pb2_grpc.UnderlayAdapterServicer):
                     errors=[error.to_proto(pb2)],
                 )
             )
+        except NotImplementedError as error:
+            return pb2.ForceUnlockResponse(
+                result=_not_implemented_result("force_unlock", error)
+            )
+        if response is not None:
+            return response
         return pb2.ForceUnlockResponse(
             result=pb2.AdapterResult(
                 status=pb2.ADAPTER_OPERATION_STATUS_COMMITTED,
@@ -160,6 +174,26 @@ def _netconf_driver_from_device(
             password=secret.password,
             key_path=secret.key_path,
             passphrase=secret.passphrase,
+        )
+    )
+
+
+def _failed_result(error: AdapterError):
+    return pb2.AdapterResult(
+        status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
+        changed=False,
+        errors=[error.to_proto(pb2)],
+    )
+
+
+def _not_implemented_result(operation: str, error: NotImplementedError):
+    return _failed_result(
+        AdapterError(
+            code="NOT_IMPLEMENTED",
+            message=f"{operation} is not implemented for selected driver",
+            normalized_error="driver method missing",
+            raw_error_summary=str(error) or operation,
+            retryable=False,
         )
     )
 
