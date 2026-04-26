@@ -1,7 +1,9 @@
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import pytest
 
+from aria_underlay_adapter.errors import AdapterError
 from aria_underlay_adapter.renderers.h3c import H3cRenderer
 from aria_underlay_adapter.renderers.huawei import HuaweiRenderer
 from aria_underlay_adapter.renderers.xml import XmlElement, render_xml
@@ -17,9 +19,15 @@ class _Vlan:
 @dataclass
 class _Interface:
     name: str
-    admin_state: str
+    admin_state: str | int
     description: str | None
-    mode: dict
+    mode: dict | object
+
+
+@dataclass
+class _DesiredState:
+    vlans: list
+    interfaces: list
 
 
 def test_xml_renderer_escapes_text():
@@ -65,6 +73,47 @@ def test_vendor_renderer_builds_access_interface_xml(renderer):
     assert "<ns0:name>GE1/0/1</ns0:name>" in xml
     assert "<ns0:admin-state>up</ns0:admin-state>" in xml
     assert "<ns0:vlan-id>100</ns0:vlan-id>" in xml
+
+
+@pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])
+def test_vendor_renderer_builds_single_edit_config_document(renderer):
+    xml = renderer.render_edit_config(
+        _DesiredState(
+            vlans=[
+                _Vlan(vlan_id=100, name="prod", description="production vlan"),
+                _Vlan(vlan_id=200, name="dev", description=None),
+            ],
+            interfaces=[
+                _Interface(
+                    name="GE1/0/1",
+                    admin_state=1,
+                    description="server uplink",
+                    mode=SimpleNamespace(
+                        kind=1,
+                        access_vlan=100,
+                        native_vlan=None,
+                        allowed_vlans=[],
+                    ),
+                )
+            ],
+        )
+    )
+
+    assert xml.startswith("<config")
+    assert xml.count("<ns0:vlan") == 2
+    assert xml.count("<ns1:interface") == 1
+    assert "<ns0:id>100</ns0:id>" in xml
+    assert "<ns0:id>200</ns0:id>" in xml
+    assert "<ns1:admin-state>up</ns1:admin-state>" in xml
+    assert "<ns1:vlan-id>100</ns1:vlan-id>" in xml
+
+
+@pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])
+def test_vendor_renderer_rejects_empty_edit_config_document(renderer):
+    with pytest.raises(AdapterError) as exc:
+        renderer.render_edit_config(_DesiredState(vlans=[], interfaces=[]))
+
+    assert exc.value.code == "EMPTY_DESIRED_STATE"
 
 
 @pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])

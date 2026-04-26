@@ -14,6 +14,7 @@ from aria_underlay_adapter.backends.netconf import (
     capability_from_raw,
 )
 from aria_underlay_adapter.errors import AdapterError
+from aria_underlay_adapter.renderers.huawei import HuaweiRenderer
 
 
 def test_capability_from_raw_detects_confirmed_commit_11():
@@ -114,6 +115,21 @@ def test_prepare_candidate_edits_and_validates_when_renderer_is_configured():
         ("validate", "candidate"),
         ("unlock", "candidate"),
     ]
+
+
+def test_prepare_candidate_uses_vendor_renderer_once_for_desired_state():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session, config_renderer=HuaweiRenderer())
+
+    backend.prepare_candidate(desired_state=_desired_state())
+
+    edit_calls = [call for call in session.calls if call[0] == "edit_config"]
+    assert len(edit_calls) == 1
+    assert edit_calls[0][1]["target"] == "candidate"
+    assert edit_calls[0][1]["config"].startswith("<config")
+    assert "<ns0:id>100</ns0:id>" in edit_calls[0][1]["config"]
+    assert "<ns1:interface" in edit_calls[0][1]["config"]
+    assert session.calls[-2:] == [("validate", "candidate"), ("unlock", "candidate")]
 
 
 def test_prepare_candidate_discards_and_unlocks_when_renderer_returns_empty_config():
@@ -295,3 +311,36 @@ class _StaticRenderer:
 
     def render_edit_config(self, desired_state):
         return self.payload
+
+
+def _desired_state():
+    class _Desired:
+        vlans = [
+            type(
+                "Vlan",
+                (),
+                {
+                    "vlan_id": 100,
+                    "name": "prod",
+                    "description": "production vlan",
+                },
+            )()
+        ]
+        interfaces = [
+            type(
+                "Interface",
+                (),
+                {
+                    "name": "GE1/0/1",
+                    "admin_state": 1,
+                    "description": "server uplink",
+                    "mode": {
+                        "kind": "access",
+                        "access_vlan": 100,
+                        "allowed_vlans": [],
+                    },
+                },
+            )()
+        ]
+
+    return _Desired()
