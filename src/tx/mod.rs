@@ -13,4 +13,5 @@ pub use endpoint_lock::{EndpointLockTable, EndpointWriteGuard};
 pub use journal::{
     InMemoryTxJournalStore, JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase,
 };
+pub use lock_strategy::LockAcquisitionPolicy;
 pub use strategy::{choose_strategy, CapabilityFlags, TransactionMode, TransactionStrategy};

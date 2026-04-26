@@ -8,8 +8,8 @@ use crate::device::{DeviceCapabilityProfile, DeviceInfo};
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::proto::adapter::underlay_adapter_client::UnderlayAdapterClient;
 use crate::proto::adapter::{
-    CommitRequest, GetCapabilitiesRequest, GetCurrentStateRequest, PrepareRequest, RecoverRequest,
-    RequestContext, RollbackRequest, VerifyRequest,
+    CommitRequest, ForceUnlockRequest, GetCapabilitiesRequest, GetCurrentStateRequest,
+    PrepareRequest, RecoverRequest, RequestContext, RollbackRequest, VerifyRequest,
 };
 use crate::state::DeviceShadowState;
 use crate::tx::{TransactionStrategy, TxContext};
@@ -258,6 +258,37 @@ impl AdapterClient {
         let result = response.result.ok_or_else(|| UnderlayError::AdapterOperation {
             code: "MISSING_ADAPTER_RESULT".into(),
             message: "adapter returned no verify result".into(),
+            retryable: false,
+            errors: Vec::new(),
+        })?;
+
+        adapter_result_to_outcome(result)
+    }
+
+    pub async fn force_unlock(
+        &mut self,
+        device: &DeviceInfo,
+        context: &RequestContext,
+        lock_owner: String,
+        reason: String,
+        break_glass_enabled: bool,
+    ) -> UnderlayResult<AdapterOutcome> {
+        let response = self
+            .inner
+            .force_unlock(ForceUnlockRequest {
+                context: Some(context.clone()),
+                device: Some(device_ref_from_info(device)),
+                lock_owner,
+                reason,
+                break_glass_enabled,
+            })
+            .await
+            .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?
+            .into_inner();
+
+        let result = response.result.ok_or_else(|| UnderlayError::AdapterOperation {
+            code: "MISSING_ADAPTER_RESULT".into(),
+            message: "adapter returned no force unlock result".into(),
             retryable: false,
             errors: Vec::new(),
         })?;

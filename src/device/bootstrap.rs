@@ -70,11 +70,18 @@ impl UnderlaySiteInitializationService {
     where
         S: SecretStore + 'static,
     {
+        Self::new_with_secret_store(inventory, Arc::new(secret_store))
+    }
+
+    pub fn new_with_secret_store(
+        inventory: DeviceInventory,
+        secret_store: Arc<dyn SecretStore>,
+    ) -> Self {
         Self {
             registration: DeviceRegistrationService::new(inventory.clone()),
             onboarding: DeviceOnboardingService::new(inventory.clone()),
             inventory,
-            secret_store: Arc::new(secret_store),
+            secret_store,
         }
     }
 

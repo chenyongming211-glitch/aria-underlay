@@ -1,7 +1,8 @@
 use aria_underlay::model::DeviceId;
 use aria_underlay::tx::{
-    choose_strategy, CapabilityFlags, EndpointLockTable, JsonFileTxJournalStore, TransactionMode,
-    TransactionStrategy, TxContext, TxJournalRecord, TxJournalStore, TxPhase,
+    choose_strategy, CapabilityFlags, EndpointLockTable, JsonFileTxJournalStore,
+    LockAcquisitionPolicy, TransactionMode, TransactionStrategy, TxContext, TxJournalRecord,
+    TxJournalStore, TxPhase,
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -163,6 +164,29 @@ async fn endpoint_lock_orders_multiple_endpoints_without_deadlock() {
     })
     .await
     .expect("ordered endpoint locking should not deadlock");
+}
+
+#[tokio::test]
+async fn endpoint_lock_policy_times_out_instead_of_waiting_forever() {
+    let locks = EndpointLockTable::default();
+    let _first_guard = locks
+        .acquire_many(&[DeviceId("leaf-a".into())])
+        .await
+        .expect("first lock should be acquired");
+    let policy = LockAcquisitionPolicy {
+        max_wait_secs: 0,
+        initial_delay_ms: 1,
+        max_delay_secs: 1,
+        jitter: false,
+        force_unlock_enabled: false,
+    };
+
+    let err = locks
+        .acquire_many_with_policy(&[DeviceId("leaf-a".into())], &policy)
+        .await
+        .expect_err("second lock should time out");
+
+    assert!(format!("{err}").contains("ENDPOINT_LOCK_TIMEOUT"));
 }
 
 fn temp_journal_dir(name: &str) -> std::path::PathBuf {

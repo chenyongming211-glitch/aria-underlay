@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use aria_underlay::api::{AriaUnderlayService, UnderlayService};
 use aria_underlay::device::{
     bootstrap::validate_switch_pair, onboarding::lifecycle_state_for_onboarding_error,
     DeviceInventory, DeviceLifecycleState, DeviceRegistrationService, HostKeyPolicy,
@@ -8,6 +11,7 @@ use aria_underlay::device::{
 use aria_underlay::intent::validation::validate_switch_pair_intent;
 use aria_underlay::intent::SwitchPairIntent;
 use aria_underlay::model::{DeviceId, DeviceRole, Vendor};
+use aria_underlay::tx::{EndpointLockTable, InMemoryTxJournalStore, LockAcquisitionPolicy};
 use aria_underlay::UnderlayError;
 
 #[test]
@@ -182,6 +186,35 @@ async fn site_initialization_accepts_custom_secret_store() {
         })
         .await
         .expect("initialization should return per-device errors");
+
+    assert_eq!(response.status, SiteInitializationStatus::PartiallyRegistered);
+    assert!(response.devices.iter().all(|device| device.error.is_some()));
+}
+
+#[tokio::test]
+async fn underlay_service_initializes_site_through_public_api() {
+    let service = AriaUnderlayService::new_with_components(
+        DeviceInventory::default(),
+        Arc::new(InMemoryTxJournalStore::default()),
+        EndpointLockTable::default(),
+        LockAcquisitionPolicy::default(),
+        Arc::new(RejectingSecretStore),
+    );
+
+    let response = service
+        .initialize_underlay_site(InitializeUnderlaySiteRequest {
+            request_id: "req-a".into(),
+            tenant_id: "tenant-a".into(),
+            site_id: "site-a".into(),
+            adapter_endpoint: "http://127.0.0.1:50051".into(),
+            switches: vec![
+                switch_bootstrap("leaf-a", DeviceRole::LeafA),
+                switch_bootstrap("leaf-b", DeviceRole::LeafB),
+            ],
+            allow_degraded: false,
+        })
+        .await
+        .expect("public API should delegate to site initializer");
 
     assert_eq!(response.status, SiteInitializationStatus::PartiallyRegistered);
     assert!(response.devices.iter().all(|device| device.error.is_some()));

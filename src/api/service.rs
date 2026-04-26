@@ -14,8 +14,8 @@ use crate::api::response::{
 use crate::api::underlay_service::UnderlayService;
 use crate::device::{
     DeviceInfo, DeviceInventory, DeviceOnboardingService, DeviceRegistrationService,
-    InitializeUnderlaySiteRequest, InitializeUnderlaySiteResponse, RegisterDeviceRequest,
-    RegisterDeviceResponse,
+    InMemorySecretStore, InitializeUnderlaySiteRequest, InitializeUnderlaySiteResponse,
+    RegisterDeviceRequest, RegisterDeviceResponse, SecretStore, UnderlaySiteInitializationService,
 };
 use crate::engine::dry_run::{build_dry_run_plan, DryRunPlan};
 use crate::intent::validation::validate_switch_pair_intent;
@@ -28,8 +28,8 @@ use crate::tx::recovery::{
     classify_recovery, in_doubt_records_for_devices, RecoveryAction, RecoveryReport,
 };
 use crate::tx::{
-    EndpointLockTable, InMemoryTxJournalStore, TransactionStrategy, TxContext, TxJournalRecord,
-    TxJournalStore, TxPhase,
+    EndpointLockTable, InMemoryTxJournalStore, LockAcquisitionPolicy, TransactionStrategy,
+    TxContext, TxJournalRecord, TxJournalStore, TxPhase,
 };
 use crate::{UnderlayError, UnderlayResult};
 
@@ -38,6 +38,8 @@ pub struct AriaUnderlayService {
     inventory: DeviceInventory,
     journal: Arc<dyn TxJournalStore>,
     endpoint_locks: EndpointLockTable,
+    lock_policy: LockAcquisitionPolicy,
+    secret_store: Arc<dyn SecretStore>,
 }
 
 impl AriaUnderlayService {
@@ -46,6 +48,8 @@ impl AriaUnderlayService {
             inventory,
             journal: Arc::new(InMemoryTxJournalStore::default()),
             endpoint_locks: EndpointLockTable::default(),
+            lock_policy: LockAcquisitionPolicy::default(),
+            secret_store: Arc::new(InMemorySecretStore::default()),
         }
     }
 
@@ -57,6 +61,8 @@ impl AriaUnderlayService {
             inventory,
             journal,
             endpoint_locks: EndpointLockTable::default(),
+            lock_policy: LockAcquisitionPolicy::default(),
+            secret_store: Arc::new(InMemorySecretStore::default()),
         }
     }
 
@@ -69,6 +75,24 @@ impl AriaUnderlayService {
             inventory,
             journal,
             endpoint_locks,
+            lock_policy: LockAcquisitionPolicy::default(),
+            secret_store: Arc::new(InMemorySecretStore::default()),
+        }
+    }
+
+    pub fn new_with_components(
+        inventory: DeviceInventory,
+        journal: Arc<dyn TxJournalStore>,
+        endpoint_locks: EndpointLockTable,
+        lock_policy: LockAcquisitionPolicy,
+        secret_store: Arc<dyn SecretStore>,
+    ) -> Self {
+        Self {
+            inventory,
+            journal,
+            endpoint_locks,
+            lock_policy,
+            secret_store,
         }
     }
 
@@ -198,7 +222,7 @@ impl AriaUnderlayService {
     ) -> DeviceApplyResult {
         let _endpoint_guard = match self
             .endpoint_locks
-            .acquire_many(std::slice::from_ref(&desired.device_id))
+            .acquire_many_with_policy(std::slice::from_ref(&desired.device_id), &self.lock_policy)
             .await
         {
             Ok(guard) => guard,
@@ -606,9 +630,14 @@ fn failed_apply_phase(current: &TxPhase) -> TxPhase {
 impl UnderlayService for AriaUnderlayService {
     async fn initialize_underlay_site(
         &self,
-        _request: InitializeUnderlaySiteRequest,
+        request: InitializeUnderlaySiteRequest,
     ) -> UnderlayResult<InitializeUnderlaySiteResponse> {
-        Err(UnderlayError::UnsupportedTransactionStrategy)
+        UnderlaySiteInitializationService::new_with_secret_store(
+            self.inventory.clone(),
+            self.secret_store.clone(),
+        )
+        .initialize_site(request)
+        .await
     }
 
     async fn register_device(
@@ -743,16 +772,53 @@ impl UnderlayService for AriaUnderlayService {
 
     async fn run_drift_audit(
         &self,
-        _request: DriftAuditRequest,
+        request: DriftAuditRequest,
     ) -> UnderlayResult<DriftAuditResponse> {
-        Err(UnderlayError::UnsupportedTransactionStrategy)
+        let mut drifted_devices = Vec::new();
+
+        for device_id in request.device_ids {
+            let state = self.get_device_state(device_id.clone()).await?;
+            if !state.warnings.is_empty() {
+                self.inventory
+                    .set_state(&device_id, crate::device::DeviceLifecycleState::Drifted)?;
+                drifted_devices.push(device_id);
+            }
+        }
+
+        Ok(DriftAuditResponse { drifted_devices })
     }
 
     async fn force_unlock(
         &self,
-        _request: ForceUnlockRequest,
+        request: ForceUnlockRequest,
     ) -> UnderlayResult<ForceUnlockResponse> {
-        Err(UnderlayError::UnsupportedTransactionStrategy)
+        let managed = self.inventory.get(&request.device_id)?;
+        let mut client = AdapterClient::connect(managed.info.adapter_endpoint.clone()).await?;
+        let context = RequestContext {
+            request_id: request.request_id.clone(),
+            tx_id: String::new(),
+            trace_id: request
+                .trace_id
+                .clone()
+                .unwrap_or_else(|| request.request_id.clone()),
+            tenant_id: managed.info.tenant_id.clone(),
+            site_id: managed.info.site_id.clone(),
+        };
+        let outcome = client
+            .force_unlock(
+                &managed.info,
+                &context,
+                request.lock_owner,
+                request.reason,
+                request.break_glass_enabled,
+            )
+            .await?;
+
+        Ok(ForceUnlockResponse {
+            device_id: request.device_id,
+            unlocked: matches!(outcome.status, AdapterOperationStatus::Committed),
+            warnings: outcome.warnings,
+        })
     }
 }
 
