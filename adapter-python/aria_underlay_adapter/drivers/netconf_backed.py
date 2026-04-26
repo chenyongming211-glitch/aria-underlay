@@ -75,7 +75,7 @@ class NetconfBackedDriver:
 
     def prepare(self, request):
         try:
-            self._backend.prepare_candidate(request.desired_state)
+            self._backend.prepare_candidate(getattr(request, "desired_state", None))
         except AdapterError as error:
             return pb2.PrepareResponse(
                 result=pb2.AdapterResult(
