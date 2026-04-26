@@ -1064,6 +1064,7 @@ Sprint 7 目标：
 - 接入 RFC-002 event mapper。
 - 接入 RFC-015 audit mapper。
 - 第一阶段先落地本地结构化 telemetry 载体：`UnderlayEvent`、`AuditRecord`、`MetricSample`。
+- `UnderlayEvent` 提供从单设备 apply result 和 `DriftReport` 构造事件的统一入口，避免 service 层散落拼 telemetry 字段。
 
 验收：
 

@@ -1,5 +1,6 @@
-use aria_underlay::api::response::ApplyStatus;
+use aria_underlay::api::response::{ApplyStatus, DeviceApplyResult};
 use aria_underlay::model::DeviceId;
+use aria_underlay::state::drift::{DriftFinding, DriftReport, DriftType};
 use aria_underlay::telemetry::{
     AuditRecord, MetricName, Metrics, UnderlayEvent, UnderlayEventKind,
 };
@@ -59,6 +60,69 @@ fn audit_record_preserves_traceable_transaction_fields() {
     assert_eq!(record.tx_id.as_deref(), Some("tx-1"));
     assert_eq!(record.action, "transaction.completed");
     assert_eq!(record.result, "rolled_back");
+}
+
+#[test]
+fn device_apply_result_maps_to_traceable_transaction_event() {
+    let result = DeviceApplyResult {
+        device_id: DeviceId("leaf-a".into()),
+        changed: true,
+        status: ApplyStatus::InDoubt,
+        tx_id: Some("tx-1".into()),
+        strategy: Some(TransactionStrategy::CandidateCommit),
+        error_code: Some("TX_IN_DOUBT".into()),
+        error_message: Some("final state is unknown".into()),
+        warnings: vec!["manual recovery required".into()],
+    };
+
+    let event = UnderlayEvent::from_device_apply_result("req-1", "trace-1", &result)
+        .expect("changed apply result with tx_id should produce event");
+
+    assert_eq!(event.kind, UnderlayEventKind::UnderlayTransactionInDoubt);
+    assert_eq!(event.tx_id.as_deref(), Some("tx-1"));
+    assert_eq!(event.device_id.as_ref().map(|id| id.0.as_str()), Some("leaf-a"));
+    assert_eq!(event.result.as_deref(), Some("in_doubt"));
+    assert_eq!(event.error_code.as_deref(), Some("TX_IN_DOUBT"));
+    assert_eq!(event.fields.get("warning_count").map(String::as_str), Some("1"));
+}
+
+#[test]
+fn noop_apply_result_does_not_create_transaction_event() {
+    let result = DeviceApplyResult {
+        device_id: DeviceId("leaf-a".into()),
+        changed: false,
+        status: ApplyStatus::NoOpSuccess,
+        tx_id: None,
+        strategy: None,
+        error_code: None,
+        error_message: None,
+        warnings: Vec::new(),
+    };
+
+    assert!(UnderlayEvent::from_device_apply_result("req-1", "trace-1", &result).is_none());
+}
+
+#[test]
+fn drift_report_maps_to_drift_event() {
+    let report = DriftReport {
+        device_id: DeviceId("leaf-a".into()),
+        drift_detected: true,
+        findings: vec![DriftFinding {
+            drift_type: DriftType::MissingVlan,
+            path: "vlans.100".into(),
+            expected: Some("id=100".into()),
+            actual: None,
+        }],
+        warnings: Vec::new(),
+    };
+
+    let event = UnderlayEvent::drift_detected("req-1", "trace-1", &report);
+
+    assert_eq!(event.kind, UnderlayEventKind::UnderlayDriftDetected);
+    assert_eq!(event.device_id.as_ref().map(|id| id.0.as_str()), Some("leaf-a"));
+    assert_eq!(event.result.as_deref(), Some("drift_detected"));
+    assert_eq!(event.fields.get("finding_count").map(String::as_str), Some("1"));
+    assert_eq!(event.fields.get("first_path").map(String::as_str), Some("vlans.100"));
 }
 
 #[test]
