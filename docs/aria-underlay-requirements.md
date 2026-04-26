@@ -857,7 +857,7 @@ Aria Underlay 的性能优化不能绕过正确性校验。默认生产路径采
 | 模式 | 使用场景 | NoOp 判定 | 当前阶段 |
 | --- | --- | --- | --- |
 | `Strict` | 初次纳管、高风险变更、人工排障 | 总是 refresh touched subtree 后再 diff | 可选 |
-| `Normal` | 默认生产路径 | 从 desired 派生 scope，refresh touched subtree，normalize 后 diff | 默认 |
+| `Normal` | 默认生产路径 | preflight 使用 authoritative current，normalize 后 diff；post-commit verify 使用 touched scope | 默认 |
 | `Fast` | DriftAuditor 稳定运行且 shadow freshness 可信 | shadow 新鲜且 touched scope 未漂移时可快速 NoOp | 暂不启用 |
 
 `Normal v1` 的固定流程：
@@ -865,13 +865,15 @@ Aria Underlay 的性能优化不能绕过正确性校验。默认生产路径采
 ```text
 apply intent
   -> plan desired
-  -> derive StateScope from desired/change-set
-  -> GetCurrentState(scope)
-  -> normalize desired/current subset
+  -> GetCurrentState(full or authoritative owned set)
+  -> normalize desired/current
   -> diff
   -> empty diff -> NoOpSuccess
   -> non-empty diff -> transaction
+  -> post-commit verify(change-set scope)
 ```
+
+说明：在没有资源 ownership index / tombstone 之前，preflight 不能只按 desired scope 读取。否则 desired 中已经删除的 VLAN/interface 不会被读到，diff 无法生成 delete 操作。第一阶段为了正确性，preflight 保持全量或“Aria 已纳管资源集合”级别的权威读取；性能优化先落在 post-commit scoped verify。
 
 第一阶段不允许只依赖 shadow 返回 `NoOpSuccess`。shadow 只能作为预判器，不能作为最终裁决者。原因是客户现场可能存在网工绕过 Aria 的带外变更。
 
@@ -902,6 +904,7 @@ message StateScope {
 - `full = true` 表示全量状态读取。
 - `full = false` 且 `vlan_ids/interface_names` 非空表示 touched subtree。
 - `full = false` 且所有列表为空表示空 scope，不得被解释为全量读取。
+- preflight diff 只有在存在资源 ownership index 时才能安全使用 scoped current。
 - Adapter 不支持 scoped filter 时必须 fail-closed 或明确降级为 full refresh warning，不能静默返回假 scoped state。
 
 ### 11.3 Verify 必须 scoped

@@ -151,9 +151,12 @@ impl AriaUnderlayService {
         for desired in desired_states {
             let managed = self.inventory.get(&desired.device_id)?;
             let mut client = AdapterClient::connect(managed.info.adapter_endpoint.clone()).await?;
+            // Preflight diff needs an authoritative current view. If we scope this
+            // only to desired objects, absent desired resources cannot be detected
+            // as deletes. Post-commit verify is scoped by ChangeSet below.
             current_states.push(
                 client
-                    .get_current_state_for_desired(&managed.info, desired)
+                    .get_current_state(&managed.info)
                     .await?,
             );
         }
@@ -463,7 +466,12 @@ impl AriaUnderlayService {
             *journal_record = journal_record.clone().with_phase(TxPhase::Verifying);
             self.journal.put(journal_record)?;
             match client
-                .verify_with_context(&managed.info, &rpc_context, desired)
+                .verify_with_context_for_change_set(
+                    &managed.info,
+                    &rpc_context,
+                    desired,
+                    change_set,
+                )
                 .await
             {
                 Ok(verify)

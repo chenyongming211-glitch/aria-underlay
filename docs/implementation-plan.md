@@ -957,21 +957,23 @@ ConfirmedCommit、Verify、FinalConfirm 和 InDoubt 处理跑通
 | --- | --- | --- | --- |
 | 1 | Protobuf 增加 `StateScope` | `GetCurrentStateRequest.scope`、`VerifyRequest.scope` | Rust/Python proto 均生成通过 |
 | 2 | Rust 派生 scope | `DeviceDesiredState` / `ChangeSet` -> `StateScope` | VLAN ID、interface name 精确传递 |
-| 3 | Adapter scoped state | Python Adapter 接收 scope | 未实现真实 NETCONF filter 时 fail-closed 或明确 full-refresh warning |
-| 4 | scoped verify | Verify 只校验 touched subtree | verify 不做全量状态读取 |
+| 3 | Adapter scoped state | Python Adapter 接收 scope | 先用于 verify；preflight 在没有 ownership index 前保持 full/authoritative refresh |
+| 4 | scoped verify | Verify 按 `ChangeSet` scope 校验 touched subtree | verify 不做全量状态读取 |
 | 5 | 单次 edit-config | renderer 输出一次 candidate XML | 一次 prepare 只调用一次 `edit_config` |
 
 `Normal v1` 固定路径：
 
 ```text
 apply intent
-  -> derive StateScope
-  -> GetCurrentState(scope)
+  -> GetCurrentState(full or authoritative owned set)
   -> normalize
   -> diff
   -> empty diff -> NoOpSuccess
   -> non-empty diff -> transaction
+  -> Verify(change-set scope)
 ```
+
+注意：preflight diff 不能仅按 desired scope 读取 current。delete 类变更的对象已经不在 desired 中，若只查 desired scope 会漏掉待删除资源。后续引入资源 ownership index 后，preflight 可从“Aria 管理过的资源集合”派生更小 scope。
 
 第一阶段不启用只基于 shadow 的 Fast NoOp。Fast 模式依赖 DriftAuditor、shadow freshness 和漂移策略稳定后再实现。
 

@@ -2,10 +2,11 @@ use tonic::transport::Channel;
 
 use crate::adapter_client::mapper::{
     adapter_result_to_outcome, capability_from_proto, desired_state_to_proto, device_ref_from_info,
-    extract_adapter_errors, shadow_state_from_proto, state_scope_from_desired, strategy_to_proto,
-    AdapterOutcome,
+    extract_adapter_errors, shadow_state_from_proto, state_scope_from_change_set,
+    state_scope_from_desired, strategy_to_proto, AdapterOutcome,
 };
 use crate::device::{DeviceCapabilityProfile, DeviceInfo};
+use crate::engine::diff::ChangeSet;
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::proto::adapter::underlay_adapter_client::UnderlayAdapterClient;
 use crate::proto::adapter::{
@@ -301,13 +302,45 @@ impl AdapterClient {
         context: &RequestContext,
         desired_state: &DeviceDesiredState,
     ) -> UnderlayResult<AdapterOutcome> {
+        self.verify_with_context_and_scope(
+            device,
+            context,
+            desired_state,
+            state_scope_from_desired(desired_state),
+        )
+        .await
+    }
+
+    pub async fn verify_with_context_for_change_set(
+        &mut self,
+        device: &DeviceInfo,
+        context: &RequestContext,
+        desired_state: &DeviceDesiredState,
+        change_set: &ChangeSet,
+    ) -> UnderlayResult<AdapterOutcome> {
+        self.verify_with_context_and_scope(
+            device,
+            context,
+            desired_state,
+            state_scope_from_change_set(change_set),
+        )
+        .await
+    }
+
+    async fn verify_with_context_and_scope(
+        &mut self,
+        device: &DeviceInfo,
+        context: &RequestContext,
+        desired_state: &DeviceDesiredState,
+        scope: StateScope,
+    ) -> UnderlayResult<AdapterOutcome> {
         let response = self
             .inner
             .verify(VerifyRequest {
                 context: Some(context.clone()),
                 device: Some(device_ref_from_info(device)),
                 desired_state: Some(desired_state_to_proto(desired_state)),
-                scope: Some(state_scope_from_desired(desired_state)),
+                scope: Some(scope),
             })
             .await
             .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?

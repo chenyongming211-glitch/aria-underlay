@@ -1,7 +1,9 @@
 use aria_underlay::adapter_client::mapper::{
     adapter_result_to_outcome, capability_from_proto, desired_state_to_proto, extract_adapter_errors,
-    shadow_state_from_proto, state_scope_from_desired, AdapterOperationStatus,
+    shadow_state_from_proto, state_scope_from_change_set, state_scope_from_desired,
+    AdapterOperationStatus,
 };
+use aria_underlay::engine::diff::{ChangeOp, ChangeSet};
 use aria_underlay::model::{AdminState, DeviceId, InterfaceConfig, PortMode, VlanConfig};
 use aria_underlay::planner::device_plan::DeviceDesiredState;
 use aria_underlay::proto::adapter;
@@ -146,6 +148,51 @@ fn derives_state_scope_from_desired_state() {
     assert!(!scope.full);
     assert_eq!(scope.vlan_ids, vec![100]);
     assert_eq!(scope.interface_names, vec!["GE1/0/1"]);
+}
+
+#[test]
+fn derives_state_scope_from_change_set_including_deletes() {
+    let change_set = ChangeSet {
+        device_id: DeviceId("leaf-a".into()),
+        ops: vec![
+            ChangeOp::UpdateVlan {
+                before: VlanConfig {
+                    vlan_id: 100,
+                    name: Some("old".into()),
+                    description: None,
+                },
+                after: VlanConfig {
+                    vlan_id: 100,
+                    name: Some("new".into()),
+                    description: None,
+                },
+            },
+            ChangeOp::DeleteVlan { vlan_id: 200 },
+            ChangeOp::UpdateInterface {
+                before: Some(InterfaceConfig {
+                    name: "GE1/0/1".into(),
+                    admin_state: AdminState::Up,
+                    description: None,
+                    mode: PortMode::Access { vlan_id: 100 },
+                }),
+                after: InterfaceConfig {
+                    name: "GE1/0/1".into(),
+                    admin_state: AdminState::Up,
+                    description: Some("server".into()),
+                    mode: PortMode::Access { vlan_id: 100 },
+                },
+            },
+            ChangeOp::DeleteInterfaceConfig {
+                name: "GE1/0/2".into(),
+            },
+        ],
+    };
+
+    let scope = state_scope_from_change_set(&change_set);
+
+    assert!(!scope.full);
+    assert_eq!(scope.vlan_ids, vec![100, 200]);
+    assert_eq!(scope.interface_names, vec!["GE1/0/1", "GE1/0/2"]);
 }
 
 #[test]

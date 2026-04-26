@@ -1,4 +1,5 @@
 use crate::device::capability::BackendKind;
+use crate::engine::diff::{ChangeOp, ChangeSet};
 use crate::device::{DeviceCapabilityProfile, DeviceInfo};
 use crate::model::{AdminState, DeviceId, InterfaceConfig, PortMode, Vendor, VlanConfig};
 use crate::planner::device_plan::DeviceDesiredState;
@@ -107,6 +108,41 @@ pub fn state_scope_from_desired(desired: &DeviceDesiredState) -> adapter::StateS
             .map(|vlan_id| u32::from(*vlan_id))
             .collect(),
         interface_names: desired.interfaces.keys().cloned().collect(),
+    }
+}
+
+pub fn state_scope_from_change_set(change_set: &ChangeSet) -> adapter::StateScope {
+    let mut vlan_ids = std::collections::BTreeSet::new();
+    let mut interface_names = std::collections::BTreeSet::new();
+
+    for op in &change_set.ops {
+        match op {
+            ChangeOp::CreateVlan(vlan) => {
+                vlan_ids.insert(u32::from(vlan.vlan_id));
+            }
+            ChangeOp::UpdateVlan { before, after } => {
+                vlan_ids.insert(u32::from(before.vlan_id));
+                vlan_ids.insert(u32::from(after.vlan_id));
+            }
+            ChangeOp::DeleteVlan { vlan_id } => {
+                vlan_ids.insert(u32::from(*vlan_id));
+            }
+            ChangeOp::UpdateInterface { before, after } => {
+                if let Some(before) = before {
+                    interface_names.insert(before.name.clone());
+                }
+                interface_names.insert(after.name.clone());
+            }
+            ChangeOp::DeleteInterfaceConfig { name } => {
+                interface_names.insert(name.clone());
+            }
+        }
+    }
+
+    adapter::StateScope {
+        full: false,
+        vlan_ids: vlan_ids.into_iter().collect(),
+        interface_names: interface_names.into_iter().collect(),
     }
 }
 

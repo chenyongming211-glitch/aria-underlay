@@ -344,6 +344,15 @@ def _is_confirmed_commit_strategy(strategy) -> bool:
 
 def _verify_vlans(desired_state, observed: dict, scope=None) -> None:
     observed_by_id = {vlan["vlan_id"]: vlan for vlan in observed["vlans"]}
+    desired_by_id = {
+        _field(vlan, "vlan_id"): vlan
+        for vlan in getattr(desired_state, "vlans", [])
+    }
+    for vlan_id in _scoped_vlan_ids(scope):
+        if vlan_id not in desired_by_id and vlan_id in observed_by_id:
+            raise _verify_mismatch(
+                f"VLAN {vlan_id} should be absent but exists in observed scoped state",
+            )
     for desired_vlan in _desired_vlans_in_scope(desired_state, scope):
         vlan_id = _field(desired_vlan, "vlan_id")
         observed_vlan = observed_by_id.get(vlan_id)
@@ -367,6 +376,15 @@ def _verify_vlans(desired_state, observed: dict, scope=None) -> None:
 
 def _verify_interfaces(desired_state, observed: dict, scope=None) -> None:
     observed_by_name = {interface["name"]: interface for interface in observed["interfaces"]}
+    desired_by_name = {
+        _field(interface, "name"): interface
+        for interface in getattr(desired_state, "interfaces", [])
+    }
+    for name in _scoped_interface_names(scope):
+        if name not in desired_by_name and name in observed_by_name:
+            raise _verify_mismatch(
+                f"interface {name} should be absent but exists in observed scoped state",
+            )
     for desired_interface in _desired_interfaces_in_scope(desired_state, scope):
         name = _field(desired_interface, "name")
         observed_interface = observed_by_name.get(name)
@@ -404,6 +422,12 @@ def _desired_vlans_in_scope(desired_state, scope=None):
             yield vlan
 
 
+def _scoped_vlan_ids(scope=None):
+    if scope is None or getattr(scope, "full", False):
+        return []
+    return set(getattr(scope, "vlan_ids", []))
+
+
 def _desired_interfaces_in_scope(desired_state, scope=None):
     if (
         scope is not None
@@ -421,6 +445,12 @@ def _desired_interfaces_in_scope(desired_state, scope=None):
             or _field(interface, "name") in interface_names
         ):
             yield interface
+
+
+def _scoped_interface_names(scope=None):
+    if scope is None or getattr(scope, "full", False):
+        return []
+    return set(getattr(scope, "interface_names", []))
 
 
 def _field(message, name):

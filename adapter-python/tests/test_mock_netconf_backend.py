@@ -164,6 +164,20 @@ def test_verify_running_detects_vlan_mismatch():
     assert "VLAN 100 name mismatch" in exc.value.message
 
 
+def test_verify_running_detects_vlan_expected_absent():
+    desired = _desired_state_without_vlan()
+    scope = SimpleNamespace(full=False, vlan_ids=[100], interface_names=[])
+
+    with pytest.raises(AdapterError) as exc:
+        MockNetconfBackend("confirmed").verify_running(
+            desired_state=desired,
+            scope=scope,
+        )
+
+    assert exc.value.code == "VERIFY_MISMATCH"
+    assert "VLAN 100 should be absent" in exc.value.message
+
+
 def test_verify_running_detects_interface_mismatch():
     desired = _desired_state(interface_description="wrong")
     scope = SimpleNamespace(full=False, vlan_ids=[], interface_names=["GE1/0/1"])
@@ -176,6 +190,20 @@ def test_verify_running_detects_interface_mismatch():
 
     assert exc.value.code == "VERIFY_MISMATCH"
     assert "interface GE1/0/1 description mismatch" in exc.value.message
+
+
+def test_verify_running_detects_interface_expected_absent():
+    desired = _desired_state_without_interface()
+    scope = SimpleNamespace(full=False, vlan_ids=[], interface_names=["GE1/0/1"])
+
+    with pytest.raises(AdapterError) as exc:
+        MockNetconfBackend("confirmed").verify_running(
+            desired_state=desired,
+            scope=scope,
+        )
+
+    assert exc.value.code == "VERIFY_MISMATCH"
+    assert "interface GE1/0/1 should be absent" in exc.value.message
 
 
 def test_verify_running_empty_scope_is_noop():
@@ -210,3 +238,15 @@ def _desired_state(vlan_name="prod", interface_description="server uplink"):
             )
         ],
     )
+
+
+def _desired_state_without_vlan():
+    desired = _desired_state()
+    desired.vlans = []
+    return desired
+
+
+def _desired_state_without_interface():
+    desired = _desired_state()
+    desired.interfaces = []
+    return desired
