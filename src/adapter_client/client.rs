@@ -2,8 +2,8 @@ use tonic::transport::Channel;
 
 use crate::adapter_client::mapper::{
     adapter_result_to_outcome, capability_from_proto, desired_state_to_proto, device_ref_from_info,
-    extract_adapter_errors, shadow_state_from_proto, state_scope_from_change_set,
-    state_scope_from_desired, strategy_to_proto, AdapterOutcome,
+    extract_adapter_errors, recovery_action_to_proto, shadow_state_from_proto,
+    state_scope_from_change_set, state_scope_from_desired, strategy_to_proto, AdapterOutcome,
 };
 use crate::device::{DeviceCapabilityProfile, DeviceInfo};
 use crate::engine::diff::ChangeSet;
@@ -15,7 +15,7 @@ use crate::proto::adapter::{
     StateScope, VerifyRequest,
 };
 use crate::state::DeviceShadowState;
-use crate::tx::{TransactionStrategy, TxContext};
+use crate::tx::{RecoveryAction, TransactionStrategy, TxContext};
 use crate::{UnderlayError, UnderlayResult};
 
 #[derive(Debug, Clone)]
@@ -257,8 +257,10 @@ impl AdapterClient {
         &mut self,
         device: &DeviceInfo,
         tx: &TxContext,
+        strategy: Option<TransactionStrategy>,
+        action: RecoveryAction,
     ) -> UnderlayResult<AdapterOutcome> {
-        self.recover_with_context(device, &tx_request_context(device, tx))
+        self.recover_with_context(device, &tx_request_context(device, tx), strategy, action)
             .await
     }
 
@@ -266,12 +268,19 @@ impl AdapterClient {
         &mut self,
         device: &DeviceInfo,
         context: &RequestContext,
+        strategy: Option<TransactionStrategy>,
+        action: RecoveryAction,
     ) -> UnderlayResult<AdapterOutcome> {
         let response = self
             .inner
             .recover(RecoverRequest {
                 context: Some(context.clone()),
                 device: Some(device_ref_from_info(device)),
+                strategy: strategy
+                    .map(strategy_to_proto)
+                    .unwrap_or(crate::proto::adapter::TransactionStrategy::Unspecified)
+                    as i32,
+                action: recovery_action_to_proto(action) as i32,
             })
             .await
             .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?

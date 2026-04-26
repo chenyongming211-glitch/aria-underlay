@@ -380,8 +380,15 @@ Prepare(tx_id, device, desired_state)
 Commit(tx_id, device)
 Rollback(tx_id, device)
 Verify(tx_id, device)
-Recover(tx_id, device)
+Recover(tx_id, device, strategy, action)
 ```
+
+`Recover` 的 `strategy` 和 `action` 必须来自 Rust journal 侧的恢复决策：
+
+- `strategy` 表示原事务策略，用于区分 confirmed-commit cancel、candidate discard、running fallback 等后端行为。
+- `action` 表示恢复动作，例如丢弃未提交 candidate，或对 pending confirmed commit 执行 adapter recover。
+
+Adapter 不得只根据当前设备状态猜测恢复动作。对于 `candidate commit` 已进入 commit 阶段但无法证明 running 是否变更的情况，必须返回 `InDoubt`，不能假装回滚成功。
 
 ### 5.3 事务降级与补偿
 

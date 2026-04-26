@@ -101,6 +101,8 @@ class UnderlayAdapterService(pb2_grpc.UnderlayAdapterServicer):
             return driver.recover(
                 tx_id=request.context.tx_id if request.context else "",
                 device=request.device,
+                strategy=request.strategy,
+                action=request.action,
             )
         except AdapterError as error:
             return pb2.RecoverResponse(result=_failed_result(error))

@@ -14,4 +14,5 @@ pub use journal::{
     InMemoryTxJournalStore, JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase,
 };
 pub use lock_strategy::LockAcquisitionPolicy;
+pub use recovery::RecoveryAction;
 pub use strategy::{choose_strategy, CapabilityFlags, TransactionMode, TransactionStrategy};

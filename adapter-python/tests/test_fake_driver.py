@@ -172,7 +172,7 @@ def test_service_dry_run_calls_driver_and_fails_closed_when_unimplemented():
     assert response.result.errors[0].code == "NOT_IMPLEMENTED"
 
 
-def test_service_recover_calls_driver_and_fails_closed_when_unimplemented():
+def test_service_recover_requires_explicit_recovery_action():
     service = UnderlayAdapterService(_Registry(FakeDriver(profile="confirmed")))
     response = service.Recover(
         pb2.RecoverRequest(
@@ -183,7 +183,65 @@ def test_service_recover_calls_driver_and_fails_closed_when_unimplemented():
     )
 
     assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
-    assert response.result.errors[0].code == "NOT_IMPLEMENTED"
+    assert response.result.errors[0].code == "RECOVERY_ACTION_UNSUPPORTED"
+
+
+def test_service_recover_cancels_pending_confirmed_commit():
+    service = UnderlayAdapterService(_Registry(FakeDriver(profile="confirmed")))
+
+    prepare = service.Prepare(
+        pb2.PrepareRequest(
+            context=pb2.RequestContext(tx_id="tx-1"),
+            device=pb2.DeviceRef(device_id="leaf-a"),
+            desired_state=pb2.DesiredDeviceState(
+                device_id="leaf-a",
+                vlans=[pb2.VlanConfig(vlan_id=200, name="tenant-200")],
+            ),
+        ),
+        context=None,
+    )
+    assert prepare.result.status == pb2.ADAPTER_OPERATION_STATUS_PREPARED
+
+    commit = service.Commit(
+        pb2.CommitRequest(
+            context=pb2.RequestContext(tx_id="tx-1"),
+            device=pb2.DeviceRef(device_id="leaf-a"),
+            strategy=pb2.TRANSACTION_STRATEGY_CONFIRMED_COMMIT,
+            confirm_timeout_secs=120,
+        ),
+        context=None,
+    )
+    assert commit.result.status == pb2.ADAPTER_OPERATION_STATUS_CONFIRMED_COMMIT_PENDING
+
+    response = service.Recover(
+        pb2.RecoverRequest(
+            context=pb2.RequestContext(tx_id="tx-1"),
+            device=pb2.DeviceRef(device_id="leaf-a"),
+            strategy=pb2.TRANSACTION_STRATEGY_CONFIRMED_COMMIT,
+            action=pb2.RECOVERY_ACTION_ADAPTER_RECOVER,
+        ),
+        context=None,
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_ROLLED_BACK
+    assert response.result.changed is True
+    assert not response.result.errors
+
+
+def test_service_recover_marks_candidate_commit_recovery_in_doubt():
+    service = UnderlayAdapterService(_Registry(FakeDriver(profile="candidate_only")))
+    response = service.Recover(
+        pb2.RecoverRequest(
+            context=pb2.RequestContext(tx_id="tx-1"),
+            device=pb2.DeviceRef(device_id="leaf-a"),
+            strategy=pb2.TRANSACTION_STRATEGY_CANDIDATE_COMMIT,
+            action=pb2.RECOVERY_ACTION_ADAPTER_RECOVER,
+        ),
+        context=None,
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_IN_DOUBT
+    assert response.result.errors[0].code == "CANDIDATE_COMMIT_RECOVERY_IN_DOUBT"
 
 
 def test_service_commit_calls_driver():

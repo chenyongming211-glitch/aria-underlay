@@ -52,6 +52,12 @@ enum AdapterOperationStatus {
   ADAPTER_OPERATION_STATUS_CONFIRMED_COMMIT_PENDING = 7;
 }
 
+enum RecoveryAction {
+  RECOVERY_ACTION_UNSPECIFIED = 0;
+  RECOVERY_ACTION_DISCARD_PREPARED_CHANGES = 1;
+  RECOVERY_ACTION_ADAPTER_RECOVER = 2;
+}
+
 enum AdminState {
   ADMIN_STATE_UNSPECIFIED = 0;
   ADMIN_STATE_UP = 1;
@@ -246,6 +252,8 @@ message VerifyResponse {
 message RecoverRequest {
   RequestContext context = 1;
   DeviceRef device = 2;
+  TransactionStrategy strategy = 3;
+  RecoveryAction action = 4;
 }
 
 message RecoverResponse {

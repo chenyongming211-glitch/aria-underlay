@@ -5,7 +5,9 @@ use crate::model::{AdminState, DeviceId, InterfaceConfig, PortMode, Vendor, Vlan
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::proto::adapter;
 use crate::state::DeviceShadowState;
-use crate::tx::{choose_strategy, CapabilityFlags, TransactionMode, TransactionStrategy};
+use crate::tx::{
+    choose_strategy, CapabilityFlags, RecoveryAction, TransactionMode, TransactionStrategy,
+};
 use crate::{AdapterErrorDetail, UnderlayError, UnderlayResult};
 
 pub fn extract_adapter_errors(errors: Vec<adapter::AdapterError>) -> Option<UnderlayError> {
@@ -207,6 +209,18 @@ pub fn strategy_to_proto(strategy: TransactionStrategy) -> adapter::TransactionS
         }
         TransactionStrategy::BestEffortCli => adapter::TransactionStrategy::BestEffortCli,
         TransactionStrategy::Unsupported => adapter::TransactionStrategy::Unsupported,
+    }
+}
+
+pub fn recovery_action_to_proto(action: RecoveryAction) -> adapter::RecoveryAction {
+    match action {
+        RecoveryAction::DiscardPreparedChanges => {
+            adapter::RecoveryAction::DiscardPreparedChanges
+        }
+        RecoveryAction::AdapterRecover => adapter::RecoveryAction::AdapterRecover,
+        RecoveryAction::Noop | RecoveryAction::ManualIntervention => {
+            adapter::RecoveryAction::Unspecified
+        }
     }
 }
 

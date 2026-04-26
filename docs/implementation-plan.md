@@ -116,6 +116,13 @@ Python Adapter 可以进程无状态，但事务产物不能无状态。
 - prepared tx metadata。
 - backend result summary。
 
+恢复 RPC 不能只传 `tx_id`。Rust journal 是恢复决策的唯一权威来源，调用 Adapter `Recover` 时必须同时传：
+
+- `strategy`：原事务使用的下发策略，例如 confirmed-commit 或 candidate commit。
+- `action`：Rust 根据 journal phase 得出的恢复动作，例如 discard prepared changes 或 adapter recover。
+
+Adapter 只能执行该动作，不能自行推断最终事务语义。无法证明最终状态时必须返回 `InDoubt` 或结构化失败，不能返回成功。
+
 ### 2.4 Degraded Must Be Explicit
 
 任何非 candidate / confirmed-commit 路径都必须显式标记 degraded。
@@ -321,6 +328,13 @@ enum AdapterOperationStatus {
   ADAPTER_OPERATION_STATUS_ROLLED_BACK = 4;
   ADAPTER_OPERATION_STATUS_FAILED = 5;
   ADAPTER_OPERATION_STATUS_IN_DOUBT = 6;
+  ADAPTER_OPERATION_STATUS_CONFIRMED_COMMIT_PENDING = 7;
+}
+
+enum RecoveryAction {
+  RECOVERY_ACTION_UNSPECIFIED = 0;
+  RECOVERY_ACTION_DISCARD_PREPARED_CHANGES = 1;
+  RECOVERY_ACTION_ADAPTER_RECOVER = 2;
 }
 ```
 
@@ -392,6 +406,13 @@ message AdapterError {
   string normalized_error = 3;
   string raw_error_summary = 4;
   bool retryable = 5;
+}
+
+message RecoverRequest {
+  RequestContext context = 1;
+  DeviceRef device = 2;
+  TransactionStrategy strategy = 3;
+  RecoveryAction action = 4;
 }
 ```
 

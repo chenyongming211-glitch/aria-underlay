@@ -176,8 +176,68 @@ class NetconfBackedDriver:
             )
         )
 
-    def recover(self, tx_id, device):
-        raise NotImplementedError
+    def recover(self, tx_id, device, strategy=None, action=None):
+        if action == pb2.RECOVERY_ACTION_DISCARD_PREPARED_CHANGES:
+            rollback_strategy = pb2.TRANSACTION_STRATEGY_CANDIDATE_COMMIT
+        elif action == pb2.RECOVERY_ACTION_ADAPTER_RECOVER:
+            rollback_strategy = strategy
+        else:
+            return pb2.RecoverResponse(
+                result=pb2.AdapterResult(
+                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
+                    changed=False,
+                    errors=[
+                        AdapterError(
+                            code="RECOVERY_ACTION_UNSUPPORTED",
+                            message="recover request action is unsupported",
+                            normalized_error="unsupported recovery action",
+                            raw_error_summary=f"action={action!r}, strategy={strategy!r}",
+                            retryable=False,
+                        ).to_proto(pb2)
+                    ],
+                )
+            )
+
+        if (
+            action == pb2.RECOVERY_ACTION_ADAPTER_RECOVER
+            and strategy == pb2.TRANSACTION_STRATEGY_CANDIDATE_COMMIT
+        ):
+            return pb2.RecoverResponse(
+                result=pb2.AdapterResult(
+                    status=pb2.ADAPTER_OPERATION_STATUS_IN_DOUBT,
+                    changed=False,
+                    errors=[
+                        AdapterError(
+                            code="CANDIDATE_COMMIT_RECOVERY_IN_DOUBT",
+                            message=(
+                                "candidate commit recovery cannot prove whether "
+                                "running config already changed"
+                            ),
+                            normalized_error="candidate commit recovery in doubt",
+                            raw_error_summary=f"tx_id={tx_id or ''}",
+                            retryable=False,
+                        ).to_proto(pb2)
+                    ],
+                )
+            )
+
+        try:
+            self._backend.rollback_candidate(strategy=rollback_strategy, tx_id=tx_id)
+        except AdapterError as error:
+            return pb2.RecoverResponse(
+                result=pb2.AdapterResult(
+                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
+                    changed=False,
+                    errors=[error.to_proto(pb2)],
+                )
+            )
+
+        return pb2.RecoverResponse(
+            result=pb2.AdapterResult(
+                status=pb2.ADAPTER_OPERATION_STATUS_ROLLED_BACK,
+                changed=True,
+            )
+        )
 
     def force_unlock(self, device, lock_owner, reason):
         raise AdapterError(

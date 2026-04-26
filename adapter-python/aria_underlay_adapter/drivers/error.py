@@ -36,7 +36,7 @@ class AdapterErrorDriver:
     def verify(self, tx_id, device, desired_state, scope=None):
         return pb2.VerifyResponse(result=self._failed_result())
 
-    def recover(self, tx_id, device):
+    def recover(self, tx_id, device, strategy=None, action=None):
         return pb2.RecoverResponse(result=self._failed_result())
 
     def force_unlock(self, device, lock_owner, reason):

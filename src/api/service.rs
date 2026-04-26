@@ -640,7 +640,7 @@ impl AriaUnderlayService {
             let mut client = AdapterClient::connect(managed.info.adapter_endpoint.clone()).await?;
             let rpc_context = tx_request_context(&managed.info, &tx_context);
             let outcome = client
-                .recover_with_context(&managed.info, &rpc_context)
+                .recover_with_context(&managed.info, &rpc_context, record.strategy, action)
                 .await?;
             let phase = recover_phase_from_adapter_status(action, outcome.status);
             merged_phase = Some(merge_recovery_phase(merged_phase, phase));
