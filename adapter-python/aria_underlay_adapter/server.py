@@ -67,6 +67,7 @@ class UnderlayAdapterService(pb2_grpc.UnderlayAdapterServicer):
         return driver.commit(
             tx_id=request.context.tx_id if request.context else "",
             device=request.device,
+            strategy=request.strategy,
         )
 
     def Rollback(self, request, context):

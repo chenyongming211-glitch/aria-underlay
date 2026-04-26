@@ -185,7 +185,7 @@ class MockNetconfBackend:
             self.unlock_candidate()
             raise
 
-    def commit_candidate(self) -> None:
+    def commit_candidate(self, strategy=None, tx_id: str | None = None) -> None:
         self.get_capabilities()
         if self.profile == "commit_failed":
             raise AdapterError(

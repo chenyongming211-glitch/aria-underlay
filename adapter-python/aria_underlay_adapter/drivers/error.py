@@ -24,7 +24,7 @@ class AdapterErrorDriver:
     def prepare(self, request):
         return pb2.PrepareResponse(result=self._failed_result())
 
-    def commit(self, tx_id, device):
+    def commit(self, tx_id, device, strategy=None):
         return pb2.CommitResponse(result=self._failed_result())
 
     def rollback(self, tx_id, device):

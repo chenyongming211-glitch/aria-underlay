@@ -92,9 +92,9 @@ class NetconfBackedDriver:
             )
         )
 
-    def commit(self, tx_id, device):
+    def commit(self, tx_id, device, strategy=None):
         try:
-            self._backend.commit_candidate()
+            self._backend.commit_candidate(strategy=strategy, tx_id=tx_id)
         except AdapterError as error:
             return pb2.CommitResponse(
                 result=pb2.AdapterResult(

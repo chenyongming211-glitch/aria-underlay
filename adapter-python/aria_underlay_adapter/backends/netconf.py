@@ -16,6 +16,8 @@ CONFIRMED_COMMIT_10 = "urn:ietf:params:netconf:capability:confirmed-commit:1.0"
 CONFIRMED_COMMIT_11 = "urn:ietf:params:netconf:capability:confirmed-commit:1.1"
 ROLLBACK_ON_ERROR = "urn:ietf:params:netconf:capability:rollback-on-error:1.0"
 WRITABLE_RUNNING = "urn:ietf:params:netconf:capability:writable-running:1.0"
+TRANSACTION_STRATEGY_CONFIRMED_COMMIT = 1
+TRANSACTION_STRATEGY_CANDIDATE_COMMIT = 2
 
 
 class CandidateConfigRenderer(Protocol):
@@ -199,14 +201,40 @@ class NcclientNetconfBackend:
                 retryable=False,
             ) from exc
 
-    def commit_candidate(self) -> None:
-        raise AdapterError(
-            code="NETCONF_COMMIT_NOT_IMPLEMENTED",
-            message="real NETCONF commit is not implemented yet",
-            normalized_error="commit operation missing",
-            raw_error_summary="candidate commit lands after renderer and parser",
-            retryable=False,
-        )
+    def commit_candidate(self, strategy=None, tx_id: str | None = None) -> None:
+        if strategy == TRANSACTION_STRATEGY_CONFIRMED_COMMIT:
+            raise AdapterError(
+                code="NETCONF_CONFIRMED_COMMIT_NOT_IMPLEMENTED",
+                message="NETCONF confirmed-commit is not implemented yet",
+                normalized_error="confirmed commit operation missing",
+                raw_error_summary=(
+                    "confirmed-commit requires a distinct final-confirm phase before "
+                    "it can be enabled safely"
+                ),
+                retryable=False,
+            )
+
+        if strategy != TRANSACTION_STRATEGY_CANDIDATE_COMMIT:
+            raise AdapterError(
+                code="NETCONF_COMMIT_STRATEGY_UNSUPPORTED",
+                message="NETCONF commit strategy is unsupported",
+                normalized_error="unsupported commit strategy",
+                raw_error_summary=f"strategy={strategy!r}, tx_id={tx_id or ''}",
+                retryable=False,
+            )
+
+        try:
+            with self._connect() as session:
+                session.commit()
+        except AdapterError:
+            raise
+        except Exception as exc:
+            raise _adapter_operation_error(
+                code="NETCONF_COMMIT_FAILED",
+                message="NETCONF candidate commit failed",
+                exc=exc,
+                retryable=True,
+            ) from exc
 
     def rollback_candidate(self) -> None:
         raise AdapterError(

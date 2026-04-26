@@ -4,6 +4,8 @@ from aria_underlay_adapter.backends.netconf import (
     CONFIRMED_COMMIT_10,
     CONFIRMED_COMMIT_11,
     ROLLBACK_ON_ERROR,
+    TRANSACTION_STRATEGY_CANDIDATE_COMMIT,
+    TRANSACTION_STRATEGY_CONFIRMED_COMMIT,
     VALIDATE_10,
     VALIDATE_11,
     WRITABLE_RUNNING,
@@ -132,6 +134,67 @@ def test_prepare_candidate_discards_and_unlocks_when_renderer_returns_empty_conf
     ]
 
 
+def test_commit_candidate_commits_for_candidate_strategy():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    backend.commit_candidate(
+        strategy=TRANSACTION_STRATEGY_CANDIDATE_COMMIT,
+        tx_id="tx-1",
+    )
+
+    assert session.calls == [("commit",)]
+
+
+def test_commit_candidate_rejects_confirmed_commit_until_final_confirm_exists():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    try:
+        backend.commit_candidate(
+            strategy=TRANSACTION_STRATEGY_CONFIRMED_COMMIT,
+            tx_id="tx-1",
+        )
+    except AdapterError as error:
+        assert error.code == "NETCONF_CONFIRMED_COMMIT_NOT_IMPLEMENTED"
+    else:
+        raise AssertionError("confirmed commit must fail closed until final confirm exists")
+
+    assert session.calls == []
+
+
+def test_commit_candidate_requires_supported_strategy_before_touching_device():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    try:
+        backend.commit_candidate(strategy=None, tx_id="tx-1")
+    except AdapterError as error:
+        assert error.code == "NETCONF_COMMIT_STRATEGY_UNSUPPORTED"
+    else:
+        raise AssertionError("unknown commit strategy should fail closed")
+
+    assert session.calls == []
+
+
+def test_commit_candidate_maps_device_commit_failure():
+    session = _RecordingSession(fail_commit=True)
+    backend = _BackendWithSession(session)
+
+    try:
+        backend.commit_candidate(
+            strategy=TRANSACTION_STRATEGY_CANDIDATE_COMMIT,
+            tx_id="tx-1",
+        )
+    except AdapterError as error:
+        assert error.code == "NETCONF_COMMIT_FAILED"
+        assert error.retryable is True
+    else:
+        raise AssertionError("commit failure should fail closed")
+
+    assert session.calls == [("commit",)]
+
+
 class _BackendWithSession(NcclientNetconfBackend):
     def __init__(self, session, config_renderer=None):
         super().__init__(host="127.0.0.1", config_renderer=config_renderer)
@@ -142,9 +205,10 @@ class _BackendWithSession(NcclientNetconfBackend):
 
 
 class _RecordingSession:
-    def __init__(self, fail_lock=False):
+    def __init__(self, fail_lock=False, fail_commit=False):
         self.calls = []
         self.fail_lock = fail_lock
+        self.fail_commit = fail_commit
         self.server_capabilities = [BASE_10, CANDIDATE]
 
     def __enter__(self):
@@ -169,6 +233,11 @@ class _RecordingSession:
 
     def validate(self, source):
         self.calls.append(("validate", source))
+
+    def commit(self):
+        self.calls.append(("commit",))
+        if self.fail_commit:
+            raise RuntimeError("commit failed")
 
 
 class _StaticRenderer:
