@@ -947,6 +947,46 @@ ConfirmedCommit、Verify、FinalConfirm 和 InDoubt 处理跑通
 - Consistency：final confirm 前必须完成 desired subset verify。
 - Durability：confirmed commit 后进程崩溃，恢复流程能识别 pending / in-doubt。
 
+### 12.1 P0 正确性与性能优化任务
+
+在 Sprint 5 前后优先补齐 scoped state / scoped verify / 单次 edit-config。目标是在不牺牲正确性的前提下减少全量读取和重复 RPC。
+
+任务顺序：
+
+| 顺序 | 任务 | 交付物 | 验收 |
+| --- | --- | --- | --- |
+| 1 | Protobuf 增加 `StateScope` | `GetCurrentStateRequest.scope`、`VerifyRequest.scope` | Rust/Python proto 均生成通过 |
+| 2 | Rust 派生 scope | `DeviceDesiredState` / `ChangeSet` -> `StateScope` | VLAN ID、interface name 精确传递 |
+| 3 | Adapter scoped state | Python Adapter 接收 scope | 未实现真实 NETCONF filter 时 fail-closed 或明确 full-refresh warning |
+| 4 | scoped verify | Verify 只校验 touched subtree | verify 不做全量状态读取 |
+| 5 | 单次 edit-config | renderer 输出一次 candidate XML | 一次 prepare 只调用一次 `edit_config` |
+
+`Normal v1` 固定路径：
+
+```text
+apply intent
+  -> derive StateScope
+  -> GetCurrentState(scope)
+  -> normalize
+  -> diff
+  -> empty diff -> NoOpSuccess
+  -> non-empty diff -> transaction
+```
+
+第一阶段不启用只基于 shadow 的 Fast NoOp。Fast 模式依赖 DriftAuditor、shadow freshness 和漂移策略稳定后再实现。
+
+### 12.2 confirmed-commit 分层
+
+confirmed-commit 能力按恢复能力分层：
+
+| 策略 | 能力要求 | 处理 |
+| --- | --- | --- |
+| `ConfirmedCommitPersistent` | confirmed-commit:1.1 + persist-id | 生产首选，可跨 session confirm/cancel/recover |
+| `ConfirmedCommitSession` | confirmed-commit:1.0 | 可使用自动回滚窗口，但 session 断开后可能 InDoubt |
+| `CandidateCommit` | candidate + validate | 仅在允许降级时使用 |
+
+当前代码如果暂时只有统一 `ConfirmedCommit`，实现时必须至少保留 capability 字段，后续拆分策略枚举时不得破坏 journal 和 recovery 语义。
+
 ## 13. Sprint 6 详细任务
 
 Sprint 6 目标：

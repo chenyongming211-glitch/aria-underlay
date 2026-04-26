@@ -519,7 +519,8 @@ multi endpoint apply = batch orchestration of independent ACID endpoint transact
 
 ```rust
 pub enum TransactionStrategy {
-    ConfirmedCommit,
+    ConfirmedCommitPersistent,
+    ConfirmedCommitSession,
     CandidateCommit,
     RunningRollbackOnError,
     Unsupported,
@@ -529,8 +530,11 @@ pub enum TransactionStrategy {
 选择逻辑：
 
 ```text
-如果该 endpoint 支持 candidate + validate + confirmed-commit:
-    ConfirmedCommit
+如果该 endpoint 支持 candidate + validate + confirmed-commit:1.1 + persist-id:
+    ConfirmedCommitPersistent
+
+否则如果该 endpoint 支持 candidate + validate + confirmed-commit:1.0:
+    ConfirmedCommitSession
 
 否则如果调用方允许降级，且该 endpoint 支持 candidate + validate:
     CandidateCommit
@@ -550,9 +554,18 @@ StrictConfirmedCommit
 
 也就是不支持 confirmed commit 就失败。
 
+能力分级：
+
+| 策略 | 能力要求 | 恢复能力 |
+| --- | --- | --- |
+| `ConfirmedCommitPersistent` | candidate + validate + confirmed-commit:1.1 + persist-id | 支持跨 session confirm/cancel/recover |
+| `ConfirmedCommitSession` | candidate + validate + confirmed-commit:1.0 | 有自动回滚窗口，但 session 丢失后可能 InDoubt |
+| `CandidateCommit` | candidate + validate | commit 后补偿能力弱 |
+| `RunningRollbackOnError` | writable-running + rollback-on-error | 单次 edit-config 内尽量回滚 |
+
 ### 8.2 ConfirmedCommit
 
-这是生产首选。
+这是生产首选，其中 `ConfirmedCommitPersistent` 是最优形态。`ConfirmedCommitSession` 仍有自动回滚窗口价值，但恢复能力弱一档，必须在响应 warning / journal 中明确记录。
 
 流程：
 
@@ -847,6 +860,84 @@ AutoReconcile
 ```
 
 第一阶段默认 `ReportOnly`，关键资源可配置 `BlockNewTransaction`，不默认启用 `AutoReconcile`。
+
+### 10.3.1 Normal 模式的 scoped refresh
+
+性能优化不能跳过正确性校验。第一阶段默认 `Normal` 模式，但 `Normal` 模式不允许只依赖 shadow 返回 `NoOpSuccess`。
+
+`Normal v1` 固定流程：
+
+```text
+Receive intent
+  -> Plan DeviceDesiredState
+  -> Derive StateScope from desired/change-set
+  -> Adapter GetCurrentState(scope)
+  -> Normalize desired/current subset
+  -> Compute diff
+  -> empty diff -> NoOpSuccess
+  -> non-empty diff -> transaction
+```
+
+shadow 的定位：
+
+| shadow 判断 | 第一阶段行为 | 说明 |
+| --- | --- | --- |
+| no-op | 仍需 touched refresh 确认后才能 NoOp | 防止漏掉人工带外变更 |
+| changed | 第一阶段仍建议 scoped refresh 后 diff | 避免旧 shadow 影响 delete / replace / trunk rewrite |
+
+后续 `Normal v2` 可以按操作类型优化：
+
+```text
+shadow says no-op -> touched refresh confirms -> NoOpSuccess
+shadow says changed and only merge/upsert -> can skip preflight refresh
+shadow says changed and contains delete/replace/trunk rewrite -> must refresh before diff
+```
+
+`Fast` 模式暂不启用。它必须等待 DriftAuditor 实际运行、shadow freshness timestamp 可用、漂移策略稳定后再进入生产路径。
+
+### 10.3.2 StateScope
+
+`StateScope` 用于表达本次事务需要读取和验证的状态子树。
+
+建议 Protobuf：
+
+```protobuf
+message StateScope {
+  bool full = 1;
+  repeated uint32 vlan_ids = 2;
+  repeated string interface_names = 3;
+}
+```
+
+约束：
+
+- `full = true` 表示全量读取。
+- `full = false` 且列表非空表示 touched subtree。
+- `full = false` 且列表为空表示空 scope，不能被解释为全量读取。
+- scope 应从 `DeviceDesiredState` 或 `ChangeSet` 自动派生。
+- Adapter 如果不能执行 scoped filter，必须 fail-closed 或返回明确 full-refresh warning，不能假装完成 scoped refresh。
+
+### 10.3.3 Scoped Verify
+
+post-commit verify 只校验本次 touched scope：
+
+- touched VLAN 存在、删除或属性符合期望。
+- touched interface 的 description、admin state、access/trunk 符合期望。
+- trunk allowed VLAN 先归一化再比较。
+- 无法判断最终状态时返回失败或 `InDoubt`，不能返回成功。
+
+### 10.3.4 单次 edit-config 渲染
+
+同一 endpoint 的一次事务应合并为一次 `<edit-config>`：
+
+```text
+PrepareRequest
+  -> renderer renders one config XML from ChangeSet
+  -> edit_config(target="candidate", config=xml)
+  -> validate(candidate)
+```
+
+Renderer 最终应接收 `ChangeSet`，不是只接收完整 `DeviceDesiredState`。原因是 delete / update / replace 需要明确 operation 语义，desired state 只能表达最终状态。
 
 ### 10.4 Lock Acquisition Strategy
 
