@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from aria_underlay_adapter.backends.base import NetconfBackend
 from aria_underlay_adapter.errors import AdapterError
+from aria_underlay_adapter.renderers.registry import renderer_for_vendor
 
 try:
     from aria_underlay_adapter.proto import aria_underlay_adapter_pb2 as pb2
@@ -75,7 +78,8 @@ class NetconfBackedDriver:
 
     def prepare(self, request):
         try:
-            self._backend.prepare_candidate(getattr(request, "desired_state", None))
+            backend = self._backend_for_prepare(request)
+            backend.prepare_candidate(getattr(request, "desired_state", None))
         except AdapterError as error:
             return pb2.PrepareResponse(
                 result=pb2.AdapterResult(
@@ -91,6 +95,15 @@ class NetconfBackedDriver:
                 changed=True,
             )
         )
+
+    def _backend_for_prepare(self, request):
+        if not hasattr(self._backend, "config_renderer"):
+            return self._backend
+        if getattr(self._backend, "config_renderer", None) is not None:
+            return self._backend
+
+        renderer = renderer_for_vendor(request.device.vendor_hint)
+        return replace(self._backend, config_renderer=renderer)
 
     def commit(self, tx_id, device, strategy=None, confirm_timeout_secs=120):
         try:

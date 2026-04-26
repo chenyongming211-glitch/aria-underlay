@@ -68,12 +68,13 @@ def test_prepare_candidate_locks_discards_and_unlocks_when_renderer_missing():
     ]
 
 
-def test_netconf_driver_prepare_fails_closed_when_renderer_missing():
+def test_netconf_driver_prepare_requires_registered_renderer_before_device_lock():
     session = _RecordingSession()
     driver = NetconfBackedDriver(_BackendWithSession(session))
 
     response = driver.prepare(
         pb2.PrepareRequest(
+            device=pb2.DeviceRef(vendor_hint=pb2.VENDOR_UNKNOWN),
             desired_state=pb2.DesiredDeviceState(
                 device_id="leaf-a",
                 vlans=[pb2.VlanConfig(vlan_id=100, name="prod")],
@@ -83,12 +84,28 @@ def test_netconf_driver_prepare_fails_closed_when_renderer_missing():
 
     assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
     assert response.result.changed is False
-    assert response.result.errors[0].code == "NETCONF_RENDERER_NOT_CONFIGURED"
-    assert session.calls == [
-        ("lock", "candidate"),
-        ("discard_changes",),
-        ("unlock", "candidate"),
-    ]
+    assert response.result.errors[0].code == "RENDERER_VENDOR_UNSUPPORTED"
+    assert session.calls == []
+
+
+def test_netconf_driver_prepare_rejects_skeleton_renderer_before_device_lock():
+    session = _RecordingSession()
+    driver = NetconfBackedDriver(_BackendWithSession(session))
+
+    response = driver.prepare(
+        pb2.PrepareRequest(
+            device=pb2.DeviceRef(vendor_hint=pb2.VENDOR_HUAWEI),
+            desired_state=pb2.DesiredDeviceState(
+                device_id="leaf-a",
+                vlans=[pb2.VlanConfig(vlan_id=100, name="prod")],
+            ),
+        )
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
+    assert response.result.changed is False
+    assert response.result.errors[0].code == "RENDERER_NOT_PRODUCTION_READY"
+    assert session.calls == []
 
 
 def test_prepare_candidate_lock_failure_does_not_discard_or_unlock():
