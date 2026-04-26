@@ -380,8 +380,18 @@ impl AriaUnderlayService {
                 let mut warnings = degraded_strategy_warnings(strategy);
                 let shadow_state = DeviceShadowState::from_desired(desired, 0);
                 if let Err(err) = self.shadow_store.put(shadow_state) {
-                    let (_, message) = journal_error_fields(&err);
+                    let (code, message) = journal_error_fields(&err);
                     warnings.push(format!("shadow state update failed: {message}"));
+                    return DeviceApplyResult {
+                        device_id: desired.device_id.clone(),
+                        changed: true,
+                        status: ApplyStatus::SuccessWithWarning,
+                        tx_id: Some(tx_context.tx_id),
+                        strategy: Some(strategy),
+                        error_code: Some(code),
+                        error_message: Some(format!("shadow state stale after successful apply: {message}")),
+                        warnings,
+                    };
                 }
                 DeviceApplyResult {
                     device_id: desired.device_id.clone(),
@@ -404,7 +414,21 @@ impl AriaUnderlayService {
                 journal_record = journal_record
                     .with_phase(phase.clone())
                     .with_error(code.clone(), message.clone());
-                let _ = self.journal.put(&journal_record);
+                if let Err(journal_err) = self.journal.put(&journal_record) {
+                    let (_, journal_msg) = journal_error_fields(&journal_err);
+                    return DeviceApplyResult {
+                        device_id: desired.device_id.clone(),
+                        changed: true,
+                        status: apply_status_for_failed_phase(&phase),
+                        tx_id: Some(tx_context.tx_id),
+                        strategy: journal_record.strategy,
+                        error_code: Some(code),
+                        error_message: Some(format!(
+                            "{message}; journal write also failed: {journal_msg}"
+                        )),
+                        warnings: Vec::new(),
+                    };
+                }
                 DeviceApplyResult {
                     device_id: desired.device_id.clone(),
                     changed: true,
