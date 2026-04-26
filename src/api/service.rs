@@ -188,6 +188,15 @@ impl AriaUnderlayService {
         Ok(current_states)
     }
 
+    async fn fetch_device_state_from_adapter(
+        &self,
+        device_id: &DeviceId,
+    ) -> UnderlayResult<DeviceShadowState> {
+        let managed = self.inventory.get(device_id)?;
+        let mut client = AdapterClient::connect(managed.info.adapter_endpoint.clone()).await?;
+        client.get_current_state(&managed.info).await
+    }
+
     async fn dry_run_desired_states(
         &self,
         desired_states: &[DeviceDesiredState],
@@ -801,15 +810,6 @@ impl UnderlayService for AriaUnderlayService {
         let state = self.fetch_device_state_from_adapter(&device_id).await?;
         self.shadow_store.put(state.clone())?;
         Ok(state)
-    }
-
-    async fn fetch_device_state_from_adapter(
-        &self,
-        device_id: &DeviceId,
-    ) -> UnderlayResult<DeviceShadowState> {
-        let managed = self.inventory.get(&device_id)?;
-        let mut client = AdapterClient::connect(managed.info.adapter_endpoint.clone()).await?;
-        client.get_current_state(&managed.info).await
     }
 
     async fn recover_pending_transactions(&self) -> UnderlayResult<RecoveryReport> {
