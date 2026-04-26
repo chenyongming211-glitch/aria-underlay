@@ -123,7 +123,12 @@ impl AriaUnderlayService {
         self.journal.put(&journal_record)?;
 
         let strategy = match self
-            .apply_changed_endpoint_states(&desired_states, &plan, &tx_context)
+            .apply_changed_endpoint_states(
+                &desired_states,
+                &plan,
+                &tx_context,
+                &mut journal_record,
+            )
             .await
         {
             Ok(strategy) => {
@@ -193,6 +198,7 @@ impl AriaUnderlayService {
         desired_states: &[DeviceDesiredState],
         plan: &DryRunPlan,
         tx_context: &TxContext,
+        journal_record: &mut TxJournalRecord,
     ) -> UnderlayResult<TransactionStrategy> {
         let mut selected_strategy = None;
 
@@ -223,6 +229,8 @@ impl AriaUnderlayService {
                 return Err(UnderlayError::UnsupportedTransactionStrategy);
             }
             selected_strategy.get_or_insert(strategy);
+            *journal_record = journal_record.clone().with_strategy(strategy);
+            self.journal.put(journal_record)?;
 
             let prepare = client
                 .prepare_with_context(&managed.info, &rpc_context, desired)
@@ -235,13 +243,19 @@ impl AriaUnderlayService {
                     errors: Vec::new(),
                 });
             }
+            *journal_record = journal_record.clone().with_phase(TxPhase::Prepared);
+            self.journal.put(journal_record)?;
 
+            *journal_record = journal_record.clone().with_phase(TxPhase::Committing);
+            self.journal.put(journal_record)?;
             match client
                 .commit_with_context(&managed.info, &rpc_context, strategy)
                 .await
             {
                 Ok(commit) if commit.status == AdapterOperationStatus::Committed => {}
                 Ok(commit) => {
+                    *journal_record = journal_record.clone().with_phase(TxPhase::RollingBack);
+                    self.journal.put(journal_record)?;
                     let _ = client
                         .rollback_with_context(&managed.info, &rpc_context)
                         .await;
@@ -253,6 +267,8 @@ impl AriaUnderlayService {
                     });
                 }
                 Err(err) => {
+                    *journal_record = journal_record.clone().with_phase(TxPhase::RollingBack);
+                    self.journal.put(journal_record)?;
                     let _ = client
                         .rollback_with_context(&managed.info, &rpc_context)
                         .await;
@@ -260,6 +276,8 @@ impl AriaUnderlayService {
                 }
             }
 
+            *journal_record = journal_record.clone().with_phase(TxPhase::Verifying);
+            self.journal.put(journal_record)?;
             match client
                 .verify_with_context(&managed.info, &rpc_context, desired)
                 .await
@@ -270,6 +288,8 @@ impl AriaUnderlayService {
                         AdapterOperationStatus::NoChange | AdapterOperationStatus::Committed
                     ) => {}
                 Ok(verify) => {
+                    *journal_record = journal_record.clone().with_phase(TxPhase::RollingBack);
+                    self.journal.put(journal_record)?;
                     let _ = client
                         .rollback_with_context(&managed.info, &rpc_context)
                         .await;
@@ -281,6 +301,8 @@ impl AriaUnderlayService {
                     });
                 }
                 Err(err) => {
+                    *journal_record = journal_record.clone().with_phase(TxPhase::RollingBack);
+                    self.journal.put(journal_record)?;
                     let _ = client
                         .rollback_with_context(&managed.info, &rpc_context)
                         .await;
@@ -362,7 +384,12 @@ impl UnderlayService for AriaUnderlayService {
         self.journal.put(&journal_record)?;
 
         let strategy = match self
-            .apply_changed_endpoint_states(&desired_states, &plan, &tx_context)
+            .apply_changed_endpoint_states(
+                &desired_states,
+                &plan,
+                &tx_context,
+                &mut journal_record,
+            )
             .await
         {
             Ok(strategy) => {
@@ -420,7 +447,22 @@ impl UnderlayService for AriaUnderlayService {
     }
 
     async fn recover_pending_transactions(&self) -> UnderlayResult<RecoveryReport> {
-        Err(UnderlayError::UnsupportedTransactionStrategy)
+        let recoverable = self.journal.list_recoverable()?;
+        let in_doubt = recoverable
+            .iter()
+            .filter(|record| record.phase == TxPhase::InDoubt)
+            .count();
+        let tx_ids = recoverable
+            .iter()
+            .map(|record| record.tx_id.clone())
+            .collect::<Vec<_>>();
+
+        Ok(RecoveryReport {
+            recovered: 0,
+            in_doubt,
+            pending: recoverable.len(),
+            tx_ids,
+        })
     }
 
     async fn run_drift_audit(
