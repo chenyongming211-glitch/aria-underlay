@@ -159,6 +159,17 @@ pub fn shadow_state_from_proto(proto: adapter::ObservedDeviceState, warnings: Ve
                 errors: Vec::new(),
             }
         })?;
+        if vlan_id < 1 || vlan_id > 4094 {
+            return Err(UnderlayError::AdapterOperation {
+                code: "INVALID_VLAN_ID".into(),
+                message: format!(
+                    "adapter returned out-of-range VLAN id {} (valid: 1–4094)",
+                    vlan_id
+                ),
+                retryable: false,
+                errors: Vec::new(),
+            });
+        }
         vlans.insert(
             vlan_id,
             VlanConfig {

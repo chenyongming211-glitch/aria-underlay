@@ -63,6 +63,9 @@ class H3cRenderer:
 def _port_mode_element(mode: dict, namespace: str) -> XmlElement:
     kind = _field(mode, "kind")
     if kind in {"access", "ACCESS", 1}:
+        access_vlan = _optional_field(mode, "access_vlan")
+        if access_vlan is None:
+            raise ValueError("access_vlan is required for access port mode")
         return XmlElement(
             "access",
             namespace=namespace,
@@ -70,7 +73,7 @@ def _port_mode_element(mode: dict, namespace: str) -> XmlElement:
                 XmlElement(
                     "vlan-id",
                     namespace=namespace,
-                    children=[str(_optional_field(mode, "access_vlan"))],
+                    children=[str(access_vlan)],
                 )
             ],
         )

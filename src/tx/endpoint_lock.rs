@@ -63,6 +63,18 @@ impl EndpointLockTable {
 
             tokio::time::sleep(delay).await;
             delay = std::cmp::min(delay.saturating_mul(2), max_delay);
+            if policy.jitter {
+                // Add up to 25% jitter to prevent thundering herd under contention.
+                let jitter_ns = (delay.as_nanos() / 4) as u64;
+                let jitter = std::time::Duration::from_nanos(
+                    (std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .subsec_nanos() as u64)
+                        % jitter_ns.max(1),
+                );
+                delay = delay.saturating_add(jitter);
+            }
         }
     }
 
