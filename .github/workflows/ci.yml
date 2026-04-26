@@ -466,6 +466,10 @@ jobs:
             expected-error: "LOCK_FAILED"
           - fake-profile: "validate_failed"
             expected-error: "VALIDATE_FAILED"
+          - fake-profile: "commit_failed"
+            expected-error: "COMMIT_FAILED"
+          - fake-profile: "verify_failed"
+            expected-error: "VERIFY_FAILED"
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -79,6 +79,33 @@ class NcclientNetconfBackend:
             retryable=False,
         )
 
+    def commit_candidate(self) -> None:
+        raise AdapterError(
+            code="NETCONF_COMMIT_NOT_IMPLEMENTED",
+            message="real NETCONF commit is not implemented yet",
+            normalized_error="commit operation missing",
+            raw_error_summary="candidate commit lands after renderer and parser",
+            retryable=False,
+        )
+
+    def rollback_candidate(self) -> None:
+        raise AdapterError(
+            code="NETCONF_ROLLBACK_NOT_IMPLEMENTED",
+            message="real NETCONF rollback is not implemented yet",
+            normalized_error="rollback operation missing",
+            raw_error_summary="discard/cancel commit lands after transaction wiring",
+            retryable=False,
+        )
+
+    def verify_running(self, desired_state) -> None:
+        raise AdapterError(
+            code="NETCONF_VERIFY_NOT_IMPLEMENTED",
+            message="real NETCONF running verification is not implemented yet",
+            normalized_error="verification operation missing",
+            raw_error_summary="running parser lands after renderer and parser",
+            retryable=False,
+        )
+
 
 NetconfBackend = NcclientNetconfBackend
 

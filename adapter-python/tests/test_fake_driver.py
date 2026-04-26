@@ -58,6 +58,52 @@ def test_fake_driver_prepare_lock_failure():
     assert response.result.errors[0].code == "LOCK_FAILED"
 
 
+def test_fake_driver_commit_success():
+    response = FakeDriver(profile="confirmed").commit(tx_id="tx-1", device=_Device())
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_COMMITTED
+    assert response.result.changed is True
+    assert not response.result.errors
+
+
+def test_fake_driver_commit_failure():
+    response = FakeDriver(profile="commit_failed").commit(tx_id="tx-1", device=_Device())
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
+    assert response.result.errors[0].code == "COMMIT_FAILED"
+
+
+def test_fake_driver_verify_success():
+    response = FakeDriver(profile="confirmed").verify(
+        tx_id="tx-1",
+        device=_Device(),
+        desired_state=None,
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_NO_CHANGE
+    assert response.result.changed is False
+    assert not response.result.errors
+
+
+def test_fake_driver_verify_failure():
+    response = FakeDriver(profile="verify_failed").verify(
+        tx_id="tx-1",
+        device=_Device(),
+        desired_state=None,
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
+    assert response.result.errors[0].code == "VERIFY_FAILED"
+
+
+def test_fake_driver_rollback_success():
+    response = FakeDriver(profile="confirmed").rollback(tx_id="tx-1", device=_Device())
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_ROLLED_BACK
+    assert response.result.changed is True
+    assert not response.result.errors
+
+
 def test_invalid_port_mode_kind_returns_adapter_error():
     driver = FakeDriver(profile="confirmed")
 
@@ -83,3 +129,31 @@ def test_force_unlock_calls_driver_when_break_glass_enabled():
 
     assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
     assert response.result.errors[0].code == "NOT_IMPLEMENTED"
+
+
+def test_service_commit_calls_driver():
+    service = UnderlayAdapterService(_Registry(FakeDriver(profile="commit_failed")))
+    response = service.Commit(
+        pb2.CommitRequest(
+            context=pb2.RequestContext(tx_id="tx-1"),
+            device=pb2.DeviceRef(device_id="leaf-a"),
+        ),
+        context=None,
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
+    assert response.result.errors[0].code == "COMMIT_FAILED"
+
+
+def test_service_verify_calls_driver():
+    service = UnderlayAdapterService(_Registry(FakeDriver(profile="verify_failed")))
+    response = service.Verify(
+        pb2.VerifyRequest(
+            context=pb2.RequestContext(tx_id="tx-1"),
+            device=pb2.DeviceRef(device_id="leaf-a"),
+        ),
+        context=None,
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
+    assert response.result.errors[0].code == "VERIFY_FAILED"

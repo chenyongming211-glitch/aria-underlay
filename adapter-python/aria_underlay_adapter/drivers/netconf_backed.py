@@ -93,13 +93,61 @@ class NetconfBackedDriver:
         )
 
     def commit(self, tx_id, device):
-        raise NotImplementedError
+        try:
+            self._backend.commit_candidate()
+        except AdapterError as error:
+            return pb2.CommitResponse(
+                result=pb2.AdapterResult(
+                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
+                    changed=False,
+                    errors=[error.to_proto(pb2)],
+                )
+            )
+
+        return pb2.CommitResponse(
+            result=pb2.AdapterResult(
+                status=pb2.ADAPTER_OPERATION_STATUS_COMMITTED,
+                changed=True,
+            )
+        )
 
     def rollback(self, tx_id, device):
-        raise NotImplementedError
+        try:
+            self._backend.rollback_candidate()
+        except AdapterError as error:
+            return pb2.RollbackResponse(
+                result=pb2.AdapterResult(
+                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
+                    changed=False,
+                    errors=[error.to_proto(pb2)],
+                )
+            )
+
+        return pb2.RollbackResponse(
+            result=pb2.AdapterResult(
+                status=pb2.ADAPTER_OPERATION_STATUS_ROLLED_BACK,
+                changed=True,
+            )
+        )
 
     def verify(self, tx_id, device, desired_state):
-        raise NotImplementedError
+        try:
+            self._backend.verify_running(desired_state)
+        except AdapterError as error:
+            return pb2.VerifyResponse(
+                result=pb2.AdapterResult(
+                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
+                    changed=False,
+                    errors=[error.to_proto(pb2)],
+                )
+            )
+
+        return pb2.VerifyResponse(
+            result=pb2.AdapterResult(
+                status=pb2.ADAPTER_OPERATION_STATUS_NO_CHANGE,
+                changed=False,
+            )
+        )
 
     def recover(self, tx_id, device):
         raise NotImplementedError

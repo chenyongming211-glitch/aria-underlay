@@ -10,6 +10,8 @@ from aria_underlay_adapter.errors import AdapterError
         ("confirmed", True, True, ["netconf"]),
         ("lock_failed", True, True, ["netconf"]),
         ("validate_failed", True, True, ["netconf"]),
+        ("commit_failed", True, True, ["netconf"]),
+        ("verify_failed", True, True, ["netconf"]),
         ("candidate_only", True, False, ["netconf"]),
         ("running_only", False, False, ["netconf"]),
         ("cli_only", False, False, ["cli"]),
@@ -60,3 +62,17 @@ def test_validate_failed_profile_fails_prepare():
         MockNetconfBackend("validate_failed").prepare_candidate()
 
     assert exc.value.code == "VALIDATE_FAILED"
+
+
+def test_commit_failed_profile_fails_commit():
+    with pytest.raises(AdapterError) as exc:
+        MockNetconfBackend("commit_failed").commit_candidate()
+
+    assert exc.value.code == "COMMIT_FAILED"
+
+
+def test_verify_failed_profile_fails_verify():
+    with pytest.raises(AdapterError) as exc:
+        MockNetconfBackend("verify_failed").verify_running(desired_state=None)
+
+    assert exc.value.code == "VERIFY_FAILED"

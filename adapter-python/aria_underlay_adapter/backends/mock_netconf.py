@@ -18,7 +18,13 @@ class MockNetconfBackend:
         self.profile = profile
 
     def get_capabilities(self) -> BackendCapability:
-        if self.profile in {"confirmed", "lock_failed", "validate_failed"}:
+        if self.profile in {
+            "confirmed",
+            "lock_failed",
+            "validate_failed",
+            "commit_failed",
+            "verify_failed",
+        }:
             return BackendCapability(
                 model="fake-confirmed-switch",
                 os_version="fake-1.0",
@@ -178,3 +184,28 @@ class MockNetconfBackend:
         except Exception:
             self.unlock_candidate()
             raise
+
+    def commit_candidate(self) -> None:
+        self.get_capabilities()
+        if self.profile == "commit_failed":
+            raise AdapterError(
+                code="COMMIT_FAILED",
+                message="mock candidate commit failed",
+                normalized_error="candidate commit failed",
+                raw_error_summary="mock profile commit_failed",
+                retryable=True,
+            )
+
+    def rollback_candidate(self) -> None:
+        self.get_capabilities()
+
+    def verify_running(self, desired_state) -> None:
+        self.get_capabilities()
+        if self.profile == "verify_failed":
+            raise AdapterError(
+                code="VERIFY_FAILED",
+                message="mock running verification failed",
+                normalized_error="running verification failed",
+                raw_error_summary="mock profile verify_failed",
+                retryable=False,
+            )
