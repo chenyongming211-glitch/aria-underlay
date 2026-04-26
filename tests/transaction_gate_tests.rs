@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use aria_underlay::api::request::{ApplyDomainIntentRequest, ApplyOptions};
 use aria_underlay::api::response::ApplyStatus;
 use aria_underlay::api::AriaUnderlayService;
@@ -11,15 +10,14 @@ use aria_underlay::intent::{
     ManagementEndpointIntent, SwitchMemberIntent, UnderlayDomainIntent, UnderlayTopology,
 };
 use aria_underlay::model::{AdminState, DeviceId, DeviceRole, PortMode, Vendor};
-use aria_underlay::proto::adapter;
-use aria_underlay::proto::adapter::underlay_adapter_server::{
-    UnderlayAdapter, UnderlayAdapterServer,
-};
 use aria_underlay::state::drift::DriftPolicy;
 use aria_underlay::tx::{
     InMemoryTxJournalStore, TxContext, TxJournalRecord, TxJournalStore, TxPhase,
 };
-use tonic::{Request, Response, Status};
+
+mod common;
+
+use common::{failed_result, observed_access_state, start_test_adapter, TestAdapter};
 
 #[tokio::test]
 async fn apply_is_blocked_before_adapter_when_endpoint_has_in_doubt_transaction() {
@@ -244,21 +242,22 @@ fn inventory_with_endpoint_at(
 }
 
 async fn start_fake_adapter(failure_point: AdapterFailurePoint) -> String {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("test adapter listener should bind");
-    let addr = listener.local_addr().expect("test adapter addr should exist");
-    drop(listener);
-    tokio::spawn(async move {
-        tonic::transport::Server::builder()
-            .add_service(UnderlayAdapterServer::new(JournalPhaseFakeAdapter {
-                failure_point,
-            }))
-            .serve(addr)
-            .await
-            .expect("test adapter server should run");
-    });
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    format!("http://{addr}")
+    let mut adapter = TestAdapter {
+        current_state: Some(observed_access_state("stack-mgmt", 100)),
+        ..Default::default()
+    };
+    match failure_point {
+        AdapterFailurePoint::Prepare => {
+            adapter.prepare_result = failed_result("PREPARE_FAILED");
+        }
+        AdapterFailurePoint::Commit => {
+            adapter.commit_result = failed_result("COMMIT_FAILED");
+        }
+        AdapterFailurePoint::Verify => {
+            adapter.verify_result = failed_result("VERIFY_FAILED");
+        }
+    }
+    start_test_adapter(adapter).await
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -266,181 +265,4 @@ enum AdapterFailurePoint {
     Prepare,
     Commit,
     Verify,
-}
-
-#[derive(Debug)]
-struct JournalPhaseFakeAdapter {
-    failure_point: AdapterFailurePoint,
-}
-
-#[async_trait]
-impl UnderlayAdapter for JournalPhaseFakeAdapter {
-    async fn get_capabilities(
-        &self,
-        _request: Request<adapter::GetCapabilitiesRequest>,
-    ) -> Result<Response<adapter::GetCapabilitiesResponse>, Status> {
-        Ok(Response::new(adapter::GetCapabilitiesResponse {
-            capability: Some(adapter::DeviceCapability {
-                vendor: adapter::Vendor::Unknown as i32,
-                model: "journal-phase-fake".into(),
-                os_version: "test".into(),
-                raw_capabilities: Vec::new(),
-                supports_netconf: true,
-                supports_candidate: true,
-                supports_validate: true,
-                supports_confirmed_commit: true,
-                supports_persist_id: true,
-                supports_rollback_on_error: false,
-                supports_writable_running: false,
-                supported_backends: vec![adapter::BackendKind::Netconf as i32],
-            }),
-            warnings: Vec::new(),
-            errors: Vec::new(),
-        }))
-    }
-
-    async fn get_current_state(
-        &self,
-        _request: Request<adapter::GetCurrentStateRequest>,
-    ) -> Result<Response<adapter::GetCurrentStateResponse>, Status> {
-        Ok(Response::new(adapter::GetCurrentStateResponse {
-            state: Some(observed_state(100)),
-            warnings: Vec::new(),
-            errors: Vec::new(),
-        }))
-    }
-
-    async fn dry_run(
-        &self,
-        _request: Request<adapter::DryRunRequest>,
-    ) -> Result<Response<adapter::DryRunResponse>, Status> {
-        Ok(Response::new(adapter::DryRunResponse {
-            result: Some(result(adapter::AdapterOperationStatus::NoChange)),
-        }))
-    }
-
-    async fn prepare(
-        &self,
-        _request: Request<adapter::PrepareRequest>,
-    ) -> Result<Response<adapter::PrepareResponse>, Status> {
-        Ok(Response::new(adapter::PrepareResponse {
-            result: Some(if self.failure_point == AdapterFailurePoint::Prepare {
-                failed_result("PREPARE_FAILED")
-            } else {
-                result(adapter::AdapterOperationStatus::Prepared)
-            }),
-        }))
-    }
-
-    async fn commit(
-        &self,
-        _request: Request<adapter::CommitRequest>,
-    ) -> Result<Response<adapter::CommitResponse>, Status> {
-        Ok(Response::new(adapter::CommitResponse {
-            result: Some(if self.failure_point == AdapterFailurePoint::Commit {
-                failed_result("COMMIT_FAILED")
-            } else {
-                result(adapter::AdapterOperationStatus::ConfirmedCommitPending)
-            }),
-        }))
-    }
-
-    async fn final_confirm(
-        &self,
-        _request: Request<adapter::FinalConfirmRequest>,
-    ) -> Result<Response<adapter::FinalConfirmResponse>, Status> {
-        Ok(Response::new(adapter::FinalConfirmResponse {
-            result: Some(result(adapter::AdapterOperationStatus::Committed)),
-        }))
-    }
-
-    async fn rollback(
-        &self,
-        _request: Request<adapter::RollbackRequest>,
-    ) -> Result<Response<adapter::RollbackResponse>, Status> {
-        Ok(Response::new(adapter::RollbackResponse {
-            result: Some(result(adapter::AdapterOperationStatus::RolledBack)),
-        }))
-    }
-
-    async fn verify(
-        &self,
-        _request: Request<adapter::VerifyRequest>,
-    ) -> Result<Response<adapter::VerifyResponse>, Status> {
-        Ok(Response::new(adapter::VerifyResponse {
-            result: Some(if self.failure_point == AdapterFailurePoint::Verify {
-                failed_result("VERIFY_FAILED")
-            } else {
-                result(adapter::AdapterOperationStatus::Committed)
-            }),
-        }))
-    }
-
-    async fn recover(
-        &self,
-        _request: Request<adapter::RecoverRequest>,
-    ) -> Result<Response<adapter::RecoverResponse>, Status> {
-        Ok(Response::new(adapter::RecoverResponse {
-            result: Some(result(adapter::AdapterOperationStatus::NoChange)),
-        }))
-    }
-
-    async fn force_unlock(
-        &self,
-        _request: Request<adapter::ForceUnlockRequest>,
-    ) -> Result<Response<adapter::ForceUnlockResponse>, Status> {
-        Ok(Response::new(adapter::ForceUnlockResponse {
-            result: Some(result(adapter::AdapterOperationStatus::Committed)),
-        }))
-    }
-}
-
-fn result(status: adapter::AdapterOperationStatus) -> adapter::AdapterResult {
-    adapter::AdapterResult {
-        status: status as i32,
-        changed: true,
-        warnings: Vec::new(),
-        errors: Vec::new(),
-        rollback_artifact: None,
-        normalized_state: None,
-    }
-}
-
-fn failed_result(code: &str) -> adapter::AdapterResult {
-    adapter::AdapterResult {
-        status: adapter::AdapterOperationStatus::Failed as i32,
-        changed: false,
-        warnings: Vec::new(),
-        errors: vec![adapter::AdapterError {
-            code: code.into(),
-            message: format!("{code} for test adapter"),
-            normalized_error: code.into(),
-            raw_error_summary: code.into(),
-            retryable: false,
-        }],
-        rollback_artifact: None,
-        normalized_state: None,
-    }
-}
-
-fn observed_state(vlan_id: u32) -> adapter::ObservedDeviceState {
-    adapter::ObservedDeviceState {
-        device_id: "stack-mgmt".into(),
-        vlans: vec![adapter::VlanConfig {
-            vlan_id,
-            name: Some("prod".into()),
-            description: None,
-        }],
-        interfaces: vec![adapter::InterfaceConfig {
-            name: "GE1/0/1".into(),
-            admin_state: adapter::AdminState::Up as i32,
-            description: None,
-            mode: Some(adapter::PortMode {
-                kind: adapter::PortModeKind::Access as i32,
-                access_vlan: Some(vlan_id),
-                native_vlan: None,
-                allowed_vlans: Vec::new(),
-            }),
-        }],
-    }
 }

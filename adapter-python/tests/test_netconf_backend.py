@@ -13,7 +13,9 @@ from aria_underlay_adapter.backends.netconf import (
     NetconfBackend,
     capability_from_raw,
 )
+from aria_underlay_adapter.drivers.netconf_backed import NetconfBackedDriver
 from aria_underlay_adapter.errors import AdapterError
+from aria_underlay_adapter.proto import aria_underlay_adapter_pb2 as pb2
 from aria_underlay_adapter.renderers.huawei import HuaweiRenderer
 
 
@@ -59,6 +61,29 @@ def test_prepare_candidate_locks_discards_and_unlocks_when_renderer_missing():
     else:
         raise AssertionError("prepare should fail closed until renderer is configured")
 
+    assert session.calls == [
+        ("lock", "candidate"),
+        ("discard_changes",),
+        ("unlock", "candidate"),
+    ]
+
+
+def test_netconf_driver_prepare_fails_closed_when_renderer_missing():
+    session = _RecordingSession()
+    driver = NetconfBackedDriver(_BackendWithSession(session))
+
+    response = driver.prepare(
+        pb2.PrepareRequest(
+            desired_state=pb2.DesiredDeviceState(
+                device_id="leaf-a",
+                vlans=[pb2.VlanConfig(vlan_id=100, name="prod")],
+            )
+        )
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
+    assert response.result.changed is False
+    assert response.result.errors[0].code == "NETCONF_RENDERER_NOT_CONFIGURED"
     assert session.calls == [
         ("lock", "candidate"),
         ("discard_changes",),
