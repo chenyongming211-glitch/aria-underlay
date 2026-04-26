@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use crate::adapter_client::mapper::AdapterOperationStatus;
-use crate::adapter_client::AdapterClient;
+use crate::adapter_client::{tx_request_context, AdapterClient};
 use crate::api::force_unlock::{ForceUnlockRequest, ForceUnlockResponse};
 use crate::api::request::{
     ApplyDomainIntentRequest, ApplyIntentRequest, DriftAuditRequest, RefreshStateRequest,
@@ -23,7 +23,7 @@ use crate::planner::device_plan::{plan_switch_pair, DeviceDesiredState};
 use crate::planner::domain_plan::plan_underlay_domain;
 use crate::state::DeviceShadowState;
 use crate::tx::recovery::RecoveryReport;
-use crate::tx::TransactionStrategy;
+use crate::tx::{TransactionStrategy, TxContext};
 use crate::{UnderlayError, UnderlayResult};
 
 #[derive(Debug, Clone)]
@@ -55,17 +55,18 @@ impl AriaUnderlayService {
         &self,
         request: ApplyDomainIntentRequest,
     ) -> UnderlayResult<ApplyIntentResponse> {
+        let request_id = request.request_id.clone();
         let trace_id = request
             .trace_id
             .clone()
-            .unwrap_or_else(|| request.request_id.clone());
+            .unwrap_or_else(|| request_id.clone());
         let desired_states = plan_underlay_domain(&request.intent)?;
         let plan = self.dry_run_desired_states(&desired_states).await?;
         let device_results = device_results_from_plan(&plan);
 
         if plan.is_noop() {
             return Ok(ApplyIntentResponse {
-                request_id: request.request_id,
+                request_id,
                 trace_id,
                 tx_id: None,
                 status: ApplyStatus::NoOpSuccess,
@@ -75,13 +76,14 @@ impl AriaUnderlayService {
             });
         }
 
+        let tx_context = TxContext::new(request_id.clone(), trace_id.clone());
         let strategy = self
-            .apply_changed_endpoint_states(&desired_states, &plan)
+            .apply_changed_endpoint_states(&desired_states, &plan, &tx_context)
             .await?;
         Ok(ApplyIntentResponse {
-            request_id: request.request_id,
+            request_id,
             trace_id,
-            tx_id: None,
+            tx_id: Some(tx_context.tx_id),
             status: ApplyStatus::Success,
             strategy: Some(strategy),
             device_results,
@@ -128,6 +130,7 @@ impl AriaUnderlayService {
         &self,
         desired_states: &[DeviceDesiredState],
         plan: &DryRunPlan,
+        tx_context: &TxContext,
     ) -> UnderlayResult<TransactionStrategy> {
         let mut selected_strategy = None;
 
@@ -148,6 +151,7 @@ impl AriaUnderlayService {
 
             let managed = self.inventory.get(&desired.device_id)?;
             let mut client = AdapterClient::connect(managed.info.adapter_endpoint.clone()).await?;
+            let rpc_context = tx_request_context(&managed.info, tx_context);
             let capability = match managed.capability {
                 Some(capability) => capability,
                 None => client.get_capabilities(&managed.info).await?,
@@ -158,7 +162,9 @@ impl AriaUnderlayService {
             }
             selected_strategy.get_or_insert(strategy);
 
-            let prepare = client.prepare(&managed.info, desired).await?;
+            let prepare = client
+                .prepare_with_context(&managed.info, &rpc_context, desired)
+                .await?;
             if prepare.status != AdapterOperationStatus::Prepared {
                 return Err(UnderlayError::AdapterOperation {
                     code: "UNEXPECTED_PREPARE_STATUS".into(),
@@ -168,10 +174,15 @@ impl AriaUnderlayService {
                 });
             }
 
-            match client.commit(&managed.info, strategy).await {
+            match client
+                .commit_with_context(&managed.info, &rpc_context, strategy)
+                .await
+            {
                 Ok(commit) if commit.status == AdapterOperationStatus::Committed => {}
                 Ok(commit) => {
-                    let _ = client.rollback(&managed.info).await;
+                    let _ = client
+                        .rollback_with_context(&managed.info, &rpc_context)
+                        .await;
                     return Err(UnderlayError::AdapterOperation {
                         code: "UNEXPECTED_COMMIT_STATUS".into(),
                         message: format!("adapter returned commit status {:?}", commit.status),
@@ -180,19 +191,26 @@ impl AriaUnderlayService {
                     });
                 }
                 Err(err) => {
-                    let _ = client.rollback(&managed.info).await;
+                    let _ = client
+                        .rollback_with_context(&managed.info, &rpc_context)
+                        .await;
                     return Err(err);
                 }
             }
 
-            match client.verify(&managed.info, desired).await {
+            match client
+                .verify_with_context(&managed.info, &rpc_context, desired)
+                .await
+            {
                 Ok(verify)
                     if matches!(
                         verify.status,
                         AdapterOperationStatus::NoChange | AdapterOperationStatus::Committed
                     ) => {}
                 Ok(verify) => {
-                    let _ = client.rollback(&managed.info).await;
+                    let _ = client
+                        .rollback_with_context(&managed.info, &rpc_context)
+                        .await;
                     return Err(UnderlayError::AdapterOperation {
                         code: "UNEXPECTED_VERIFY_STATUS".into(),
                         message: format!("adapter returned verify status {:?}", verify.status),
@@ -201,7 +219,9 @@ impl AriaUnderlayService {
                     });
                 }
                 Err(err) => {
-                    let _ = client.rollback(&managed.info).await;
+                    let _ = client
+                        .rollback_with_context(&managed.info, &rpc_context)
+                        .await;
                     return Err(err);
                 }
             }
@@ -245,17 +265,18 @@ impl UnderlayService for AriaUnderlayService {
         request: ApplyIntentRequest,
     ) -> UnderlayResult<ApplyIntentResponse> {
         validate_switch_pair_intent(&request.intent)?;
+        let request_id = request.request_id.clone();
         let trace_id = request
             .trace_id
             .clone()
-            .unwrap_or_else(|| request.request_id.clone());
+            .unwrap_or_else(|| request_id.clone());
         let desired_states = plan_switch_pair(&request.intent);
         let plan = self.dry_run_desired_states(&desired_states).await?;
         let device_results = device_results_from_plan(&plan);
 
         if plan.is_noop() {
             return Ok(ApplyIntentResponse {
-                request_id: request.request_id,
+                request_id,
                 trace_id,
                 tx_id: None,
                 status: ApplyStatus::NoOpSuccess,
@@ -265,13 +286,14 @@ impl UnderlayService for AriaUnderlayService {
             });
         }
 
+        let tx_context = TxContext::new(request_id.clone(), trace_id.clone());
         let strategy = self
-            .apply_changed_endpoint_states(&desired_states, &plan)
+            .apply_changed_endpoint_states(&desired_states, &plan, &tx_context)
             .await?;
         Ok(ApplyIntentResponse {
-            request_id: request.request_id,
+            request_id,
             trace_id,
-            tx_id: None,
+            tx_id: Some(tx_context.tx_id),
             status: ApplyStatus::Success,
             strategy: Some(strategy),
             device_results,

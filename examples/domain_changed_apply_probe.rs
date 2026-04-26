@@ -45,6 +45,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if response.status != ApplyStatus::Success {
         return Err(format!("expected Success, got {:?}", response.status).into());
     }
+    if response.tx_id.as_deref().unwrap_or_default().is_empty() {
+        return Err("expected changed apply response to include tx_id".into());
+    }
     if response.strategy != Some(TransactionStrategy::ConfirmedCommit) {
         return Err(format!(
             "expected ConfirmedCommit strategy, got {:?}",

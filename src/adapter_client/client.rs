@@ -12,7 +12,7 @@ use crate::proto::adapter::{
     RollbackRequest, VerifyRequest,
 };
 use crate::state::DeviceShadowState;
-use crate::tx::TransactionStrategy;
+use crate::tx::{TransactionStrategy, TxContext};
 use crate::{UnderlayError, UnderlayResult};
 
 #[derive(Debug, Clone)]
@@ -99,10 +99,20 @@ impl AdapterClient {
         device: &DeviceInfo,
         desired_state: &DeviceDesiredState,
     ) -> UnderlayResult<AdapterOutcome> {
+        self.prepare_with_context(device, &request_context(device), desired_state)
+            .await
+    }
+
+    pub async fn prepare_with_context(
+        &mut self,
+        device: &DeviceInfo,
+        context: &RequestContext,
+        desired_state: &DeviceDesiredState,
+    ) -> UnderlayResult<AdapterOutcome> {
         let response = self
             .inner
             .prepare(PrepareRequest {
-                context: Some(request_context(device)),
+                context: Some(context.clone()),
                 device: Some(device_ref_from_info(device)),
                 desired_state: Some(desired_state_to_proto(desired_state)),
             })
@@ -125,10 +135,20 @@ impl AdapterClient {
         device: &DeviceInfo,
         strategy: TransactionStrategy,
     ) -> UnderlayResult<AdapterOutcome> {
+        self.commit_with_context(device, &request_context(device), strategy)
+            .await
+    }
+
+    pub async fn commit_with_context(
+        &mut self,
+        device: &DeviceInfo,
+        context: &RequestContext,
+        strategy: TransactionStrategy,
+    ) -> UnderlayResult<AdapterOutcome> {
         let response = self
             .inner
             .commit(CommitRequest {
-                context: Some(request_context(device)),
+                context: Some(context.clone()),
                 device: Some(device_ref_from_info(device)),
                 strategy: strategy_to_proto(strategy) as i32,
             })
@@ -147,10 +167,18 @@ impl AdapterClient {
     }
 
     pub async fn rollback(&mut self, device: &DeviceInfo) -> UnderlayResult<AdapterOutcome> {
+        self.rollback_with_context(device, &request_context(device)).await
+    }
+
+    pub async fn rollback_with_context(
+        &mut self,
+        device: &DeviceInfo,
+        context: &RequestContext,
+    ) -> UnderlayResult<AdapterOutcome> {
         let response = self
             .inner
             .rollback(RollbackRequest {
-                context: Some(request_context(device)),
+                context: Some(context.clone()),
                 device: Some(device_ref_from_info(device)),
             })
             .await
@@ -172,10 +200,20 @@ impl AdapterClient {
         device: &DeviceInfo,
         desired_state: &DeviceDesiredState,
     ) -> UnderlayResult<AdapterOutcome> {
+        self.verify_with_context(device, &request_context(device), desired_state)
+            .await
+    }
+
+    pub async fn verify_with_context(
+        &mut self,
+        device: &DeviceInfo,
+        context: &RequestContext,
+        desired_state: &DeviceDesiredState,
+    ) -> UnderlayResult<AdapterOutcome> {
         let response = self
             .inner
             .verify(VerifyRequest {
-                context: Some(request_context(device)),
+                context: Some(context.clone()),
                 device: Some(device_ref_from_info(device)),
                 desired_state: Some(desired_state_to_proto(desired_state)),
             })
@@ -191,6 +229,16 @@ impl AdapterClient {
         })?;
 
         adapter_result_to_outcome(result)
+    }
+}
+
+pub fn tx_request_context(device: &DeviceInfo, tx: &TxContext) -> RequestContext {
+    RequestContext {
+        request_id: tx.request_id.clone(),
+        tx_id: tx.tx_id.clone(),
+        trace_id: tx.trace_id.clone(),
+        tenant_id: device.tenant_id.clone(),
+        site_id: device.site_id.clone(),
     }
 }
 
