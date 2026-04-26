@@ -498,6 +498,23 @@ multi endpoint apply = batch orchestration of independent ACID endpoint transact
 - 每新增一种降级策略，必须说明它满足哪些 ACID 能力，削弱了哪些能力。
 - 任何 adapter 返回的成功，都必须经过 Rust 主控的状态机确认后才能变成最终成功。
 
+生产级红线要求见 [Aria Underlay 物理管控需求说明 - 生产级红线要求 Checklist](./aria-underlay-requirements.md#501-生产级红线要求-checklist)。
+
+开发时必须同时关注：
+
+| 红线 | 开发含义 |
+| --- | --- |
+| 幂等性 | refresh / normalize / diff / no-op 必须先于下发动作 |
+| Fail-closed | 未实现的 driver / renderer / adapter 方法必须报错，不允许假成功 |
+| Capability 驱动 | 事务策略必须来自 capability，不允许硬编码默认强事务 |
+| Drift 检测 | 事务前 touched subtree refresh 与后台巡检都要保留 |
+| Recovery 可恢复 | journal、artifact、confirmed-commit 上下文必须能支撑重启恢复 |
+| InDoubt 严格处理 | 无法判断最终状态时必须阻断后续写事务并等待人工处置 |
+| 凭据安全 | 所有日志、journal、audit 只允许保存 `secret_ref` 和脱敏信息 |
+| 可观测性 | 每个事务 phase 和 adapter RPC 都必须可追踪、可审计 |
+| 测试优先 | mock adapter 必须覆盖成功、失败、超时、崩溃、InDoubt |
+| Isolation / 并发控制 | 同一 endpoint 单 writer，Rust 本地锁和设备侧 lock 缺一不可 |
+
 ### 8.1 策略分级
 
 ```rust

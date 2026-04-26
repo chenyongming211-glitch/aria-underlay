@@ -263,6 +263,39 @@ ACID 在本项目中的具体含义如下。
 
 只有当单 endpoint 下发在成功、失败、超时、进程崩溃、session 中断、设备返回异常等路径下都满足上述 ACID 约束，才允许认为配置下发能力完成。
 
+### 5.0.1 生产级红线要求 Checklist
+
+以下要求是 `aria-underlay` 的开发红线。任何功能如果违反这些要求，即使单个 RPC 或单个测试看起来成功，也不能视为生产可用。
+
+总原则：
+
+```text
+Aria Underlay 的事务承诺以单个 management endpoint 为边界。
+堆叠单 IP 是一个 endpoint、一个 ACID 事务。
+MLAG 双 IP 是两个 endpoint、两个独立 ACID 事务。
+多个 endpoint 的一次 apply 是批量编排，不能伪装成全局分布式 ACID。
+```
+
+| 重点 | 为什么重要 | 开发要求 | 补充细节 |
+| --- | --- | --- | --- |
+| 幂等性 | 避免重复 apply 造成脏数据或反复改配置 | 所有下发前必须 refresh / diff；无变化返回 `NoOpSuccess` | 使用 `BTreeMap` 和归一化比较；trunk VLAN 集合忽略顺序；空 description 与 `None` 统一处理 |
+| Fail-closed | 多厂商适配没写完时，不能生成假 XML 或假成功 | renderer / driver 未实现必须报错，不允许 mock 数据进入生产路径 | driver 注册时检查能力；缺失方法返回 `Unimplemented` 或等价错误码；mock / fake driver 只能用于测试 profile |
+| Capability 驱动 | 不同交换机事务能力差异很大 | 根据设备 capability 选择策略；不支持强事务就显式 degraded 或失败 | 探测 `:candidate`、`:confirmed-commit`、`:rollback-on-error`、`:validate`、`writable-running`；降级必须返回 warning；记录 capability snapshot，避免设备升级或替换后策略静默变化 |
+| Drift 检测 | 客户现场可能有人绕过 Aria 手工改交换机 | 事务前检查 touched subtree；后台周期巡检关键子树 | 巡检频率可配置；默认策略不自动修复；发现漂移时支持 `ReportOnly`、`BlockNewTransaction`、显式开启的 `AutoReconcile` |
+| Recovery 可恢复 | 进程崩溃、session 断开后不能丢状态 | journal、rollback artifact、confirmed-commit 信息必须持久化 | 启动时扫描 journal，根据 phase 执行 recover / cancel / verify；artifact 需要 checksum、retention、权限隔离，必要时压缩存储 |
+| InDoubt 严格处理 | 无法判断设备最终状态时不能返回成功 | `InDoubt` 不自动清理，不自动当成功，必须告警和人工处理 | 标记后阻塞后续对该 endpoint 的写事务；提供 break-glass `ForceResolve` 类 API，拆分为人工确认 committed、rolled back 或继续保持 in-doubt |
+| 凭据安全 | 私有化交付不能泄露设备密码 | inventory、journal、audit 只保存 `secret_ref`，不落明文密码 | 日志中任何敏感字段打印前必须脱敏；支持从外部 secret store 动态获取；journal / artifact 不得包含密码、私钥或 token |
+| 可观测性 | 现场排障必须能追踪每次下发 | 所有事务事件要有 `request_id`、`tx_id`、`trace_id`、phase、错误摘要 | 接入 Aria RFC-002 事件模型和 RFC-015 审计视图；记录 adapter RPC 名称、延迟、结果、重试次数和降级原因 |
+| 测试优先 | 没真实交换机时更依赖 mock 覆盖 | mock adapter 必须覆盖 prepare / commit / verify / recover / rollback 失败路径 | 增加 crash / restart、session drop、timeout、adapter 返回 `InDoubt` 的混沌测试；真实设备阶段验证 capability 歧义、命名空间差异、CLI 降级 |
+| Isolation / 并发控制 | 防止多个 apply 同时写同一 endpoint 导致状态交叉 | 同一 endpoint 必须单 writer；Rust 本地锁 + 设备侧 lock | 按 `DeviceId` 固定顺序加锁；lock 重试使用指数退避；force unlock 仅作为 break-glass 能力，默认关闭且必须审计 |
+
+一句话总结：
+
+```text
+ACID 保证事务边界，幂等保证重复执行正确，
+drift / recovery / observability 保证现场出问题时能判断、能恢复、能审计。
+```
+
 ### 5.1 绝对幂等性
 
 同一条配置意图，下发一次和下发一万次，设备最终状态必须一致。
