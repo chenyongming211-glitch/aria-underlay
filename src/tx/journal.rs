@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crate::model::DeviceId;
 use crate::tx::context::TxContext;
@@ -88,6 +90,42 @@ pub trait TxJournalStore: std::fmt::Debug + Send + Sync {
     fn get(&self, tx_id: &str) -> UnderlayResult<Option<TxJournalRecord>>;
 
     fn list_recoverable(&self) -> UnderlayResult<Vec<TxJournalRecord>>;
+}
+
+#[derive(Debug, Default)]
+pub struct InMemoryTxJournalStore {
+    records: Mutex<BTreeMap<String, TxJournalRecord>>,
+}
+
+impl TxJournalStore for InMemoryTxJournalStore {
+    fn put(&self, record: &TxJournalRecord) -> UnderlayResult<()> {
+        self.records
+            .lock()
+            .map_err(|_| UnderlayError::Internal("tx journal mutex poisoned".into()))?
+            .insert(record.tx_id.clone(), record.clone());
+        Ok(())
+    }
+
+    fn get(&self, tx_id: &str) -> UnderlayResult<Option<TxJournalRecord>> {
+        Ok(self
+            .records
+            .lock()
+            .map_err(|_| UnderlayError::Internal("tx journal mutex poisoned".into()))?
+            .get(tx_id)
+            .cloned())
+    }
+
+    fn list_recoverable(&self) -> UnderlayResult<Vec<TxJournalRecord>> {
+        let records = self
+            .records
+            .lock()
+            .map_err(|_| UnderlayError::Internal("tx journal mutex poisoned".into()))?;
+        Ok(records
+            .values()
+            .filter(|record| record.phase.requires_recovery())
+            .cloned()
+            .collect())
+    }
 }
 
 #[derive(Debug, Clone)]

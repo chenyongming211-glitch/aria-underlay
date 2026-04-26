@@ -8,5 +8,7 @@ pub mod recovery;
 pub mod strategy;
 
 pub use context::TxContext;
-pub use journal::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase};
+pub use journal::{
+    InMemoryTxJournalStore, JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase,
+};
 pub use strategy::{choose_strategy, CapabilityFlags, TransactionMode, TransactionStrategy};

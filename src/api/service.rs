@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::sync::Arc;
 
 use crate::adapter_client::mapper::AdapterOperationStatus;
 use crate::adapter_client::{tx_request_context, AdapterClient};
@@ -23,17 +24,31 @@ use crate::planner::device_plan::{plan_switch_pair, DeviceDesiredState};
 use crate::planner::domain_plan::plan_underlay_domain;
 use crate::state::DeviceShadowState;
 use crate::tx::recovery::RecoveryReport;
-use crate::tx::{TransactionStrategy, TxContext};
+use crate::tx::{
+    InMemoryTxJournalStore, TransactionStrategy, TxContext, TxJournalRecord, TxJournalStore,
+    TxPhase,
+};
 use crate::{UnderlayError, UnderlayResult};
 
 #[derive(Debug, Clone)]
 pub struct AriaUnderlayService {
     inventory: DeviceInventory,
+    journal: Arc<dyn TxJournalStore>,
 }
 
 impl AriaUnderlayService {
     pub fn new(inventory: DeviceInventory) -> Self {
-        Self { inventory }
+        Self {
+            inventory,
+            journal: Arc::new(InMemoryTxJournalStore::default()),
+        }
+    }
+
+    pub fn new_with_journal(
+        inventory: DeviceInventory,
+        journal: Arc<dyn TxJournalStore>,
+    ) -> Self {
+        Self { inventory, journal }
     }
 
     async fn dry_run_plan(&self, request: &ApplyIntentRequest) -> UnderlayResult<DryRunPlan> {
@@ -77,9 +92,34 @@ impl AriaUnderlayService {
         }
 
         let tx_context = TxContext::new(request_id.clone(), trace_id.clone());
-        let strategy = self
+        let mut journal_record = TxJournalRecord::started(
+            &tx_context,
+            changed_device_ids(&plan),
+        );
+        self.journal.put(&journal_record)?;
+        journal_record = journal_record.with_phase(TxPhase::Preparing);
+        self.journal.put(&journal_record)?;
+
+        let strategy = match self
             .apply_changed_endpoint_states(&desired_states, &plan, &tx_context)
-            .await?;
+            .await
+        {
+            Ok(strategy) => {
+                journal_record = journal_record
+                    .with_strategy(strategy)
+                    .with_phase(TxPhase::Committed);
+                self.journal.put(&journal_record)?;
+                strategy
+            }
+            Err(err) => {
+                let (code, message) = journal_error_fields(&err);
+                journal_record = journal_record
+                    .with_phase(TxPhase::Failed)
+                    .with_error(code, message);
+                self.journal.put(&journal_record)?;
+                return Err(err);
+            }
+        };
         Ok(ApplyIntentResponse {
             request_id,
             trace_id,
@@ -287,9 +327,34 @@ impl UnderlayService for AriaUnderlayService {
         }
 
         let tx_context = TxContext::new(request_id.clone(), trace_id.clone());
-        let strategy = self
+        let mut journal_record = TxJournalRecord::started(
+            &tx_context,
+            changed_device_ids(&plan),
+        );
+        self.journal.put(&journal_record)?;
+        journal_record = journal_record.with_phase(TxPhase::Preparing);
+        self.journal.put(&journal_record)?;
+
+        let strategy = match self
             .apply_changed_endpoint_states(&desired_states, &plan, &tx_context)
-            .await?;
+            .await
+        {
+            Ok(strategy) => {
+                journal_record = journal_record
+                    .with_strategy(strategy)
+                    .with_phase(TxPhase::Committed);
+                self.journal.put(&journal_record)?;
+                strategy
+            }
+            Err(err) => {
+                let (code, message) = journal_error_fields(&err);
+                journal_record = journal_record
+                    .with_phase(TxPhase::Failed)
+                    .with_error(code, message);
+                self.journal.put(&journal_record)?;
+                return Err(err);
+            }
+        };
         Ok(ApplyIntentResponse {
             request_id,
             trace_id,
@@ -356,4 +421,34 @@ fn device_results_from_plan(plan: &DryRunPlan) -> Vec<DeviceApplyResult> {
             warnings: Vec::new(),
         })
         .collect()
+}
+
+fn changed_device_ids(plan: &DryRunPlan) -> Vec<DeviceId> {
+    plan.change_sets
+        .iter()
+        .filter(|change_set| !change_set.is_empty())
+        .map(|change_set| change_set.device_id.clone())
+        .collect()
+}
+
+fn journal_error_fields(error: &UnderlayError) -> (String, String) {
+    match error {
+        UnderlayError::AdapterOperation { code, message, .. } => (code.clone(), message.clone()),
+        UnderlayError::AdapterTransport(message) => {
+            ("ADAPTER_TRANSPORT".into(), message.clone())
+        }
+        UnderlayError::InvalidIntent(message) => ("INVALID_INTENT".into(), message.clone()),
+        UnderlayError::InvalidDeviceState(message) => {
+            ("INVALID_DEVICE_STATE".into(), message.clone())
+        }
+        UnderlayError::UnsupportedTransactionStrategy => (
+            "UNSUPPORTED_TRANSACTION_STRATEGY".into(),
+            "unsupported transaction strategy".into(),
+        ),
+        UnderlayError::DeviceAlreadyExists(device_id) => {
+            ("DEVICE_ALREADY_EXISTS".into(), device_id.clone())
+        }
+        UnderlayError::DeviceNotFound(device_id) => ("DEVICE_NOT_FOUND".into(), device_id.clone()),
+        UnderlayError::Internal(message) => ("INTERNAL".into(), message.clone()),
+    }
 }
