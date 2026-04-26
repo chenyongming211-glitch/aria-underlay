@@ -9,6 +9,7 @@ use aria_underlay::intent::{
 };
 use aria_underlay::model::{AdminState, DeviceId, DeviceRole, PortMode, Vendor};
 use aria_underlay::tx::TransactionStrategy;
+use aria_underlay::UnderlayError;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,6 +36,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("domain_changed_change_sets={:#?}", dry_run.change_sets);
     if dry_run.noop {
         return Err("expected changed domain dry-run noop=false".into());
+    }
+
+    if let Ok(expected_error) = std::env::var("ARIA_UNDERLAY_EXPECTED_APPLY_ERROR") {
+        match service.apply_domain_intent(request).await {
+            Err(UnderlayError::AdapterOperation { code, .. }) if code == expected_error => {
+                println!("domain_changed_apply_error_code={code}");
+                return Ok(());
+            }
+            Err(err) => return Err(err.into()),
+            Ok(response) => {
+                return Err(format!(
+                    "expected apply error {expected_error}, got response {:?}",
+                    response.status
+                )
+                .into());
+            }
+        }
     }
 
     let response = service.apply_domain_intent(request).await?;
