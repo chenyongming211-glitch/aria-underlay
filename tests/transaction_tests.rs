@@ -1,4 +1,8 @@
-use aria_underlay::tx::{choose_strategy, CapabilityFlags, TransactionMode, TransactionStrategy};
+use aria_underlay::model::DeviceId;
+use aria_underlay::tx::{
+    choose_strategy, CapabilityFlags, JsonFileTxJournalStore, TransactionMode,
+    TransactionStrategy, TxContext, TxJournalRecord, TxJournalStore, TxPhase,
+};
 
 #[test]
 fn confirmed_commit_strategy_wins_when_supported() {
@@ -15,4 +19,93 @@ fn confirmed_commit_strategy_wins_when_supported() {
     );
 
     assert_eq!(strategy, TransactionStrategy::ConfirmedCommit);
+}
+
+#[test]
+fn file_journal_round_trips_record() {
+    let root = temp_journal_dir("round-trip");
+    let store = JsonFileTxJournalStore::new(&root);
+    let context = TxContext {
+        tx_id: "tx-1".into(),
+        request_id: "req-1".into(),
+        trace_id: "trace-1".into(),
+    };
+    let record = TxJournalRecord::started(&context, vec![DeviceId("leaf-a".into())])
+        .with_strategy(TransactionStrategy::ConfirmedCommit)
+        .with_phase(TxPhase::Prepared);
+
+    store.put(&record).expect("journal put should succeed");
+    let loaded = store
+        .get("tx-1")
+        .expect("journal get should succeed")
+        .expect("record should exist");
+
+    assert_eq!(loaded.tx_id, "tx-1");
+    assert_eq!(loaded.request_id, "req-1");
+    assert_eq!(loaded.trace_id, "trace-1");
+    assert_eq!(loaded.phase, TxPhase::Prepared);
+    assert_eq!(loaded.strategy, Some(TransactionStrategy::ConfirmedCommit));
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn file_journal_lists_only_recoverable_records() {
+    let root = temp_journal_dir("recoverable");
+    let store = JsonFileTxJournalStore::new(&root);
+    let active = TxJournalRecord::started(
+        &TxContext {
+            tx_id: "tx-active".into(),
+            request_id: "req-active".into(),
+            trace_id: "trace-active".into(),
+        },
+        vec![DeviceId("leaf-a".into())],
+    )
+    .with_phase(TxPhase::Verifying);
+    let committed = TxJournalRecord::started(
+        &TxContext {
+            tx_id: "tx-committed".into(),
+            request_id: "req-committed".into(),
+            trace_id: "trace-committed".into(),
+        },
+        vec![DeviceId("leaf-b".into())],
+    )
+    .with_phase(TxPhase::Committed);
+
+    store.put(&active).expect("active journal put should succeed");
+    store
+        .put(&committed)
+        .expect("committed journal put should succeed");
+
+    let recoverable = store
+        .list_recoverable()
+        .expect("journal list should succeed");
+
+    assert_eq!(recoverable.len(), 1);
+    assert_eq!(recoverable[0].tx_id, "tx-active");
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn file_journal_sanitizes_transaction_id_path() {
+    let root = temp_journal_dir("sanitize");
+    let store = JsonFileTxJournalStore::new(&root);
+    let context = TxContext {
+        tx_id: "../bad/tx".into(),
+        request_id: "req-1".into(),
+        trace_id: "trace-1".into(),
+    };
+    let record = TxJournalRecord::started(&context, vec![DeviceId("leaf-a".into())]);
+
+    store.put(&record).expect("journal put should succeed");
+
+    assert!(root.join("___bad_tx.json").exists());
+    assert!(store.get("../bad/tx").expect("journal get should succeed").is_some());
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+fn temp_journal_dir(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("aria-underlay-journal-{name}-{}", uuid::Uuid::new_v4()))
 }
