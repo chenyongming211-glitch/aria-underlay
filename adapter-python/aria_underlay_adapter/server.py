@@ -92,6 +92,7 @@ class UnderlayAdapterService(pb2_grpc.UnderlayAdapterServicer):
             tx_id=request.context.tx_id if request.context else "",
             device=request.device,
             desired_state=request.desired_state,
+            scope=request.scope if request.HasField("scope") else None,
         )
 
     def Recover(self, request, context):

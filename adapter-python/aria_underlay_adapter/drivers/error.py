@@ -33,7 +33,7 @@ class AdapterErrorDriver:
     def rollback(self, tx_id, device, strategy=None):
         return pb2.RollbackResponse(result=self._failed_result())
 
-    def verify(self, tx_id, device, desired_state):
+    def verify(self, tx_id, device, desired_state, scope=None):
         return pb2.VerifyResponse(result=self._failed_result())
 
     def recover(self, tx_id, device):

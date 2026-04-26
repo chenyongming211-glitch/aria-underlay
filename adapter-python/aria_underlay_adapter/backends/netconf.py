@@ -73,12 +73,15 @@ class NcclientNetconfBackend:
             timeout=self.timeout_secs,
         )
 
-    def get_current_state(self) -> dict:
+    def get_current_state(self, scope=None) -> dict:
         raise AdapterError(
             code="NETCONF_STATE_PARSE_NOT_IMPLEMENTED",
             message="real NETCONF running state parsing is not implemented yet",
             normalized_error="state parser missing",
-            raw_error_summary="Sprint 1B only enables real capability probing",
+            raw_error_summary=(
+                "scoped get-config parser/filter is not implemented yet; "
+                f"scope={_scope_summary(scope)}"
+            ),
             retryable=False,
         )
 
@@ -326,12 +329,15 @@ class NcclientNetconfBackend:
             retryable=False,
         )
 
-    def verify_running(self, desired_state) -> None:
+    def verify_running(self, desired_state, scope=None) -> None:
         raise AdapterError(
             code="NETCONF_VERIFY_NOT_IMPLEMENTED",
             message="real NETCONF running verification is not implemented yet",
             normalized_error="verification operation missing",
-            raw_error_summary="running parser lands after renderer and parser",
+            raw_error_summary=(
+                "scoped running verification lands after state parser; "
+                f"scope={_scope_summary(scope)}"
+            ),
             retryable=False,
         )
 
@@ -411,4 +417,14 @@ def _adapter_operation_error(
         normalized_error=message.lower(),
         raw_error_summary=raw,
         retryable=retryable,
+    )
+
+
+def _scope_summary(scope) -> str:
+    if scope is None:
+        return "none"
+    return (
+        f"full={getattr(scope, 'full', False)}, "
+        f"vlans={list(getattr(scope, 'vlan_ids', []))}, "
+        f"interfaces={list(getattr(scope, 'interface_names', []))}"
     )

@@ -41,7 +41,7 @@ class NetconfBackedDriver:
 
     def get_current_state(self, request):
         try:
-            state = self._backend.get_current_state()
+            state = self._backend.get_current_state(scope=_request_scope(request))
         except AdapterError as error:
             return pb2.GetCurrentStateResponse(errors=[error.to_proto(pb2)])
 
@@ -157,9 +157,9 @@ class NetconfBackedDriver:
             )
         )
 
-    def verify(self, tx_id, device, desired_state):
+    def verify(self, tx_id, device, desired_state, scope=None):
         try:
-            self._backend.verify_running(desired_state)
+            self._backend.verify_running(desired_state, scope=_message_or_none(scope))
         except AdapterError as error:
             return pb2.VerifyResponse(
                 result=pb2.AdapterResult(
@@ -217,3 +217,18 @@ class NetconfBackedDriver:
             code="INVALID_PORT_MODE",
             message=f"unknown port mode kind: {mode['kind']}",
         )
+
+
+def _request_scope(request):
+    if hasattr(request, "HasField"):
+        try:
+            if request.HasField("scope"):
+                return request.scope
+        except ValueError:
+            return None
+        return None
+    return getattr(request, "scope", None)
+
+
+def _message_or_none(message):
+    return message if message is not None else None

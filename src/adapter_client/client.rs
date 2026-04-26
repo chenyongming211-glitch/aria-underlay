@@ -2,7 +2,8 @@ use tonic::transport::Channel;
 
 use crate::adapter_client::mapper::{
     adapter_result_to_outcome, capability_from_proto, desired_state_to_proto, device_ref_from_info,
-    extract_adapter_errors, shadow_state_from_proto, strategy_to_proto, AdapterOutcome,
+    extract_adapter_errors, shadow_state_from_proto, state_scope_from_desired, strategy_to_proto,
+    AdapterOutcome,
 };
 use crate::device::{DeviceCapabilityProfile, DeviceInfo};
 use crate::planner::device_plan::DeviceDesiredState;
@@ -10,7 +11,7 @@ use crate::proto::adapter::underlay_adapter_client::UnderlayAdapterClient;
 use crate::proto::adapter::{
     CommitRequest, FinalConfirmRequest, ForceUnlockRequest, GetCapabilitiesRequest,
     GetCurrentStateRequest, PrepareRequest, RecoverRequest, RequestContext, RollbackRequest,
-    VerifyRequest,
+    StateScope, VerifyRequest,
 };
 use crate::state::DeviceShadowState;
 use crate::tx::{TransactionStrategy, TxContext};
@@ -71,11 +72,34 @@ impl AdapterClient {
         &mut self,
         device: &DeviceInfo,
     ) -> UnderlayResult<DeviceShadowState> {
+        self.get_current_state_with_scope(device, StateScope {
+            full: true,
+            vlan_ids: Vec::new(),
+            interface_names: Vec::new(),
+        })
+        .await
+    }
+
+    pub async fn get_current_state_for_desired(
+        &mut self,
+        device: &DeviceInfo,
+        desired_state: &DeviceDesiredState,
+    ) -> UnderlayResult<DeviceShadowState> {
+        self.get_current_state_with_scope(device, state_scope_from_desired(desired_state))
+            .await
+    }
+
+    async fn get_current_state_with_scope(
+        &mut self,
+        device: &DeviceInfo,
+        scope: StateScope,
+    ) -> UnderlayResult<DeviceShadowState> {
         let response = self
             .inner
             .get_current_state(GetCurrentStateRequest {
                 context: Some(request_context(device)),
                 device: Some(device_ref_from_info(device)),
+                scope: Some(scope),
             })
             .await
             .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?
@@ -283,6 +307,7 @@ impl AdapterClient {
                 context: Some(context.clone()),
                 device: Some(device_ref_from_info(device)),
                 desired_state: Some(desired_state_to_proto(desired_state)),
+                scope: Some(state_scope_from_desired(desired_state)),
             })
             .await
             .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?

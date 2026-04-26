@@ -98,6 +98,18 @@ pub fn desired_state_to_proto(desired: &DeviceDesiredState) -> adapter::DesiredD
     }
 }
 
+pub fn state_scope_from_desired(desired: &DeviceDesiredState) -> adapter::StateScope {
+    adapter::StateScope {
+        full: false,
+        vlan_ids: desired
+            .vlans
+            .keys()
+            .map(|vlan_id| u32::from(*vlan_id))
+            .collect(),
+        interface_names: desired.interfaces.keys().cloned().collect(),
+    }
+}
+
 pub fn shadow_state_from_proto(proto: adapter::ObservedDeviceState, warnings: Vec<String>) -> UnderlayResult<DeviceShadowState> {
     let mut vlans = std::collections::BTreeMap::new();
     for vlan in proto.vlans {

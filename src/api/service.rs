@@ -151,7 +151,11 @@ impl AriaUnderlayService {
         for desired in desired_states {
             let managed = self.inventory.get(&desired.device_id)?;
             let mut client = AdapterClient::connect(managed.info.adapter_endpoint.clone()).await?;
-            current_states.push(client.get_current_state(&managed.info).await?);
+            current_states.push(
+                client
+                    .get_current_state_for_desired(&managed.info, desired)
+                    .await?,
+            );
         }
 
         Ok(current_states)

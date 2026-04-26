@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 
 from aria_underlay_adapter.backends.mock_netconf import MockNetconfBackend
 from aria_underlay_adapter.errors import AdapterError
@@ -45,6 +46,28 @@ def test_mock_error_profiles(profile, code, retryable):
 
 def test_mock_current_state_contains_vlan_and_interface():
     state = MockNetconfBackend("confirmed").get_current_state()
+
+    assert state["vlans"][0]["vlan_id"] == 100
+    assert state["interfaces"][0]["name"] == "GE1/0/1"
+
+
+def test_mock_current_state_filters_by_scope():
+    scope = SimpleNamespace(
+        full=False,
+        vlan_ids=[200],
+        interface_names=["GE1/0/99"],
+    )
+
+    state = MockNetconfBackend("confirmed").get_current_state(scope=scope)
+
+    assert state["vlans"] == []
+    assert state["interfaces"] == []
+
+
+def test_mock_current_state_full_scope_returns_all():
+    scope = SimpleNamespace(full=True, vlan_ids=[], interface_names=[])
+
+    state = MockNetconfBackend("confirmed").get_current_state(scope=scope)
 
     assert state["vlans"][0]["vlan_id"] == 100
     assert state["interfaces"][0]["name"] == "GE1/0/1"

@@ -128,6 +128,12 @@ message ObservedDeviceState {
   repeated InterfaceConfig interfaces = 3;
 }
 
+message StateScope {
+  bool full = 1;
+  repeated uint32 vlan_ids = 2;
+  repeated string interface_names = 3;
+}
+
 message RollbackArtifactRef {
   string artifact_id = 1;
   string tx_id = 2;
@@ -167,6 +173,7 @@ message GetCapabilitiesResponse {
 message GetCurrentStateRequest {
   RequestContext context = 1;
   DeviceRef device = 2;
+  StateScope scope = 3;
 }
 
 message GetCurrentStateResponse {
@@ -229,6 +236,7 @@ message VerifyRequest {
   RequestContext context = 1;
   DeviceRef device = 2;
   DesiredDeviceState desired_state = 3;
+  StateScope scope = 4;
 }
 
 message VerifyResponse {

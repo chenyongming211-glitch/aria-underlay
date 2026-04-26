@@ -125,9 +125,9 @@ class MockNetconfBackend:
             retryable=False,
         )
 
-    def get_current_state(self) -> dict:
+    def get_current_state(self, scope=None) -> dict:
         self.get_capabilities()
-        return {
+        state = {
             "vlans": [
                 {
                     "vlan_id": 100,
@@ -149,6 +149,7 @@ class MockNetconfBackend:
                 }
             ],
         }
+        return _filter_state_by_scope(state, scope)
 
     def lock_candidate(self) -> None:
         if self.profile == "lock_failed":
@@ -207,7 +208,7 @@ class MockNetconfBackend:
     def rollback_candidate(self, strategy=None, tx_id: str | None = None) -> None:
         self.get_capabilities()
 
-    def verify_running(self, desired_state) -> None:
+    def verify_running(self, desired_state, scope=None) -> None:
         self.get_capabilities()
         if self.profile == "verify_failed":
             raise AdapterError(
@@ -217,3 +218,24 @@ class MockNetconfBackend:
                 raw_error_summary="mock profile verify_failed",
                 retryable=False,
             )
+
+
+def _filter_state_by_scope(state: dict, scope=None) -> dict:
+    if scope is None or getattr(scope, "full", False):
+        return state
+
+    vlan_ids = set(getattr(scope, "vlan_ids", []))
+    interface_names = set(getattr(scope, "interface_names", []))
+
+    return {
+        "vlans": [
+            vlan
+            for vlan in state["vlans"]
+            if vlan["vlan_id"] in vlan_ids
+        ],
+        "interfaces": [
+            interface
+            for interface in state["interfaces"]
+            if interface["name"] in interface_names
+        ],
+    }

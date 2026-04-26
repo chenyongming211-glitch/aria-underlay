@@ -1,6 +1,6 @@
 use aria_underlay::adapter_client::mapper::{
     adapter_result_to_outcome, capability_from_proto, desired_state_to_proto, extract_adapter_errors,
-    shadow_state_from_proto, AdapterOperationStatus,
+    shadow_state_from_proto, state_scope_from_desired, AdapterOperationStatus,
 };
 use aria_underlay::model::{AdminState, DeviceId, InterfaceConfig, PortMode, VlanConfig};
 use aria_underlay::planner::device_plan::DeviceDesiredState;
@@ -138,6 +138,17 @@ fn maps_desired_state_to_proto() {
 }
 
 #[test]
+fn derives_state_scope_from_desired_state() {
+    let desired = desired_state();
+
+    let scope = state_scope_from_desired(&desired);
+
+    assert!(!scope.full);
+    assert_eq!(scope.vlan_ids, vec![100]);
+    assert_eq!(scope.interface_names, vec!["GE1/0/1"]);
+}
+
+#[test]
 fn maps_adapter_result_success() {
     let outcome = adapter_result_to_outcome(adapter::AdapterResult {
         status: adapter::AdapterOperationStatus::Prepared as i32,
@@ -173,4 +184,27 @@ fn maps_adapter_result_error() {
     .expect_err("adapter error should map to UnderlayError");
 
     assert!(format!("{error}").contains("LOCK_FAILED"));
+}
+
+fn desired_state() -> DeviceDesiredState {
+    DeviceDesiredState {
+        device_id: DeviceId("leaf-a".into()),
+        vlans: BTreeMap::from([(
+            100,
+            VlanConfig {
+                vlan_id: 100,
+                name: Some("prod".into()),
+                description: None,
+            },
+        )]),
+        interfaces: BTreeMap::from([(
+            "GE1/0/1".into(),
+            InterfaceConfig {
+                name: "GE1/0/1".into(),
+                admin_state: AdminState::Up,
+                description: None,
+                mode: PortMode::Access { vlan_id: 100 },
+            },
+        )]),
+    }
 }
