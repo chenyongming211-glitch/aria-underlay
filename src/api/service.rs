@@ -23,6 +23,7 @@ use crate::model::DeviceId;
 use crate::planner::device_plan::{plan_switch_pair, DeviceDesiredState};
 use crate::planner::domain_plan::plan_underlay_domain;
 use crate::proto::adapter::RequestContext;
+use crate::state::drift::DriftReport;
 use crate::state::DeviceShadowState;
 use crate::tx::recovery::{
     classify_recovery, in_doubt_records_for_devices, RecoveryAction, RecoveryReport,
@@ -844,7 +845,8 @@ impl UnderlayService for AriaUnderlayService {
 
         for device_id in request.device_ids {
             let state = self.get_device_state(device_id.clone()).await?;
-            if !state.warnings.is_empty() {
+            let report = DriftReport::from_adapter_warnings(device_id.clone(), state.warnings);
+            if report.drift_detected {
                 self.inventory
                     .set_state(&device_id, crate::device::DeviceLifecycleState::Drifted)?;
                 drifted_devices.push(device_id);

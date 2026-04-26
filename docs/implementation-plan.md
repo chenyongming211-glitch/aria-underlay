@@ -1046,7 +1046,7 @@ Sprint 7 目标：
 任务：
 
 - 实现 Periodic Drift Auditor。
-- 实现 DriftReport。
+- 实现结构化 `DriftReport`，至少包含 drift type、path、expected、actual、warnings。
 - 实现 `BlockNewTransaction`。
 - 实现 lock exponential backoff。
 - 实现 force unlock API。
@@ -1059,6 +1059,7 @@ Sprint 7 目标：
 验收：
 
 - 带外 VLAN / interface 修改可被发现。
+- expected shadow 与 observed running 的 VLAN / interface 差异能生成结构化 finding。
 - `BlockNewTransaction` 可阻断新事务。
 - lock 占用时按退避策略重试。
 - force unlock 默认关闭。
