@@ -19,6 +19,11 @@ pub enum ApplyStatus {
 pub struct DeviceApplyResult {
     pub device_id: DeviceId,
     pub changed: bool,
+    pub status: ApplyStatus,
+    pub tx_id: Option<String>,
+    pub strategy: Option<TransactionStrategy>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
     pub warnings: Vec<String>,
 }
 

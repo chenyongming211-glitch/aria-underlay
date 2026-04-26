@@ -97,70 +97,8 @@ impl AriaUnderlayService {
             .clone()
             .unwrap_or_else(|| request_id.clone());
         let desired_states = plan_underlay_domain(&request.intent)?;
-        let _endpoint_guard = self
-            .endpoint_locks
-            .acquire_many(&desired_device_ids(&desired_states))
-            .await?;
-        self.ensure_no_in_doubt_for_devices(&desired_device_ids(&desired_states))?;
-        let plan = self.dry_run_desired_states(&desired_states).await?;
-        let device_results = device_results_from_plan(&plan);
-
-        if plan.is_noop() {
-            return Ok(ApplyIntentResponse {
-                request_id,
-                trace_id,
-                tx_id: None,
-                status: ApplyStatus::NoOpSuccess,
-                strategy: None,
-                device_results,
-                warnings: Vec::new(),
-            });
-        }
-
-        let tx_context = TxContext::new(request_id.clone(), trace_id.clone());
-        let mut journal_record = TxJournalRecord::started(
-            &tx_context,
-            changed_device_ids(&plan),
-        );
-        self.journal.put(&journal_record)?;
-        journal_record = journal_record.with_phase(TxPhase::Preparing);
-        self.journal.put(&journal_record)?;
-
-        let strategy = match self
-            .apply_changed_endpoint_states(
-                &desired_states,
-                &plan,
-                &tx_context,
-                &mut journal_record,
-            )
+        self.apply_desired_states(request_id, trace_id, desired_states)
             .await
-        {
-            Ok(strategy) => {
-                journal_record = journal_record
-                    .with_strategy(strategy)
-                    .with_phase(TxPhase::Committed);
-                self.journal.put(&journal_record)?;
-                strategy
-            }
-            Err(err) => {
-                let (code, message) = journal_error_fields(&err);
-                let phase = failed_apply_phase(&journal_record.phase);
-                journal_record = journal_record
-                    .with_phase(phase)
-                    .with_error(code, message);
-                self.journal.put(&journal_record)?;
-                return Err(err);
-            }
-        };
-        Ok(ApplyIntentResponse {
-            request_id,
-            trace_id,
-            tx_id: Some(tx_context.tx_id),
-            status: ApplyStatus::Success,
-            strategy: Some(strategy),
-            device_results,
-            warnings: Vec::new(),
-        })
     }
 
     pub async fn dry_run_domain(
@@ -196,6 +134,166 @@ impl AriaUnderlayService {
     ) -> UnderlayResult<DryRunPlan> {
         let current_states = self.fetch_current_states(desired_states).await?;
         build_dry_run_plan(desired_states, &current_states)
+    }
+
+    async fn apply_desired_states(
+        &self,
+        request_id: String,
+        trace_id: String,
+        desired_states: Vec<DeviceDesiredState>,
+    ) -> UnderlayResult<ApplyIntentResponse> {
+        let mut device_results = Vec::with_capacity(desired_states.len());
+
+        for desired in &desired_states {
+            device_results.push(
+                self.apply_single_endpoint_state(&request_id, &trace_id, desired)
+                    .await,
+            );
+        }
+
+        let status = aggregate_apply_status(&device_results);
+        let tx_id = if device_results.len() == 1 {
+            device_results[0].tx_id.clone()
+        } else {
+            None
+        };
+        let strategy = if device_results.len() == 1 {
+            device_results[0].strategy
+        } else {
+            None
+        };
+        let warnings = device_results
+            .iter()
+            .flat_map(|result| result.warnings.clone())
+            .collect();
+
+        Ok(ApplyIntentResponse {
+            request_id,
+            trace_id,
+            tx_id,
+            status,
+            strategy,
+            device_results,
+            warnings,
+        })
+    }
+
+    async fn apply_single_endpoint_state(
+        &self,
+        request_id: &str,
+        trace_id: &str,
+        desired: &DeviceDesiredState,
+    ) -> DeviceApplyResult {
+        let _endpoint_guard = match self
+            .endpoint_locks
+            .acquire_many(std::slice::from_ref(&desired.device_id))
+            .await
+        {
+            Ok(guard) => guard,
+            Err(err) => return device_error_result(&desired.device_id, false, None, None, err),
+        };
+
+        if let Err(err) = self.ensure_no_in_doubt_for_devices(std::slice::from_ref(&desired.device_id)) {
+            return device_error_result(
+                &desired.device_id,
+                false,
+                None,
+                None,
+                err,
+            );
+        }
+
+        let plan = match self
+            .dry_run_desired_states(std::slice::from_ref(desired))
+            .await
+        {
+            Ok(plan) => plan,
+            Err(err) => return device_error_result(&desired.device_id, false, None, None, err),
+        };
+        let changed = !plan.is_noop();
+
+        if !changed {
+            return DeviceApplyResult {
+                device_id: desired.device_id.clone(),
+                changed: false,
+                status: ApplyStatus::NoOpSuccess,
+                tx_id: None,
+                strategy: None,
+                error_code: None,
+                error_message: None,
+                warnings: Vec::new(),
+            };
+        }
+
+        let tx_context = TxContext::new(request_id.to_string(), trace_id.to_string());
+        let mut journal_record =
+            TxJournalRecord::started(&tx_context, vec![desired.device_id.clone()]);
+        if let Err(err) = self.journal.put(&journal_record) {
+            return device_error_result(&desired.device_id, true, None, None, err);
+        }
+        journal_record = journal_record.with_phase(TxPhase::Preparing);
+        if let Err(err) = self.journal.put(&journal_record) {
+            return device_error_result(
+                &desired.device_id,
+                true,
+                Some(tx_context.tx_id),
+                None,
+                err,
+            );
+        }
+
+        match self
+            .apply_changed_endpoint_states(
+                std::slice::from_ref(desired),
+                &plan,
+                &tx_context,
+                &mut journal_record,
+            )
+            .await
+        {
+            Ok(strategy) => {
+                journal_record = journal_record
+                    .with_strategy(strategy)
+                    .with_phase(TxPhase::Committed);
+                if let Err(err) = self.journal.put(&journal_record) {
+                    return device_error_result(
+                        &desired.device_id,
+                        true,
+                        Some(tx_context.tx_id),
+                        Some(strategy),
+                        err,
+                    );
+                }
+                DeviceApplyResult {
+                    device_id: desired.device_id.clone(),
+                    changed: true,
+                    status: ApplyStatus::Success,
+                    tx_id: Some(tx_context.tx_id),
+                    strategy: Some(strategy),
+                    error_code: None,
+                    error_message: None,
+                    warnings: Vec::new(),
+                }
+            }
+            Err(err) => {
+                let (code, message) = journal_error_fields(&err);
+                let phase = failed_apply_phase(&journal_record.phase);
+                journal_record = journal_record
+                    .with_phase(phase.clone())
+                    .with_error(code.clone(), message.clone());
+                let _ = self.journal.put(&journal_record);
+                DeviceApplyResult {
+                    device_id: desired.device_id.clone(),
+                    changed: true,
+                    status: apply_status_for_failed_phase(&phase),
+                    tx_id: Some(tx_context.tx_id),
+                    strategy: journal_record.strategy,
+                    error_code: Some(code),
+                    error_message: Some(message),
+                    warnings: Vec::new(),
+                }
+            }
+        }
     }
 
     async fn apply_changed_endpoint_states(
@@ -515,70 +613,8 @@ impl UnderlayService for AriaUnderlayService {
             .clone()
             .unwrap_or_else(|| request_id.clone());
         let desired_states = plan_switch_pair(&request.intent);
-        let _endpoint_guard = self
-            .endpoint_locks
-            .acquire_many(&desired_device_ids(&desired_states))
-            .await?;
-        self.ensure_no_in_doubt_for_devices(&desired_device_ids(&desired_states))?;
-        let plan = self.dry_run_desired_states(&desired_states).await?;
-        let device_results = device_results_from_plan(&plan);
-
-        if plan.is_noop() {
-            return Ok(ApplyIntentResponse {
-                request_id,
-                trace_id,
-                tx_id: None,
-                status: ApplyStatus::NoOpSuccess,
-                strategy: None,
-                device_results,
-                warnings: Vec::new(),
-            });
-        }
-
-        let tx_context = TxContext::new(request_id.clone(), trace_id.clone());
-        let mut journal_record = TxJournalRecord::started(
-            &tx_context,
-            changed_device_ids(&plan),
-        );
-        self.journal.put(&journal_record)?;
-        journal_record = journal_record.with_phase(TxPhase::Preparing);
-        self.journal.put(&journal_record)?;
-
-        let strategy = match self
-            .apply_changed_endpoint_states(
-                &desired_states,
-                &plan,
-                &tx_context,
-                &mut journal_record,
-            )
+        self.apply_desired_states(request_id, trace_id, desired_states)
             .await
-        {
-            Ok(strategy) => {
-                journal_record = journal_record
-                    .with_strategy(strategy)
-                    .with_phase(TxPhase::Committed);
-                self.journal.put(&journal_record)?;
-                strategy
-            }
-            Err(err) => {
-                let (code, message) = journal_error_fields(&err);
-                let phase = failed_apply_phase(&journal_record.phase);
-                journal_record = journal_record
-                    .with_phase(phase)
-                    .with_error(code, message);
-                self.journal.put(&journal_record)?;
-                return Err(err);
-            }
-        };
-        Ok(ApplyIntentResponse {
-            request_id,
-            trace_id,
-            tx_id: Some(tx_context.tx_id),
-            status: ApplyStatus::Success,
-            strategy: Some(strategy),
-            device_results,
-            warnings: Vec::new(),
-        })
     }
 
     async fn dry_run(&self, request: ApplyIntentRequest) -> UnderlayResult<DryRunResponse> {
@@ -692,24 +728,83 @@ fn device_results_from_plan(plan: &DryRunPlan) -> Vec<DeviceApplyResult> {
         .map(|change_set| DeviceApplyResult {
             device_id: change_set.device_id.clone(),
             changed: !change_set.is_empty(),
+            status: if change_set.is_empty() {
+                ApplyStatus::NoOpSuccess
+            } else {
+                ApplyStatus::Success
+            },
+            tx_id: None,
+            strategy: None,
+            error_code: None,
+            error_message: None,
             warnings: Vec::new(),
         })
         .collect()
 }
 
-fn changed_device_ids(plan: &DryRunPlan) -> Vec<DeviceId> {
-    plan.change_sets
+fn aggregate_apply_status(device_results: &[DeviceApplyResult]) -> ApplyStatus {
+    if device_results
         .iter()
-        .filter(|change_set| !change_set.is_empty())
-        .map(|change_set| change_set.device_id.clone())
-        .collect()
+        .all(|result| result.status == ApplyStatus::NoOpSuccess)
+    {
+        ApplyStatus::NoOpSuccess
+    } else if device_results
+        .iter()
+        .any(|result| result.status == ApplyStatus::InDoubt)
+    {
+        ApplyStatus::InDoubt
+    } else if device_results
+        .iter()
+        .all(|result| matches!(result.status, ApplyStatus::Success | ApplyStatus::NoOpSuccess))
+    {
+        ApplyStatus::Success
+    } else if device_results.len() == 1 {
+        device_results[0].status.clone()
+    } else if device_results
+        .iter()
+        .any(|result| matches!(result.status, ApplyStatus::Success | ApplyStatus::NoOpSuccess))
+    {
+        ApplyStatus::SuccessWithWarning
+    } else if device_results
+        .iter()
+        .all(|result| result.status == ApplyStatus::RolledBack)
+    {
+        ApplyStatus::RolledBack
+    } else {
+        ApplyStatus::Failed
+    }
 }
 
-fn desired_device_ids(desired_states: &[DeviceDesiredState]) -> Vec<DeviceId> {
-    desired_states
-        .iter()
-        .map(|desired| desired.device_id.clone())
-        .collect()
+fn device_error_result(
+    device_id: &DeviceId,
+    changed: bool,
+    tx_id: Option<String>,
+    strategy: Option<TransactionStrategy>,
+    error: UnderlayError,
+) -> DeviceApplyResult {
+    let (code, message) = journal_error_fields(&error);
+    DeviceApplyResult {
+        device_id: device_id.clone(),
+        changed,
+        status: if code == "TX_IN_DOUBT" {
+            ApplyStatus::InDoubt
+        } else {
+            ApplyStatus::Failed
+        },
+        tx_id,
+        strategy,
+        error_code: Some(code),
+        error_message: Some(message),
+        warnings: Vec::new(),
+    }
+}
+
+fn apply_status_for_failed_phase(phase: &TxPhase) -> ApplyStatus {
+    match phase {
+        TxPhase::RolledBack => ApplyStatus::RolledBack,
+        TxPhase::InDoubt => ApplyStatus::InDoubt,
+        _ => ApplyStatus::Failed,
+    }
 }
 
 fn journal_error_fields(error: &UnderlayError) -> (String, String) {

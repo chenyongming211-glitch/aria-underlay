@@ -9,7 +9,6 @@ use aria_underlay::intent::{
 };
 use aria_underlay::model::{AdminState, DeviceId, DeviceRole, PortMode, Vendor};
 use aria_underlay::tx::TransactionStrategy;
-use aria_underlay::UnderlayError;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -39,20 +38,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Ok(expected_error) = std::env::var("ARIA_UNDERLAY_EXPECTED_APPLY_ERROR") {
-        match service.apply_domain_intent(request).await {
-            Err(UnderlayError::AdapterOperation { code, .. }) if code == expected_error => {
-                println!("domain_changed_apply_error_code={code}");
-                return Ok(());
-            }
-            Err(err) => return Err(err.into()),
-            Ok(response) => {
-                return Err(format!(
-                    "expected apply error {expected_error}, got response {:?}",
-                    response.status
-                )
-                .into());
-            }
+        let response = service.apply_domain_intent(request).await?;
+        let matched = response
+            .device_results
+            .iter()
+            .any(|result| result.error_code.as_deref() == Some(expected_error.as_str()));
+        if matched {
+            println!("domain_changed_apply_error_code={expected_error}");
+            return Ok(());
         }
+        return Err(format!(
+            "expected apply error {expected_error}, got response {:?}",
+            response.status
+        )
+        .into());
     }
 
     let response = service.apply_domain_intent(request).await?;
