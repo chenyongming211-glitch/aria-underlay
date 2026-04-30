@@ -26,7 +26,7 @@ fn switch_pair_rejects_interface_referencing_unknown_switch() {
 
     let err = validate_switch_pair_intent(&intent).unwrap_err();
 
-    assert!(format!("{err}").contains("unknown device missing-leaf"));
+    assert!(format!("{err}").contains("unknown switch missing-leaf"));
 }
 
 #[test]

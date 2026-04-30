@@ -42,6 +42,7 @@ pub fn validate_switch_pair_intent(intent: &SwitchPairIntent) -> UnderlayResult<
         &switch_ids,
         &declared_vlans,
         "switch pair",
+        "switch",
     )?;
 
     Ok(())
@@ -119,6 +120,7 @@ pub fn validate_underlay_domain_intent(intent: &UnderlayDomainIntent) -> Underla
         &member_ids,
         &declared_vlans,
         "underlay domain",
+        "switch member",
     )?;
 
     Ok(())
@@ -174,6 +176,7 @@ fn validate_interfaces<'a, I>(
     valid_device_ids: &BTreeSet<DeviceId>,
     declared_vlans: &BTreeSet<u16>,
     context: &str,
+    unknown_device_label: &str,
 ) -> UnderlayResult<()>
 where
     I: IntoIterator<Item = (&'a DeviceId, &'a str, &'a PortMode)>,
@@ -183,8 +186,8 @@ where
         validate_non_empty("interface name", name)?;
         if !valid_device_ids.contains(device_id) {
             return Err(UnderlayError::InvalidIntent(format!(
-                "{context} interface {} references unknown device {}",
-                name, device_id.0
+                "{context} interface {} references unknown {} {}",
+                name, unknown_device_label, device_id.0
             )));
         }
         if !seen.insert((device_id.clone(), name.to_string())) {
