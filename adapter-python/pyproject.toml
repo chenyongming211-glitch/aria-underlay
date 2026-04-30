@@ -21,7 +21,9 @@ test = [
   "pytest",
 ]
 
+[project.scripts]
+aria-underlay-state-parse = "aria_underlay_adapter.state_parsers.validator:main"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
-
