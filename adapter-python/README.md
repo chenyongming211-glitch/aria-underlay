@@ -95,3 +95,37 @@ fails while still printing a full batch report.
 The command uses fixture-verified parsers only for offline sample qualification.
 It does not change production driver behavior, and fixture verification is not
 the same as `production_ready=True`.
+
+## Offline renderer snapshot validation
+
+Desired-state JSON can be rendered through skeleton Huawei/H3C renderers without
+connecting to a device:
+
+```json
+{
+  "vlans": [
+    {"vlan_id": 100, "name": "prod", "description": "production vlan"}
+  ],
+  "interfaces": [
+    {
+      "name": "GE1/0/1",
+      "admin_state": "up",
+      "description": "server uplink",
+      "mode": {"kind": "access", "access_vlan": 100}
+    }
+  ]
+}
+```
+
+```bash
+aria-underlay-render-snapshot \
+  --vendor huawei \
+  --desired-state desired-state.json \
+  --pretty
+```
+
+The command prints a JSON report with renderer profile metadata, resource
+counts, and the rendered edit-config XML. It intentionally uses skeleton
+renderers for offline snapshot qualification only. Production NETCONF prepare
+still rejects skeleton renderers unless they are separately reviewed and marked
+`production_ready=True`.
