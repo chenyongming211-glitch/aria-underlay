@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use aria_underlay::api::force_resolve::ForceResolveTransactionRequest;
 use aria_underlay::api::{AriaUnderlayService, UnderlayService};
 use aria_underlay::device::{DeviceInfo, DeviceInventory, DeviceLifecycleState, HostKeyPolicy};
 use aria_underlay::model::{DeviceId, DeviceRole, Vendor};
@@ -8,6 +9,7 @@ use aria_underlay::proto::adapter;
 use aria_underlay::tx::{
     InMemoryTxJournalStore, TxContext, TxJournalRecord, TxJournalStore, TxPhase,
 };
+use aria_underlay::UnderlayError;
 use aria_underlay::tx::recovery::{
     classify_recovery, in_doubt_records_for_devices, RecoveryAction, RecoveryReport,
 };
@@ -227,6 +229,101 @@ async fn recover_pending_transactions_reloads_candidate_before_recovery() {
     assert_eq!(record.phase, TxPhase::Committed);
 }
 
+#[tokio::test]
+async fn force_resolve_transaction_marks_in_doubt_record_terminal() {
+    let journal = Arc::new(InMemoryTxJournalStore::default());
+    journal
+        .put(&journal_record("tx-manual", TxPhase::InDoubt, "leaf-a"))
+        .expect("in-doubt journal record should be stored");
+    let service = AriaUnderlayService::new_with_journal(
+        inventory_with_recovery_endpoint("leaf-a", "http://127.0.0.1:59999".into()),
+        journal.clone(),
+    );
+
+    let response = service
+        .force_resolve_transaction(force_resolve_request("tx-manual"))
+        .await
+        .expect("break-glass force resolve should succeed for in-doubt transaction");
+
+    assert!(response.resolved);
+    assert_eq!(response.tx_id, "tx-manual");
+    assert_eq!(response.previous_phase, TxPhase::InDoubt);
+    assert_eq!(response.resolved_phase, TxPhase::ForceResolved);
+    assert_eq!(response.devices, vec![DeviceId("leaf-a".into())]);
+
+    let record = journal
+        .get("tx-manual")
+        .expect("journal get should succeed")
+        .expect("journal record should still exist");
+    assert_eq!(record.phase, TxPhase::ForceResolved);
+    let manual = record
+        .manual_resolution
+        .expect("force-resolved record should include manual resolution metadata");
+    assert_eq!(manual.operator, "netops-a");
+    assert_eq!(manual.reason, "validated device state out of band");
+    assert!(
+        journal
+            .list_recoverable()
+            .expect("journal list should succeed")
+            .is_empty(),
+        "force-resolved transaction must no longer block new transactions"
+    );
+}
+
+#[tokio::test]
+async fn force_resolve_transaction_requires_break_glass() {
+    let journal = Arc::new(InMemoryTxJournalStore::default());
+    journal
+        .put(&journal_record("tx-no-break-glass", TxPhase::InDoubt, "leaf-a"))
+        .expect("in-doubt journal record should be stored");
+    let service = AriaUnderlayService::new_with_journal(DeviceInventory::default(), journal.clone());
+    let mut request = force_resolve_request("tx-no-break-glass");
+    request.break_glass_enabled = false;
+
+    let err = service
+        .force_resolve_transaction(request)
+        .await
+        .expect_err("force resolve must require explicit break-glass flag");
+
+    match err {
+        UnderlayError::AdapterOperation { code, message, .. } => {
+            assert_eq!(code, "FORCE_RESOLVE_BREAK_GLASS_REQUIRED");
+            assert_eq!(
+                message,
+                "break-glass must be enabled to force resolve an in-doubt transaction"
+            );
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    let record = journal
+        .get("tx-no-break-glass")
+        .expect("journal get should succeed")
+        .expect("journal record should still exist");
+    assert_eq!(record.phase, TxPhase::InDoubt);
+}
+
+#[tokio::test]
+async fn force_resolve_transaction_rejects_non_in_doubt_record() {
+    let journal = Arc::new(InMemoryTxJournalStore::default());
+    journal
+        .put(&journal_record("tx-committed", TxPhase::Committed, "leaf-a"))
+        .expect("committed journal record should be stored");
+    let service = AriaUnderlayService::new_with_journal(DeviceInventory::default(), journal);
+
+    let err = service
+        .force_resolve_transaction(force_resolve_request("tx-committed"))
+        .await
+        .expect_err("force resolve should only apply to in-doubt transactions");
+
+    match err {
+        UnderlayError::AdapterOperation { code, message, .. } => {
+            assert_eq!(code, "TX_NOT_IN_DOUBT");
+            assert_eq!(message, "transaction tx-committed is Committed, not InDoubt");
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
 #[test]
 fn recovery_classification_is_phase_aware() {
     let base = TxJournalRecord::started(
@@ -251,7 +348,11 @@ fn recovery_classification_is_phase_aware() {
         RecoveryAction::ManualIntervention
     );
     assert_eq!(
-        classify_recovery(&base.with_phase(TxPhase::Committed)).action,
+        classify_recovery(&base.clone().with_phase(TxPhase::Committed)).action,
+        RecoveryAction::Noop
+    );
+    assert_eq!(
+        classify_recovery(&base.with_phase(TxPhase::ForceResolved)).action,
         RecoveryAction::Noop
     );
 }
@@ -336,6 +437,17 @@ fn journal_record(tx_id: &str, phase: TxPhase, device_id: &str) -> TxJournalReco
         vec![DeviceId(device_id.into())],
     )
     .with_phase(phase)
+}
+
+fn force_resolve_request(tx_id: &str) -> ForceResolveTransactionRequest {
+    ForceResolveTransactionRequest {
+        request_id: format!("req-resolve-{tx_id}"),
+        trace_id: Some(format!("trace-resolve-{tx_id}")),
+        tx_id: tx_id.into(),
+        operator: "netops-a".into(),
+        reason: "validated device state out of band".into(),
+        break_glass_enabled: true,
+    }
 }
 
 fn inventory_with_recovery_endpoint(device_id: &str, adapter_endpoint: String) -> DeviceInventory {

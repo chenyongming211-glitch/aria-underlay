@@ -73,6 +73,33 @@ fn audit_record_preserves_traceable_transaction_fields() {
 }
 
 #[test]
+fn audit_record_maps_force_resolved_transaction_event() {
+    let event = UnderlayEvent::transaction_force_resolved(
+        "req-force",
+        "trace-force",
+        "tx-force",
+        TxPhase::InDoubt,
+        &[DeviceId("leaf-a".into()), DeviceId("leaf-b".into())],
+        "netops-a",
+        "validated device state out of band",
+    );
+
+    let record = AuditRecord::from_event(&event);
+
+    assert_eq!(event.kind, UnderlayEventKind::UnderlayTransactionForceResolved);
+    assert_eq!(event.phase, Some(TxPhase::ForceResolved));
+    assert_eq!(event.result.as_deref(), Some("force_resolved"));
+    assert_eq!(event.fields.get("operator").map(String::as_str), Some("netops-a"));
+    assert_eq!(
+        event.fields.get("device_count").map(String::as_str),
+        Some("2")
+    );
+    assert_eq!(record.action, "transaction.force_resolved");
+    assert_eq!(record.result, "force_resolved");
+    assert_eq!(record.tx_id.as_deref(), Some("tx-force"));
+}
+
+#[test]
 fn device_apply_result_maps_to_traceable_transaction_event() {
     let result = DeviceApplyResult {
         device_id: DeviceId("leaf-a".into()),

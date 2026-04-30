@@ -21,6 +21,7 @@ pub enum UnderlayEventKind {
     UnderlayTransactionCompleted,
     UnderlayTransactionFailed,
     UnderlayTransactionInDoubt,
+    UnderlayTransactionForceResolved,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,6 +186,36 @@ impl UnderlayEvent {
             error_code: None,
             error_message: None,
             fields: BTreeMap::new(),
+        }
+    }
+
+    pub fn transaction_force_resolved(
+        request_id: impl Into<String>,
+        trace_id: impl Into<String>,
+        tx_id: impl Into<String>,
+        previous_phase: TxPhase,
+        devices: &[DeviceId],
+        operator: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        let mut fields = BTreeMap::new();
+        fields.insert("previous_phase".into(), format!("{previous_phase:?}"));
+        fields.insert("device_count".into(), devices.len().to_string());
+        fields.insert("operator".into(), operator.into());
+        fields.insert("reason".into(), reason.into());
+
+        Self {
+            kind: UnderlayEventKind::UnderlayTransactionForceResolved,
+            request_id: request_id.into(),
+            trace_id: trace_id.into(),
+            tx_id: Some(tx_id.into()),
+            device_id: None,
+            phase: Some(TxPhase::ForceResolved),
+            strategy: None,
+            result: Some("force_resolved".into()),
+            error_code: None,
+            error_message: None,
+            fields,
         }
     }
 

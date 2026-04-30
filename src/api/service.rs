@@ -3,6 +3,9 @@ use std::sync::Arc;
 
 use crate::adapter_client::mapper::AdapterOperationStatus;
 use crate::adapter_client::{tx_request_context, AdapterClient};
+use crate::api::force_resolve::{
+    ForceResolveTransactionRequest, ForceResolveTransactionResponse,
+};
 use crate::api::force_unlock::{ForceUnlockRequest, ForceUnlockResponse};
 use crate::api::request::{
     ApplyDomainIntentRequest, ApplyIntentRequest, DriftAuditRequest, RefreshStateRequest,
@@ -1080,6 +1083,77 @@ impl UnderlayService for AriaUnderlayService {
             warnings: outcome.warnings,
         })
     }
+
+    async fn force_resolve_transaction(
+        &self,
+        request: ForceResolveTransactionRequest,
+    ) -> UnderlayResult<ForceResolveTransactionResponse> {
+        validate_force_resolve_request(&request)?;
+        let trace_id = request
+            .trace_id
+            .clone()
+            .unwrap_or_else(|| request.request_id.clone());
+
+        let Some(candidate) = self.journal.get(&request.tx_id)? else {
+            return Err(UnderlayError::AdapterOperation {
+                code: "TX_NOT_FOUND".into(),
+                message: format!("transaction {} was not found", request.tx_id),
+                retryable: false,
+                errors: Vec::new(),
+            });
+        };
+
+        let _endpoint_guard = self.endpoint_locks.acquire_many(&candidate.devices).await?;
+        let Some(record) = self.journal.get(&request.tx_id)? else {
+            return Err(UnderlayError::AdapterOperation {
+                code: "TX_NOT_FOUND".into(),
+                message: format!("transaction {} was not found", request.tx_id),
+                retryable: false,
+                errors: Vec::new(),
+            });
+        };
+        if record.phase != TxPhase::InDoubt {
+            return Err(UnderlayError::AdapterOperation {
+                code: "TX_NOT_IN_DOUBT".into(),
+                message: format!(
+                    "transaction {} is {:?}, not InDoubt",
+                    record.tx_id, record.phase
+                ),
+                retryable: false,
+                errors: Vec::new(),
+            });
+        }
+
+        let previous_phase = record.phase.clone();
+        let resolved = record
+            .clone()
+            .with_manual_resolution(
+                request.operator.clone(),
+                request.reason.clone(),
+                request.request_id.clone(),
+                trace_id.clone(),
+            )
+            .with_phase(TxPhase::ForceResolved);
+        self.journal.put(&resolved)?;
+        self.event_sink.emit(UnderlayEvent::transaction_force_resolved(
+            request.request_id,
+            trace_id,
+            record.tx_id.clone(),
+            previous_phase.clone(),
+            &record.devices,
+            request.operator,
+            request.reason,
+        ));
+
+        Ok(ForceResolveTransactionResponse {
+            tx_id: record.tx_id,
+            previous_phase,
+            resolved_phase: TxPhase::ForceResolved,
+            devices: record.devices,
+            resolved: true,
+            warnings: Vec::new(),
+        })
+    }
 }
 
 fn device_results_from_plan(plan: &DryRunPlan) -> Vec<DeviceApplyResult> {
@@ -1100,6 +1174,35 @@ fn device_results_from_plan(plan: &DryRunPlan) -> Vec<DeviceApplyResult> {
             warnings: Vec::new(),
         })
         .collect()
+}
+
+fn validate_force_resolve_request(request: &ForceResolveTransactionRequest) -> UnderlayResult<()> {
+    if request.tx_id.trim().is_empty() {
+        return Err(UnderlayError::InvalidIntent(
+            "force resolve requires tx_id".into(),
+        ));
+    }
+    if request.operator.trim().is_empty() {
+        return Err(UnderlayError::InvalidIntent(
+            "force resolve requires operator".into(),
+        ));
+    }
+    if request.reason.trim().is_empty() {
+        return Err(UnderlayError::InvalidIntent(
+            "force resolve requires reason".into(),
+        ));
+    }
+    if !request.break_glass_enabled {
+        return Err(UnderlayError::AdapterOperation {
+            code: "FORCE_RESOLVE_BREAK_GLASS_REQUIRED".into(),
+            message: "break-glass must be enabled to force resolve an in-doubt transaction"
+                .into(),
+            retryable: false,
+            errors: Vec::new(),
+        });
+    }
+
+    Ok(())
 }
 
 fn aggregate_apply_status(device_results: &[DeviceApplyResult]) -> ApplyStatus {

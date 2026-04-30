@@ -24,13 +24,14 @@ pub enum TxPhase {
     RolledBack,
     Failed,
     InDoubt,
+    ForceResolved,
 }
 
 impl TxPhase {
     pub fn requires_recovery(&self) -> bool {
         !matches!(
             self,
-            Self::Committed | Self::RolledBack | Self::Failed
+            Self::Committed | Self::RolledBack | Self::Failed | Self::ForceResolved
         )
     }
 }
@@ -41,6 +42,15 @@ pub struct TxJournalErrorEvent {
     pub code: String,
     pub message: String,
     pub created_at_unix_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TxManualResolution {
+    pub operator: String,
+    pub reason: String,
+    pub request_id: String,
+    pub trace_id: String,
+    pub resolved_at_unix_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +65,8 @@ pub struct TxJournalRecord {
     pub error_message: Option<String>,
     #[serde(default)]
     pub error_history: Vec<TxJournalErrorEvent>,
+    #[serde(default)]
+    pub manual_resolution: Option<TxManualResolution>,
     pub created_at_unix_secs: u64,
     pub updated_at_unix_secs: u64,
 }
@@ -72,6 +84,7 @@ impl TxJournalRecord {
             error_code: None,
             error_message: None,
             error_history: Vec::new(),
+            manual_resolution: None,
             created_at_unix_secs: now,
             updated_at_unix_secs: now,
         }
@@ -100,6 +113,25 @@ impl TxJournalRecord {
             code,
             message,
             created_at_unix_secs: now,
+        });
+        self.updated_at_unix_secs = now;
+        self
+    }
+
+    pub fn with_manual_resolution(
+        mut self,
+        operator: impl Into<String>,
+        reason: impl Into<String>,
+        request_id: impl Into<String>,
+        trace_id: impl Into<String>,
+    ) -> Self {
+        let now = now_unix_secs();
+        self.manual_resolution = Some(TxManualResolution {
+            operator: operator.into(),
+            reason: reason.into(),
+            request_id: request_id.into(),
+            trace_id: trace_id.into(),
+            resolved_at_unix_secs: now,
         });
         self.updated_at_unix_secs = now;
         self

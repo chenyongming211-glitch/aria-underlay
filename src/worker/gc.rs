@@ -258,14 +258,17 @@ fn read_journal_record(path: &Path) -> UnderlayResult<TxJournalRecord> {
 }
 
 fn is_terminal_phase(phase: &TxPhase) -> bool {
-    matches!(phase, TxPhase::Committed | TxPhase::RolledBack | TxPhase::Failed)
+    matches!(
+        phase,
+        TxPhase::Committed | TxPhase::RolledBack | TxPhase::Failed | TxPhase::ForceResolved
+    )
 }
 
 fn journal_retention_days(phase: &TxPhase, policy: &RetentionPolicy) -> u32 {
     match phase {
         TxPhase::Committed => policy.committed_journal_retention_days,
         TxPhase::RolledBack => policy.rolled_back_journal_retention_days,
-        TxPhase::Failed => policy.failed_journal_retention_days,
+        TxPhase::Failed | TxPhase::ForceResolved => policy.failed_journal_retention_days,
         _ => u32::MAX,
     }
 }

@@ -59,6 +59,8 @@ fn recovery_action_for_phase(phase: &TxPhase) -> RecoveryAction {
         | TxPhase::RollingBack
         | TxPhase::Recovering => RecoveryAction::AdapterRecover,
         TxPhase::InDoubt => RecoveryAction::ManualIntervention,
-        TxPhase::Committed | TxPhase::RolledBack | TxPhase::Failed => RecoveryAction::Noop,
+        TxPhase::Committed | TxPhase::RolledBack | TxPhase::Failed | TxPhase::ForceResolved => {
+            RecoveryAction::Noop
+        }
     }
 }

@@ -1,5 +1,8 @@
 use async_trait::async_trait;
 
+use crate::api::force_resolve::{
+    ForceResolveTransactionRequest, ForceResolveTransactionResponse,
+};
 use crate::api::force_unlock::{ForceUnlockRequest, ForceUnlockResponse};
 use crate::api::request::{ApplyIntentRequest, DriftAuditRequest, RefreshStateRequest};
 use crate::api::response::{
@@ -57,4 +60,9 @@ pub trait UnderlayService: Send + Sync {
         &self,
         request: ForceUnlockRequest,
     ) -> UnderlayResult<ForceUnlockResponse>;
+
+    async fn force_resolve_transaction(
+        &self,
+        request: ForceResolveTransactionRequest,
+    ) -> UnderlayResult<ForceResolveTransactionResponse>;
 }

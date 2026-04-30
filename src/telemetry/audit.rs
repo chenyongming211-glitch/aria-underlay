@@ -46,5 +46,6 @@ fn action_name(kind: &UnderlayEventKind) -> &'static str {
         UnderlayEventKind::UnderlayTransactionCompleted => "transaction.completed",
         UnderlayEventKind::UnderlayTransactionFailed => "transaction.failed",
         UnderlayEventKind::UnderlayTransactionInDoubt => "transaction.in_doubt",
+        UnderlayEventKind::UnderlayTransactionForceResolved => "transaction.force_resolved",
     }
 }

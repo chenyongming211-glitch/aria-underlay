@@ -106,6 +106,43 @@ fn file_journal_round_trips_error_history() {
 }
 
 #[test]
+fn file_journal_round_trips_manual_resolution() {
+    let root = temp_journal_dir("manual-resolution");
+    let store = JsonFileTxJournalStore::new(&root);
+    let context = TxContext {
+        tx_id: "tx-manual-resolution".into(),
+        request_id: "req-manual-resolution".into(),
+        trace_id: "trace-manual-resolution".into(),
+    };
+    let record = TxJournalRecord::started(&context, vec![DeviceId("leaf-a".into())])
+        .with_phase(TxPhase::InDoubt)
+        .with_manual_resolution(
+            "netops-a",
+            "validated device state out of band",
+            "req-force",
+            "trace-force",
+        )
+        .with_phase(TxPhase::ForceResolved);
+
+    store.put(&record).expect("journal put should succeed");
+    let loaded = store
+        .get("tx-manual-resolution")
+        .expect("journal get should succeed")
+        .expect("record should exist");
+
+    assert_eq!(loaded.phase, TxPhase::ForceResolved);
+    let manual = loaded
+        .manual_resolution
+        .expect("manual resolution should round-trip through file journal");
+    assert_eq!(manual.operator, "netops-a");
+    assert_eq!(manual.reason, "validated device state out of band");
+    assert_eq!(manual.request_id, "req-force");
+    assert_eq!(manual.trace_id, "trace-force");
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn file_journal_lists_only_recoverable_records() {
     let root = temp_journal_dir("recoverable");
     let store = JsonFileTxJournalStore::new(&root);
