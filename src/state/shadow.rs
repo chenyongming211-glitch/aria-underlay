@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{DeviceId, InterfaceConfig, VlanConfig};
 use crate::planner::device_plan::DeviceDesiredState;
+use crate::utils::atomic_file::atomic_write;
 use crate::{UnderlayError, UnderlayResult};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,11 +83,15 @@ impl ShadowStateStore for InMemoryShadowStateStore {
 #[derive(Debug, Clone)]
 pub struct JsonFileShadowStateStore {
     root: PathBuf,
+    locks: Arc<DashMap<DeviceId, Arc<Mutex<()>>>>,
 }
 
 impl JsonFileShadowStateStore {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            locks: Arc::new(DashMap::new()),
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -95,6 +101,14 @@ impl JsonFileShadowStateStore {
     fn path_for(&self, device_id: &DeviceId) -> UnderlayResult<PathBuf> {
         validate_shadow_device_id(device_id)?;
         Ok(self.root.join(format!("{}.json", device_id.0)))
+    }
+
+    fn lock_for(&self, device_id: &DeviceId) -> Arc<Mutex<()>> {
+        self.locks
+            .entry(device_id.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .value()
+            .clone()
     }
 }
 
@@ -108,7 +122,10 @@ impl ShadowStateStore for JsonFileShadowStateStore {
     }
 
     fn put(&self, mut state: DeviceShadowState) -> UnderlayResult<DeviceShadowState> {
-        fs::create_dir_all(&self.root).map_err(shadow_io_error)?;
+        let lock = self.lock_for(&state.device_id);
+        let _guard = lock
+            .lock()
+            .map_err(|_| UnderlayError::Internal("shadow state mutex poisoned".into()))?;
 
         let next_revision = self
             .get(&state.device_id)?
@@ -117,16 +134,18 @@ impl ShadowStateStore for JsonFileShadowStateStore {
         state.revision = next_revision;
 
         let path = self.path_for(&state.device_id)?;
-        let tmp_path = path.with_extension("json.tmp");
         let payload = serde_json::to_vec_pretty(&state)
             .map_err(|err| UnderlayError::Internal(format!("serialize shadow state: {err}")))?;
 
-        fs::write(&tmp_path, payload).map_err(shadow_io_error)?;
-        fs::rename(&tmp_path, &path).map_err(shadow_io_error)?;
+        atomic_write(&path, &payload, shadow_io_error)?;
         Ok(state)
     }
 
     fn remove(&self, device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
+        let lock = self.lock_for(device_id);
+        let _guard = lock
+            .lock()
+            .map_err(|_| UnderlayError::Internal("shadow state mutex poisoned".into()))?;
         let path = self.path_for(device_id)?;
         if !path.exists() {
             return Ok(None);

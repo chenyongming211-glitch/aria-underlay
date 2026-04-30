@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use aria_underlay::model::{DeviceId, VlanConfig};
 use aria_underlay::state::{
@@ -137,6 +138,46 @@ fn file_shadow_store_rejects_non_canonical_device_id() {
 
     assert!(format!("{err}").contains("device_id"));
     assert!(!root.join("___bad_device.json").exists());
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn file_shadow_store_serializes_concurrent_same_device_writes() {
+    let root = temp_shadow_dir("concurrent");
+    let store = Arc::new(JsonFileShadowStateStore::new(&root));
+
+    let writers = (1..=24)
+        .map(|vlan_id| {
+            let store = store.clone();
+            std::thread::spawn(move || {
+                store
+                    .put(shadow_state("leaf-a", vlan_id))
+                    .expect("concurrent file shadow put should succeed");
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for writer in writers {
+        writer
+            .join()
+            .expect("shadow writer thread should not panic");
+    }
+
+    let loaded = store
+        .get(&DeviceId("leaf-a".into()))
+        .expect("file shadow get should succeed")
+        .expect("file shadow should exist");
+    assert_eq!(loaded.revision, 24);
+    assert!(
+        std::fs::read_dir(&root)
+            .expect("shadow root should be readable")
+            .all(|entry| !entry
+                .expect("shadow entry should be readable")
+                .path()
+                .to_string_lossy()
+                .ends_with(".tmp"))
+    );
 
     std::fs::remove_dir_all(root).ok();
 }

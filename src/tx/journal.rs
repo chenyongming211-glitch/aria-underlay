@@ -2,13 +2,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+use dashmap::DashMap;
 
 use crate::engine::diff::ChangeSet;
 use crate::model::DeviceId;
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::tx::context::TxContext;
 use crate::tx::strategy::TransactionStrategy;
+use crate::utils::atomic_file::atomic_write;
 use crate::utils::time::now_unix_secs;
 use crate::{UnderlayError, UnderlayResult};
 
@@ -205,11 +208,15 @@ impl TxJournalStore for InMemoryTxJournalStore {
 #[derive(Debug, Clone)]
 pub struct JsonFileTxJournalStore {
     root: PathBuf,
+    locks: Arc<DashMap<String, Arc<Mutex<()>>>>,
 }
 
 impl JsonFileTxJournalStore {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            locks: Arc::new(DashMap::new()),
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -219,19 +226,28 @@ impl JsonFileTxJournalStore {
     fn path_for(&self, tx_id: &str) -> PathBuf {
         self.root.join(format!("{}.json", journal_file_stem(tx_id)))
     }
+
+    fn lock_for(&self, tx_id: &str) -> Arc<Mutex<()>> {
+        self.locks
+            .entry(tx_id.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .value()
+            .clone()
+    }
 }
 
 impl TxJournalStore for JsonFileTxJournalStore {
     fn put(&self, record: &TxJournalRecord) -> UnderlayResult<()> {
-        fs::create_dir_all(&self.root).map_err(journal_io_error)?;
+        let lock = self.lock_for(&record.tx_id);
+        let _guard = lock
+            .lock()
+            .map_err(|_| UnderlayError::Internal("tx journal mutex poisoned".into()))?;
 
         let path = self.path_for(&record.tx_id);
-        let tmp_path = path.with_extension("json.tmp");
         let payload = serde_json::to_vec_pretty(record)
             .map_err(|err| UnderlayError::Internal(format!("serialize tx journal: {err}")))?;
 
-        fs::write(&tmp_path, payload).map_err(journal_io_error)?;
-        fs::rename(&tmp_path, &path).map_err(journal_io_error)?;
+        atomic_write(&path, &payload, journal_io_error)?;
         Ok(())
     }
 

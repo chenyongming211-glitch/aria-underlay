@@ -199,6 +199,60 @@ fn file_journal_sanitizes_transaction_id_path() {
     std::fs::remove_dir_all(root).ok();
 }
 
+#[test]
+fn file_journal_serializes_concurrent_same_transaction_writes() {
+    let root = temp_journal_dir("concurrent");
+    let store = Arc::new(JsonFileTxJournalStore::new(&root));
+
+    let writers = (0..24)
+        .map(|index| {
+            let store = store.clone();
+            std::thread::spawn(move || {
+                let context = TxContext {
+                    tx_id: "tx-concurrent".into(),
+                    request_id: format!("req-{index}"),
+                    trace_id: format!("trace-{index}"),
+                };
+                let phase = if index % 2 == 0 {
+                    TxPhase::Preparing
+                } else {
+                    TxPhase::Verifying
+                };
+                let record =
+                    TxJournalRecord::started(&context, vec![DeviceId("leaf-a".into())])
+                        .with_phase(phase);
+
+                store
+                    .put(&record)
+                    .expect("concurrent file journal put should succeed");
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for writer in writers {
+        writer
+            .join()
+            .expect("journal writer thread should not panic");
+    }
+
+    let loaded = store
+        .get("tx-concurrent")
+        .expect("journal get should succeed")
+        .expect("journal record should exist");
+    assert!(loaded.request_id.starts_with("req-"));
+    assert!(
+        std::fs::read_dir(&root)
+            .expect("journal root should be readable")
+            .all(|entry| !entry
+                .expect("journal entry should be readable")
+                .path()
+                .to_string_lossy()
+                .ends_with(".tmp"))
+    );
+
+    std::fs::remove_dir_all(root).ok();
+}
+
 #[tokio::test]
 async fn endpoint_lock_serializes_same_endpoint_writers() {
     let locks = EndpointLockTable::default();
