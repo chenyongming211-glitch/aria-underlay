@@ -13,8 +13,8 @@ fn retention_policy_defaults_are_conservative() {
 
 #[tokio::test]
 async fn gc_deletes_old_terminal_journal_but_keeps_in_doubt() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let journal_root = temp.path().join("journal");
+    let temp = temp_test_dir("journal-retention");
+    let journal_root = temp.join("journal");
     let store = JsonFileTxJournalStore::new(&journal_root);
     let old_committed = journal_record("tx-old-committed", TxPhase::Committed, 100);
     let old_in_doubt = journal_record("tx-old-in-doubt", TxPhase::InDoubt, 100);
@@ -36,13 +36,14 @@ async fn gc_deletes_old_terminal_journal_but_keeps_in_doubt() {
     assert_eq!(report.journals_deleted, 1);
     assert!(store.get("tx-old-committed").expect("read committed").is_none());
     assert!(store.get("tx-old-in-doubt").expect("read in doubt").is_some());
+    fs::remove_dir_all(temp).ok();
 }
 
 #[tokio::test]
 async fn gc_deletes_artifacts_only_for_old_terminal_transactions() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let journal_root = temp.path().join("journal");
-    let artifact_root = temp.path().join("artifacts");
+    let temp = temp_test_dir("artifact-retention");
+    let journal_root = temp.join("journal");
+    let artifact_root = temp.join("artifacts");
     let store = JsonFileTxJournalStore::new(&journal_root);
     store
         .put(&journal_record("tx-terminal", TxPhase::Committed, 100))
@@ -70,13 +71,14 @@ async fn gc_deletes_artifacts_only_for_old_terminal_transactions() {
     assert!(!artifact_root.join("leaf-a/tx-terminal").exists());
     assert!(artifact_root.join("leaf-a/tx-in-doubt").exists());
     assert!(store.get("tx-terminal").expect("read terminal").is_some());
+    fs::remove_dir_all(temp).ok();
 }
 
 #[tokio::test]
 async fn gc_prunes_terminal_artifacts_per_device_without_touching_unknown_tx() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let journal_root = temp.path().join("journal");
-    let artifact_root = temp.path().join("artifacts");
+    let temp = temp_test_dir("artifact-cap");
+    let journal_root = temp.join("journal");
+    let artifact_root = temp.join("artifacts");
     let store = JsonFileTxJournalStore::new(&journal_root);
     store
         .put(&journal_record("tx-new", TxPhase::Committed, 300))
@@ -105,6 +107,7 @@ async fn gc_prunes_terminal_artifacts_per_device_without_touching_unknown_tx() {
     assert!(artifact_root.join("leaf-a/tx-new").exists());
     assert!(!artifact_root.join("leaf-a/tx-old").exists());
     assert!(artifact_root.join("leaf-a/tx-unknown").exists());
+    fs::remove_dir_all(temp).ok();
 }
 
 fn journal_record(tx_id: &str, phase: TxPhase, updated_at_unix_secs: u64) -> TxJournalRecord {
@@ -126,4 +129,8 @@ fn write_artifact(root: &std::path::Path, device_id: &str, tx_id: &str) {
     let dir = root.join(device_id).join(tx_id);
     fs::create_dir_all(&dir).expect("create artifact dir");
     fs::write(dir.join("rollback.json"), "{}").expect("write artifact");
+}
+
+fn temp_test_dir(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("aria-underlay-gc-{name}-{}", uuid::Uuid::new_v4()))
 }
