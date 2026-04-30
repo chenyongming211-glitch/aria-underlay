@@ -115,6 +115,82 @@ def test_netconf_driver_prepare_rejects_skeleton_renderer_before_device_lock():
     assert session.calls == []
 
 
+def test_netconf_driver_dry_run_requires_registered_renderer_before_device_read():
+    session = _RecordingSession()
+    driver = NetconfBackedDriver(_BackendWithSession(session))
+
+    response = driver.dry_run(
+        device=pb2.DeviceRef(vendor_hint=pb2.VENDOR_UNKNOWN),
+        desired_state=pb2.DesiredDeviceState(
+            device_id="leaf-a",
+            vlans=[pb2.VlanConfig(vlan_id=100, name="prod")],
+        ),
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
+    assert response.result.changed is False
+    assert response.result.errors[0].code == "RENDERER_VENDOR_UNSUPPORTED"
+    assert session.calls == []
+
+
+def test_netconf_driver_dry_run_rejects_skeleton_renderer_before_device_read():
+    session = _RecordingSession()
+    driver = NetconfBackedDriver(_BackendWithSession(session))
+
+    response = driver.dry_run(
+        device=pb2.DeviceRef(vendor_hint=pb2.VENDOR_HUAWEI),
+        desired_state=pb2.DesiredDeviceState(
+            device_id="leaf-a",
+            vlans=[pb2.VlanConfig(vlan_id=100, name="prod")],
+        ),
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
+    assert response.result.changed is False
+    assert response.result.errors[0].code == "RENDERER_NOT_PRODUCTION_READY"
+    assert session.calls == []
+
+
+def test_netconf_driver_dry_run_uses_configured_renderer_without_device_read():
+    session = _RecordingSession()
+    driver = NetconfBackedDriver(
+        _BackendWithSession(session, config_renderer=_StaticRenderer("<config/>"))
+    )
+
+    response = driver.dry_run(
+        device=pb2.DeviceRef(vendor_hint=pb2.VENDOR_HUAWEI),
+        desired_state=pb2.DesiredDeviceState(
+            device_id="leaf-a",
+            vlans=[pb2.VlanConfig(vlan_id=100, name="prod")],
+        ),
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_NO_CHANGE
+    assert response.result.changed is True
+    assert response.result.errors == []
+    assert any(
+        "candidate config rendered successfully" in warning
+        for warning in response.result.warnings
+    )
+    assert session.calls == []
+
+
+def test_netconf_driver_dry_run_returns_no_change_for_empty_desired_without_renderer():
+    session = _RecordingSession()
+    driver = NetconfBackedDriver(_BackendWithSession(session))
+
+    response = driver.dry_run(
+        device=pb2.DeviceRef(vendor_hint=pb2.VENDOR_UNKNOWN),
+        desired_state=pb2.DesiredDeviceState(device_id="leaf-a"),
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_NO_CHANGE
+    assert response.result.changed is False
+    assert response.result.errors == []
+    assert "desired state contains no VLAN or interface changes" in response.result.warnings
+    assert session.calls == []
+
+
 def test_netconf_driver_get_state_rejects_skeleton_parser_before_device_read():
     session = _RecordingSession()
     driver = NetconfBackedDriver(_BackendWithSession(session))
@@ -331,6 +407,61 @@ def test_prepare_candidate_requires_desired_state_before_touching_device():
         assert error.code == "MISSING_DESIRED_STATE"
     else:
         raise AssertionError("missing desired state should fail closed")
+
+    assert session.calls == []
+
+
+def test_dry_run_candidate_requires_desired_state_before_touching_device():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session, config_renderer=_StaticRenderer("<config/>"))
+
+    try:
+        backend.dry_run_candidate(desired_state=None)
+    except AdapterError as error:
+        assert error.code == "MISSING_DESIRED_STATE"
+    else:
+        raise AssertionError("missing desired state should fail closed")
+
+    assert session.calls == []
+
+
+def test_dry_run_candidate_renders_config_without_touching_device():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session, config_renderer=_StaticRenderer("<config/>"))
+
+    result = backend.dry_run_candidate(desired_state=_desired_state())
+
+    assert result.changed is True
+    assert result.config_xml == "<config/>"
+    assert any("candidate config rendered successfully" in warning for warning in result.warnings)
+    assert session.calls == []
+
+
+def test_dry_run_candidate_rejects_skeleton_renderer_without_touching_device():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session, config_renderer=HuaweiRenderer())
+
+    try:
+        backend.dry_run_candidate(desired_state=_desired_state())
+    except AdapterError as error:
+        assert error.code == "NETCONF_RENDERER_NOT_PRODUCTION_READY"
+    else:
+        raise AssertionError("skeleton renderer should fail closed during dry-run")
+
+    assert session.calls == []
+
+
+def test_dry_run_candidate_maps_renderer_failure_without_touching_device():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session, config_renderer=_FailingRenderer())
+
+    try:
+        backend.dry_run_candidate(desired_state=_desired_state())
+    except AdapterError as error:
+        assert error.code == "NETCONF_RENDERER_FAILED"
+        assert error.retryable is False
+    else:
+        raise AssertionError("renderer failure should be normalized during dry-run")
 
     assert session.calls == []
 
@@ -841,6 +972,13 @@ class _StaticRenderer:
 
     def render_edit_config(self, desired_state):
         return self.payload
+
+
+class _FailingRenderer:
+    production_ready = True
+
+    def render_edit_config(self, desired_state):
+        raise ValueError("renderer exploded")
 
 
 class _StaticStateParser:

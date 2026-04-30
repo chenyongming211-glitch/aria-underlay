@@ -5,6 +5,7 @@ from typing import Iterable, Protocol
 from xml.sax.saxutils import escape
 
 from aria_underlay_adapter.backends.base import BackendCapability
+from aria_underlay_adapter.backends.base import CandidateDryRunResult
 from aria_underlay_adapter.errors import AdapterError
 
 
@@ -104,6 +105,28 @@ class NcclientNetconfBackend:
             allow_fixture_verified=self.allow_fixture_verified_state_parser,
         )
 
+    def dry_run_candidate(self, desired_state=None) -> CandidateDryRunResult:
+        if desired_state is None:
+            raise AdapterError(
+                code="MISSING_DESIRED_STATE",
+                message="NETCONF dry-run requires desired state",
+                normalized_error="desired state missing",
+                raw_error_summary="DryRunRequest.desired_state is empty",
+                retryable=False,
+            )
+        if _desired_state_is_empty(desired_state):
+            return CandidateDryRunResult(
+                changed=False,
+                warnings=["desired state contains no VLAN or interface changes"],
+            )
+
+        config_xml = self._render_candidate_config(desired_state)
+        return CandidateDryRunResult(
+            changed=True,
+            warnings=["candidate config rendered successfully; device session was not opened"],
+            config_xml=config_xml,
+        )
+
     def prepare_candidate(self, desired_state=None) -> None:
         if desired_state is None:
             raise AdapterError(
@@ -182,6 +205,24 @@ class NcclientNetconfBackend:
             )
 
     def _edit_candidate(self, session, desired_state) -> None:
+        config_xml = self._render_candidate_config(desired_state)
+
+        try:
+            session.edit_config(
+                target="candidate",
+                config=config_xml,
+                default_operation="merge",
+                error_option="rollback-on-error",
+            )
+        except Exception as exc:
+            raise _adapter_operation_error(
+                code="NETCONF_EDIT_CONFIG_FAILED",
+                message="NETCONF edit-config failed",
+                exc=exc,
+                retryable=False,
+            ) from exc
+
+    def _render_candidate_config(self, desired_state) -> str:
         if self.config_renderer is None:
             raise AdapterError(
                 code="NETCONF_RENDERER_NOT_CONFIGURED",
@@ -223,20 +264,7 @@ class NcclientNetconfBackend:
                 retryable=False,
             )
 
-        try:
-            session.edit_config(
-                target="candidate",
-                config=config_xml,
-                default_operation="merge",
-                error_option="rollback-on-error",
-            )
-        except Exception as exc:
-            raise _adapter_operation_error(
-                code="NETCONF_EDIT_CONFIG_FAILED",
-                message="NETCONF edit-config failed",
-                exc=exc,
-                retryable=False,
-            ) from exc
+        return config_xml
 
     def _validate_candidate(self, session) -> None:
         try:
@@ -607,6 +635,13 @@ def _scope_is_empty(scope) -> bool:
         and not getattr(scope, "full", False)
         and not list(getattr(scope, "vlan_ids", []))
         and not list(getattr(scope, "interface_names", []))
+    )
+
+
+def _desired_state_is_empty(desired_state) -> bool:
+    return (
+        not list(getattr(desired_state, "vlans", []))
+        and not list(getattr(desired_state, "interfaces", []))
     )
 
 

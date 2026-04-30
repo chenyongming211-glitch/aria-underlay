@@ -158,7 +158,7 @@ def test_force_unlock_preserves_driver_failure_response():
     assert response.result.errors[0].code == "SECRET_NOT_FOUND"
 
 
-def test_service_dry_run_calls_driver_and_fails_closed_when_unimplemented():
+def test_service_dry_run_calls_driver_and_returns_no_change_for_empty_desired():
     service = UnderlayAdapterService(_Registry(FakeDriver(profile="confirmed")))
     response = service.DryRun(
         pb2.DryRunRequest(
@@ -168,8 +168,27 @@ def test_service_dry_run_calls_driver_and_fails_closed_when_unimplemented():
         context=None,
     )
 
-    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
-    assert response.result.errors[0].code == "NOT_IMPLEMENTED"
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_NO_CHANGE
+    assert response.result.changed is False
+    assert response.result.errors == []
+
+
+def test_service_dry_run_reports_changed_for_fake_desired_update():
+    service = UnderlayAdapterService(_Registry(FakeDriver(profile="confirmed")))
+    response = service.DryRun(
+        pb2.DryRunRequest(
+            device=pb2.DeviceRef(device_id="leaf-a"),
+            desired_state=pb2.DesiredDeviceState(
+                device_id="leaf-a",
+                vlans=[pb2.VlanConfig(vlan_id=200, name="tenant-200")],
+            ),
+        ),
+        context=None,
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_NO_CHANGE
+    assert response.result.changed is True
+    assert response.result.errors == []
 
 
 def test_service_recover_requires_explicit_recovery_action():

@@ -83,7 +83,40 @@ class NetconfBackedDriver:
         )
 
     def dry_run(self, device, desired_state):
-        raise NotImplementedError
+        try:
+            backend = self._backend_for_dry_run(device, desired_state)
+            result = backend.dry_run_candidate(desired_state)
+        except AdapterError as error:
+            return pb2.DryRunResponse(
+                result=pb2.AdapterResult(
+                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
+                    changed=False,
+                    errors=[error.to_proto(pb2)],
+                )
+            )
+        except AttributeError as exc:
+            error = AdapterError(
+                code="DRY_RUN_NOT_SUPPORTED",
+                message="selected NETCONF backend does not implement dry-run",
+                normalized_error="backend dry-run missing",
+                raw_error_summary=str(exc),
+                retryable=False,
+            )
+            return pb2.DryRunResponse(
+                result=pb2.AdapterResult(
+                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
+                    changed=False,
+                    errors=[error.to_proto(pb2)],
+                )
+            )
+
+        return pb2.DryRunResponse(
+            result=pb2.AdapterResult(
+                status=pb2.ADAPTER_OPERATION_STATUS_NO_CHANGE,
+                changed=result.changed,
+                warnings=list(result.warnings),
+            )
+        )
 
     def prepare(self, request):
         try:
@@ -112,6 +145,17 @@ class NetconfBackedDriver:
             return self._backend
 
         renderer = renderer_for_vendor(request.device.vendor_hint)
+        return self._replace_backend(config_renderer=renderer)
+
+    def _backend_for_dry_run(self, device, desired_state):
+        if not hasattr(self._backend, "config_renderer"):
+            return self._backend
+        if getattr(self._backend, "config_renderer", None) is not None:
+            return self._backend
+        if _desired_state_is_empty(desired_state):
+            return self._backend
+
+        renderer = renderer_for_vendor(device.vendor_hint)
         return self._replace_backend(config_renderer=renderer)
 
     def _backend_for_state_read(self, device):
@@ -339,3 +383,13 @@ def _request_scope(request):
 
 def _message_or_none(message):
     return message if message is not None else None
+
+
+def _desired_state_is_empty(desired_state) -> bool:
+    return (
+        desired_state is None
+        or (
+            not list(getattr(desired_state, "vlans", []))
+            and not list(getattr(desired_state, "interfaces", []))
+        )
+    )

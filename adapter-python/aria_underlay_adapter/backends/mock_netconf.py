@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from aria_underlay_adapter.backends.base import BackendCapability
+from aria_underlay_adapter.backends.base import CandidateDryRunResult
 from aria_underlay_adapter.errors import AdapterError
 
 
@@ -132,6 +133,28 @@ class MockNetconfBackend:
     def get_current_state(self, scope=None) -> dict:
         self.get_capabilities()
         return _filter_state_by_scope(self._running, scope)
+
+    def dry_run_candidate(self, desired_state=None) -> CandidateDryRunResult:
+        self.get_capabilities()
+        if desired_state is None or _desired_state_is_empty(desired_state):
+            return CandidateDryRunResult(
+                changed=False,
+                warnings=["desired state contains no VLAN or interface changes"],
+            )
+        if self.profile == "validate_failed":
+            raise AdapterError(
+                code="VALIDATE_FAILED",
+                message="mock candidate validate failed",
+                normalized_error="candidate validate failed",
+                raw_error_summary="mock profile validate_failed",
+                retryable=False,
+            )
+
+        preview = _merge_desired_state(self._running, desired_state)
+        return CandidateDryRunResult(
+            changed=preview != self._running,
+            warnings=["mock candidate dry-run completed without changing running state"],
+        )
 
     def lock_candidate(self) -> None:
         if self.profile == "lock_failed":
@@ -334,6 +357,13 @@ def _merge_desired_state(running: dict, desired_state) -> dict:
         for name in sorted(interfaces_by_name)
     ]
     return merged
+
+
+def _desired_state_is_empty(desired_state) -> bool:
+    return (
+        not list(getattr(desired_state, "vlans", []))
+        and not list(getattr(desired_state, "interfaces", []))
+    )
 
 
 def _is_confirmed_commit_strategy(strategy) -> bool:

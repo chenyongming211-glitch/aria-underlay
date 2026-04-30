@@ -19,10 +19,19 @@ class BackendCapability:
     supported_backends: list[str]
 
 
+@dataclass(frozen=True)
+class CandidateDryRunResult:
+    changed: bool
+    warnings: list[str]
+    config_xml: str = ""
+
+
 class NetconfBackend(Protocol):
     def get_capabilities(self) -> BackendCapability: ...
 
     def get_current_state(self, scope=None) -> dict: ...
+
+    def dry_run_candidate(self, desired_state=None) -> CandidateDryRunResult: ...
 
     def prepare_candidate(self, desired_state=None) -> None: ...
 
