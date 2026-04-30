@@ -108,3 +108,4 @@ Current local verification note:
 - `python3 -m pytest adapter-python/tests -q`: passed, 188 tests.
 - `git diff --check`: passed.
 - Rust verification is blocked locally because `cargo` and `rustc` are not installed in this shell.
+- GitHub Actions run `25165739879`: passed Rust `cargo check`, Rust `cargo test`, Python adapter tests, and integration matrix.
