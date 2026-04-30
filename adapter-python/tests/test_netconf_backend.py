@@ -436,9 +436,121 @@ def test_verify_running_reads_running_with_scope_then_fails_parser_closed():
     ]
 
 
+def test_get_current_state_uses_configured_production_parser():
+    session = _RecordingSession(reply=_Reply("<data><vlan>100</vlan></data>"))
+    parser = _StaticStateParser(
+        state={
+            "vlans": [
+                {
+                    "vlan_id": 100,
+                    "name": "prod",
+                    "description": "production vlan",
+                }
+            ],
+            "interfaces": [],
+        }
+    )
+    backend = _BackendWithSession(session, state_parser=parser)
+
+    state = backend.get_current_state(scope=_Scope(False, [100], []))
+
+    assert state["vlans"][0]["vlan_id"] == 100
+    assert parser.calls[0][0] == "<data><vlan>100</vlan></data>"
+    assert parser.calls[0][1].vlan_ids == [100]
+
+
+def test_get_current_state_rejects_non_production_parser():
+    session = _RecordingSession()
+    backend = _BackendWithSession(
+        session,
+        state_parser=_StaticStateParser(state={}, production_ready=False),
+    )
+
+    try:
+        backend.get_current_state(scope=_Scope(False, [100], []))
+    except AdapterError as error:
+        assert error.code == "NETCONF_STATE_PARSER_NOT_PRODUCTION_READY"
+        assert error.retryable is False
+    else:
+        raise AssertionError("skeleton state parser should fail closed")
+
+
+def test_verify_running_succeeds_with_matching_parsed_state():
+    session = _RecordingSession()
+    parser = _StaticStateParser(
+        state={
+            "vlans": [
+                {
+                    "vlan_id": 100,
+                    "name": "prod",
+                    "description": "production vlan",
+                }
+            ],
+            "interfaces": [
+                {
+                    "name": "GE1/0/1",
+                    "admin_state": "up",
+                    "description": "server uplink",
+                    "mode": {
+                        "kind": "access",
+                        "access_vlan": 100,
+                        "native_vlan": None,
+                        "allowed_vlans": [],
+                    },
+                }
+            ],
+        }
+    )
+    backend = _BackendWithSession(session, state_parser=parser)
+
+    backend.verify_running(_desired_state(), scope=_Scope(False, [100], ["GE1/0/1"]))
+
+    assert session.calls == [
+        (
+            "get_config",
+            {
+                "source": "running",
+                "filter": (
+                    "subtree",
+                    '<filter type="subtree"><vlans><vlan><vlan-id>100</vlan-id></vlan></vlans><interfaces><interface><name>GE1/0/1</name></interface></interfaces></filter>',
+                ),
+            },
+        )
+    ]
+
+
+def test_verify_running_fails_with_parsed_vlan_mismatch():
+    session = _RecordingSession()
+    parser = _StaticStateParser(
+        state={
+            "vlans": [
+                {
+                    "vlan_id": 100,
+                    "name": "wrong",
+                    "description": "production vlan",
+                }
+            ],
+            "interfaces": [],
+        }
+    )
+    backend = _BackendWithSession(session, state_parser=parser)
+
+    try:
+        backend.verify_running(_desired_state(), scope=_Scope(False, [100], []))
+    except AdapterError as error:
+        assert error.code == "VERIFY_FAILED"
+        assert "name mismatch" in error.raw_error_summary
+    else:
+        raise AssertionError("parsed running mismatch should fail verification")
+
+
 class _BackendWithSession(NcclientNetconfBackend):
-    def __init__(self, session, config_renderer=None):
-        super().__init__(host="127.0.0.1", config_renderer=config_renderer)
+    def __init__(self, session, config_renderer=None, state_parser=None):
+        super().__init__(
+            host="127.0.0.1",
+            config_renderer=config_renderer,
+            state_parser=state_parser,
+        )
         object.__setattr__(self, "_session", session)
 
     def _connect(self):
@@ -446,10 +558,11 @@ class _BackendWithSession(NcclientNetconfBackend):
 
 
 class _RecordingSession:
-    def __init__(self, fail_lock=False, fail_commit=False):
+    def __init__(self, fail_lock=False, fail_commit=False, reply="<data/>"):
         self.calls = []
         self.fail_lock = fail_lock
         self.fail_commit = fail_commit
+        self.reply = reply
         self.server_capabilities = [BASE_10, CANDIDATE]
 
     def __enter__(self):
@@ -485,7 +598,7 @@ class _RecordingSession:
 
     def get_config(self, **kwargs):
         self.calls.append(("get_config", kwargs))
-        return "<data/>"
+        return self.reply
 
 
 class _StaticRenderer:
@@ -496,6 +609,22 @@ class _StaticRenderer:
 
     def render_edit_config(self, desired_state):
         return self.payload
+
+
+class _StaticStateParser:
+    def __init__(self, state, production_ready=True):
+        self.state = state
+        self.production_ready = production_ready
+        self.calls = []
+
+    def parse_running(self, xml, scope=None):
+        self.calls.append((xml, scope))
+        return self.state
+
+
+class _Reply:
+    def __init__(self, data_xml):
+        self.data_xml = data_xml
 
 
 def _desired_state():
