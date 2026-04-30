@@ -53,6 +53,7 @@ pub struct AriaUnderlayService {
     lock_policy: LockAcquisitionPolicy,
     secret_store: Arc<dyn SecretStore>,
     shadow_store: Arc<dyn ShadowStateStore>,
+    observed_store: Arc<dyn ShadowStateStore>,
     event_sink: Arc<dyn EventSink>,
     adapter_pool: AdapterClientPool,
 }
@@ -66,6 +67,7 @@ impl AriaUnderlayService {
             lock_policy: LockAcquisitionPolicy::default(),
             secret_store: Arc::new(InMemorySecretStore::default()),
             shadow_store: Arc::new(InMemoryShadowStateStore::default()),
+            observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
             adapter_pool: AdapterClientPool::default(),
         }
@@ -82,6 +84,7 @@ impl AriaUnderlayService {
             lock_policy: LockAcquisitionPolicy::default(),
             secret_store: Arc::new(InMemorySecretStore::default()),
             shadow_store: Arc::new(InMemoryShadowStateStore::default()),
+            observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
             adapter_pool: AdapterClientPool::default(),
         }
@@ -99,6 +102,7 @@ impl AriaUnderlayService {
             lock_policy: LockAcquisitionPolicy::default(),
             secret_store: Arc::new(InMemorySecretStore::default()),
             shadow_store: Arc::new(InMemoryShadowStateStore::default()),
+            observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
             adapter_pool: AdapterClientPool::default(),
         }
@@ -118,6 +122,7 @@ impl AriaUnderlayService {
             lock_policy,
             secret_store,
             shadow_store: Arc::new(InMemoryShadowStateStore::default()),
+            observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
             adapter_pool: AdapterClientPool::default(),
         }
@@ -138,9 +143,15 @@ impl AriaUnderlayService {
             lock_policy,
             secret_store,
             shadow_store,
+            observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
             adapter_pool: AdapterClientPool::default(),
         }
+    }
+
+    pub fn with_observed_state_store(mut self, observed_store: Arc<dyn ShadowStateStore>) -> Self {
+        self.observed_store = observed_store;
+        self
     }
 
     pub fn with_event_sink(mut self, event_sink: Arc<dyn EventSink>) -> Self {
@@ -213,7 +224,7 @@ impl AriaUnderlayService {
             // only to desired objects, absent desired resources cannot be detected
             // as deletes. Post-commit verify is scoped by ChangeSet below.
             let current = client.get_current_state(&managed.info).await?;
-            self.shadow_store.put(current.clone())?;
+            self.observed_store.put(current.clone())?;
             current_states.push(current);
         }
 
@@ -1090,7 +1101,7 @@ impl UnderlayService for AriaUnderlayService {
 
     async fn get_device_state(&self, device_id: DeviceId) -> UnderlayResult<DeviceShadowState> {
         let state = self.fetch_device_state_from_adapter(&device_id).await?;
-        self.shadow_store.put(state.clone())?;
+        self.observed_store.put(state.clone())?;
         Ok(state)
     }
 
@@ -1195,8 +1206,10 @@ impl UnderlayService for AriaUnderlayService {
 
         for device_id in request.device_ids {
             let observed = self.fetch_device_state_from_adapter(&device_id).await?;
-            let report = match self.shadow_store.get(&device_id)? {
-                Some(expected) => detect_drift(&expected, &observed),
+            self.observed_store.put(observed.clone())?;
+            let expected = self.shadow_store.get(&device_id)?;
+            let report = match expected.as_ref() {
+                Some(expected) => detect_drift(expected, &observed),
                 None => DriftReport::from_adapter_warnings(
                     device_id.clone(),
                     observed.warnings.clone(),
@@ -1211,8 +1224,12 @@ impl UnderlayService for AriaUnderlayService {
                 self.inventory
                     .set_state(&device_id, crate::device::DeviceLifecycleState::Drifted)?;
                 drifted_devices.push(device_id);
-            } else {
-                self.shadow_store.put(observed)?;
+            } else if expected.is_some() {
+                let managed = self.inventory.get(&device_id)?;
+                if managed.info.lifecycle_state == DeviceLifecycleState::Drifted {
+                    self.inventory
+                        .set_state(&device_id, DeviceLifecycleState::Ready)?;
+                }
             }
         }
 

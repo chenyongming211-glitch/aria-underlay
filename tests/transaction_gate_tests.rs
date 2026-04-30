@@ -1,11 +1,10 @@
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc, Mutex,
-};
+use std::sync::Arc;
 
-use aria_underlay::api::request::{ApplyDomainIntentRequest, ApplyOptions};
+use aria_underlay::api::request::{
+    ApplyDomainIntentRequest, ApplyOptions, DriftAuditRequest, RefreshStateRequest,
+};
 use aria_underlay::api::response::ApplyStatus;
-use aria_underlay::api::AriaUnderlayService;
+use aria_underlay::api::{AriaUnderlayService, UnderlayService};
 use aria_underlay::device::{DeviceInfo, DeviceInventory, DeviceLifecycleState, HostKeyPolicy};
 use aria_underlay::intent::interface::InterfaceIntent;
 use aria_underlay::intent::vlan::VlanIntent;
@@ -13,8 +12,11 @@ use aria_underlay::intent::{
     ManagementEndpointIntent, SwitchMemberIntent, UnderlayDomainIntent, UnderlayTopology,
 };
 use aria_underlay::model::{AdminState, DeviceId, DeviceRole, PortMode, Vendor};
+use aria_underlay::planner::domain_plan::plan_underlay_domain;
 use aria_underlay::state::drift::DriftPolicy;
-use aria_underlay::state::{DeviceShadowState, JsonFileShadowStateStore, ShadowStateStore};
+use aria_underlay::state::{
+    DeviceShadowState, InMemoryShadowStateStore, JsonFileShadowStateStore, ShadowStateStore,
+};
 use aria_underlay::tx::{
     InMemoryTxJournalStore, JsonFileTxJournalStore, TxContext, TxJournalRecord, TxJournalStore,
     TxPhase,
@@ -148,7 +150,7 @@ async fn successful_device_apply_marks_transaction_in_doubt_when_shadow_update_f
         Default::default(),
         Default::default(),
         Arc::new(aria_underlay::device::InMemorySecretStore::default()),
-        Arc::new(FailingAfterFirstShadowStore::default()),
+        Arc::new(FailingDesiredShadowStore),
     );
 
     let response = service
@@ -206,7 +208,7 @@ async fn successful_device_apply_persists_shadow_across_service_recreation() {
         .expect("file shadow get should succeed after service recreation")
         .expect("file shadow should persist successful apply");
 
-    assert_eq!(state.revision, 2);
+    assert_eq!(state.revision, 1);
     assert!(state.vlans.contains_key(&200));
     assert_eq!(
         state.interfaces["GE1/0/1"].mode,
@@ -215,6 +217,92 @@ async fn successful_device_apply_persists_shadow_across_service_recreation() {
 
     std::fs::remove_dir_all(journal_root).ok();
     std::fs::remove_dir_all(shadow_root).ok();
+}
+
+#[tokio::test]
+async fn refresh_state_does_not_replace_desired_shadow_baseline_for_drift_audit() {
+    let endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-mgmt", 200)),
+        ..Default::default()
+    })
+    .await;
+    let inventory = inventory_with_endpoint_at(
+        "stack-mgmt",
+        DeviceLifecycleState::Ready,
+        endpoint,
+    );
+    let shadow_store = Arc::new(InMemoryShadowStateStore::default());
+    shadow_store
+        .put(desired_shadow_state(100))
+        .expect("desired baseline should be stored");
+    let service = AriaUnderlayService::new_with_shadow_store(
+        inventory,
+        Arc::new(InMemoryTxJournalStore::default()),
+        Default::default(),
+        Default::default(),
+        Arc::new(aria_underlay::device::InMemorySecretStore::default()),
+        shadow_store.clone(),
+    );
+
+    service
+        .refresh_state(RefreshStateRequest {
+            device_ids: vec![DeviceId("stack-mgmt".into())],
+        })
+        .await
+        .expect("refresh should cache observed state separately");
+    let response = service
+        .run_drift_audit(DriftAuditRequest {
+            device_ids: vec![DeviceId("stack-mgmt".into())],
+        })
+        .await
+        .expect("drift audit should complete");
+
+    assert_eq!(response.drifted_devices, vec![DeviceId("stack-mgmt".into())]);
+    let baseline = shadow_store
+        .get(&DeviceId("stack-mgmt".into()))
+        .expect("shadow read should succeed")
+        .expect("desired baseline should remain");
+    assert!(baseline.vlans.contains_key(&100));
+    assert!(!baseline.vlans.contains_key(&200));
+}
+
+#[tokio::test]
+async fn clean_drift_audit_clears_previous_drift_lifecycle_state() {
+    let endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-mgmt", 100)),
+        ..Default::default()
+    })
+    .await;
+    let inventory = inventory_with_endpoint_at(
+        "stack-mgmt",
+        DeviceLifecycleState::Drifted,
+        endpoint,
+    );
+    let shadow_store = Arc::new(InMemoryShadowStateStore::default());
+    shadow_store
+        .put(desired_shadow_state(100))
+        .expect("desired baseline should be stored");
+    let service = AriaUnderlayService::new_with_shadow_store(
+        inventory.clone(),
+        Arc::new(InMemoryTxJournalStore::default()),
+        Default::default(),
+        Default::default(),
+        Arc::new(aria_underlay::device::InMemorySecretStore::default()),
+        shadow_store,
+    );
+
+    let response = service
+        .run_drift_audit(DriftAuditRequest {
+            device_ids: vec![DeviceId("stack-mgmt".into())],
+        })
+        .await
+        .expect("clean drift audit should complete");
+
+    assert!(response.drifted_devices.is_empty());
+    let managed = inventory
+        .get(&DeviceId("stack-mgmt".into()))
+        .expect("inventory should still contain device");
+    assert_eq!(managed.info.lifecycle_state, DeviceLifecycleState::Ready);
 }
 
 async fn assert_adapter_failure_records_terminal_phase(
@@ -302,6 +390,15 @@ fn domain_intent(vlan_id: u16) -> UnderlayDomainIntent {
     }
 }
 
+fn desired_shadow_state(vlan_id: u16) -> DeviceShadowState {
+    let desired = plan_underlay_domain(&domain_intent(vlan_id))
+        .expect("domain intent should plan")
+        .into_iter()
+        .next()
+        .expect("domain intent should produce one device");
+    DeviceShadowState::from_desired(&desired, 0)
+}
+
 fn temp_store_dir(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("aria-underlay-transaction-{name}-{}", uuid::Uuid::new_v4()))
 }
@@ -363,42 +460,23 @@ enum AdapterFailurePoint {
     Verify,
 }
 
-#[derive(Debug, Default)]
-struct FailingAfterFirstShadowStore {
-    puts: AtomicUsize,
-    state: Mutex<Option<DeviceShadowState>>,
-}
+#[derive(Debug)]
+struct FailingDesiredShadowStore;
 
-impl ShadowStateStore for FailingAfterFirstShadowStore {
+impl ShadowStateStore for FailingDesiredShadowStore {
     fn get(&self, _device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
-        self.state
-            .lock()
-            .map(|state| state.clone())
-            .map_err(|_| UnderlayError::Internal("shadow test store mutex poisoned".into()))
+        Ok(None)
     }
 
-    fn put(&self, state: DeviceShadowState) -> UnderlayResult<DeviceShadowState> {
-        if self.puts.fetch_add(1, Ordering::SeqCst) == 0 {
-            *self.state.lock().map_err(|_| {
-                UnderlayError::Internal("shadow test store mutex poisoned".into())
-            })? = Some(state.clone());
-            Ok(state)
-        } else {
-            Err(UnderlayError::Internal("shadow store unavailable".into()))
-        }
+    fn put(&self, _state: DeviceShadowState) -> UnderlayResult<DeviceShadowState> {
+        Err(UnderlayError::Internal("shadow store unavailable".into()))
     }
 
     fn remove(&self, _device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
-        self.state
-            .lock()
-            .map(|mut state| state.take())
-            .map_err(|_| UnderlayError::Internal("shadow test store mutex poisoned".into()))
+        Ok(None)
     }
 
     fn list(&self) -> UnderlayResult<Vec<DeviceShadowState>> {
-        self.state
-            .lock()
-            .map(|state| state.clone().into_iter().collect())
-            .map_err(|_| UnderlayError::Internal("shadow test store mutex poisoned".into()))
+        Ok(Vec::new())
     }
 }
