@@ -1,0 +1,37 @@
+<data xmlns="urn:aria:underlay:fixture:h3c:comware7">
+  <vlans>
+    <vlan>
+      <vlan-id>100</vlan-id>
+      <name>prod</name>
+      <description>production vlan</description>
+    </vlan>
+    <vlan>
+      <vlan-id>200</vlan-id>
+      <name>backup</name>
+    </vlan>
+  </vlans>
+  <interfaces>
+    <interface>
+      <name>GigabitEthernet1/0/1</name>
+      <admin-state>up</admin-state>
+      <description>server uplink</description>
+      <port-mode>
+        <kind>access</kind>
+        <access-vlan>100</access-vlan>
+      </port-mode>
+    </interface>
+    <interface>
+      <name>GigabitEthernet1/0/2</name>
+      <admin-state>up</admin-state>
+      <description>core trunk</description>
+      <port-mode>
+        <kind>trunk</kind>
+        <native-vlan>100</native-vlan>
+        <allowed-vlans>
+          <vlan-id>100</vlan-id>
+          <vlan-id>200</vlan-id>
+        </allowed-vlans>
+      </port-mode>
+    </interface>
+  </interfaces>
+</data>

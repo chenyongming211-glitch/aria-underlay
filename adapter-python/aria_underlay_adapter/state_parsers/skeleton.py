@@ -10,6 +10,7 @@ class StateParserProfile:
     vendor: str
     profile_name: str
     production_ready: bool = False
+    fixture_verified: bool = False
 
 
 class SkeletonStateParser:

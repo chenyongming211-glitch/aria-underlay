@@ -41,6 +41,14 @@ def test_state_parser_registry_rejects_skeletons_by_default(vendor):
     assert exc.value.code == "STATE_PARSER_NOT_PRODUCTION_READY"
 
 
+@pytest.mark.parametrize("vendor", [VENDOR_HUAWEI, "huawei", VENDOR_H3C, "h3c"])
+def test_state_parser_registry_allows_fixture_verified_parsers_when_explicit(vendor):
+    parser = state_parser_for_vendor(vendor, allow_fixture_verified=True)
+
+    assert parser.production_ready is False
+    assert parser.fixture_verified is True
+
+
 @pytest.mark.parametrize("vendor", [VENDOR_CISCO, VENDOR_UNKNOWN, "ruijie", "unknown"])
 def test_state_parser_registry_rejects_unregistered_vendors(vendor):
     with pytest.raises(AdapterError) as exc:

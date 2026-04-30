@@ -49,6 +49,7 @@ def state_parser_for_vendor(
     vendor: Any,
     *,
     allow_skeleton: bool = False,
+    allow_fixture_verified: bool = False,
 ) -> RunningStateParser:
     vendor_value = _vendor_value(vendor)
     parser_type = _PARSERS.get(vendor_value)
@@ -64,14 +65,20 @@ def state_parser_for_vendor(
         )
 
     parser = parser_type()
-    if not allow_skeleton and not getattr(parser, "production_ready", False):
+    if getattr(parser, "production_ready", False):
+        return parser
+    if allow_skeleton:
+        return parser
+    if allow_fixture_verified and getattr(parser, "fixture_verified", False):
+        return parser
+    if not getattr(parser, "production_ready", False):
         raise AdapterError(
             code="STATE_PARSER_NOT_PRODUCTION_READY",
             message=f"NETCONF state parser for vendor {vendor_name} is not production ready",
             normalized_error="state parser not production ready",
             raw_error_summary=(
                 f"vendor={vendor_name} parser={parser_type.__name__} "
-                "is skeleton-only; refusing production selection"
+                "is not production-ready; refusing production selection"
             ),
             retryable=False,
         )
