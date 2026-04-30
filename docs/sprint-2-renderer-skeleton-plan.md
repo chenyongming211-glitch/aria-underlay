@@ -39,7 +39,7 @@ adapter-python/aria_underlay_adapter/renderers/
 - `H3cRenderer.production_ready = False`。
 - 真实 NETCONF backend 会拒绝 `production_ready = False` 的 renderer，返回 `NETCONF_RENDERER_NOT_PRODUCTION_READY`，防止 skeleton XML 被下发到设备。
 - renderer registry 默认拒绝 skeleton，返回 `RENDERER_NOT_PRODUCTION_READY`。只有测试或离线 XML snapshot 显式传入 `allow_skeleton=True` 时，才允许取出 Huawei/H3C skeleton renderer。
-- adapter 真实模式初始化 `NetconfBackedDriver` 时必须通过 registry 选择 renderer；vendor 未注册返回 `RENDERER_VENDOR_UNSUPPORTED`，不能静默退回 mock 或空 renderer。
+- `NetconfBackedDriver.prepare()` 在真正触碰设备锁之前必须通过 registry 选择 renderer；vendor 未注册返回 `RENDERER_VENDOR_UNSUPPORTED`，不能静默退回 mock 或空 renderer。能力探测阶段不被 renderer gate 阻断，避免设备纳管被 skeleton 状态误伤。
 - 单元测试覆盖：
   - XML escape。
   - VLAN create。

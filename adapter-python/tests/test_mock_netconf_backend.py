@@ -178,6 +178,33 @@ def test_verify_running_detects_vlan_expected_absent():
     assert "VLAN 100 should be absent" in exc.value.message
 
 
+def test_verify_running_full_scope_detects_extra_vlan():
+    desired = _desired_state_without_vlan()
+    scope = SimpleNamespace(full=True, vlan_ids=[], interface_names=[])
+
+    with pytest.raises(AdapterError) as exc:
+        MockNetconfBackend("confirmed").verify_running(
+            desired_state=desired,
+            scope=scope,
+        )
+
+    assert exc.value.code == "VERIFY_MISMATCH"
+    assert "VLAN 100 should be absent" in exc.value.message
+
+
+def test_verify_running_default_scope_detects_extra_vlan():
+    desired = _desired_state_without_vlan()
+
+    with pytest.raises(AdapterError) as exc:
+        MockNetconfBackend("confirmed").verify_running(
+            desired_state=desired,
+            scope=None,
+        )
+
+    assert exc.value.code == "VERIFY_MISMATCH"
+    assert "VLAN 100 should be absent" in exc.value.message
+
+
 def test_verify_running_detects_interface_mismatch():
     desired = _desired_state(interface_description="wrong")
     scope = SimpleNamespace(full=False, vlan_ids=[], interface_names=["GE1/0/1"])
@@ -195,6 +222,20 @@ def test_verify_running_detects_interface_mismatch():
 def test_verify_running_detects_interface_expected_absent():
     desired = _desired_state_without_interface()
     scope = SimpleNamespace(full=False, vlan_ids=[], interface_names=["GE1/0/1"])
+
+    with pytest.raises(AdapterError) as exc:
+        MockNetconfBackend("confirmed").verify_running(
+            desired_state=desired,
+            scope=scope,
+        )
+
+    assert exc.value.code == "VERIFY_MISMATCH"
+    assert "interface GE1/0/1 should be absent" in exc.value.message
+
+
+def test_verify_running_full_scope_detects_extra_interface():
+    desired = _desired_state_without_interface()
+    scope = SimpleNamespace(full=True, vlan_ids=[], interface_names=[])
 
     with pytest.raises(AdapterError) as exc:
         MockNetconfBackend("confirmed").verify_running(

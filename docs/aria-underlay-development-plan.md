@@ -837,6 +837,8 @@ RegisterDevice
 
 Rust 主控需要后台巡检 Worker，用于发现网工绕过 Aria 的带外变更。
 
+当前代码已经具备一次性 drift audit 能力：可以把 shadow store 中的期望状态与 `DriftObservationSource` 返回的 observed state 做结构化比较。尚未完成的是生产后台闭环：周期调度、真实 adapter observed source 接入、`DriftDetected` 事件发送、以及设备 lifecycle state 更新。
+
 流程：
 
 ```text

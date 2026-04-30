@@ -348,7 +348,7 @@ def _verify_vlans(desired_state, observed: dict, scope=None) -> None:
         _field(vlan, "vlan_id"): vlan
         for vlan in getattr(desired_state, "vlans", [])
     }
-    for vlan_id in _scoped_vlan_ids(scope):
+    for vlan_id in _scoped_vlan_ids(scope, observed):
         if vlan_id not in desired_by_id and vlan_id in observed_by_id:
             raise _verify_mismatch(
                 f"VLAN {vlan_id} should be absent but exists in observed scoped state",
@@ -380,7 +380,7 @@ def _verify_interfaces(desired_state, observed: dict, scope=None) -> None:
         _field(interface, "name"): interface
         for interface in getattr(desired_state, "interfaces", [])
     }
-    for name in _scoped_interface_names(scope):
+    for name in _scoped_interface_names(scope, observed):
         if name not in desired_by_name and name in observed_by_name:
             raise _verify_mismatch(
                 f"interface {name} should be absent but exists in observed scoped state",
@@ -422,9 +422,11 @@ def _desired_vlans_in_scope(desired_state, scope=None):
             yield vlan
 
 
-def _scoped_vlan_ids(scope=None):
+def _scoped_vlan_ids(scope=None, observed=None):
     if scope is None or getattr(scope, "full", False):
-        return []
+        if observed is None:
+            return []
+        return {vlan["vlan_id"] for vlan in observed["vlans"]}
     return set(getattr(scope, "vlan_ids", []))
 
 
@@ -447,9 +449,11 @@ def _desired_interfaces_in_scope(desired_state, scope=None):
             yield interface
 
 
-def _scoped_interface_names(scope=None):
+def _scoped_interface_names(scope=None, observed=None):
     if scope is None or getattr(scope, "full", False):
-        return []
+        if observed is None:
+            return []
+        return {interface["name"] for interface in observed["interfaces"]}
     return set(getattr(scope, "interface_names", []))
 
 

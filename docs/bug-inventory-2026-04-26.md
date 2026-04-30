@@ -43,7 +43,7 @@ Comprehensive bug report from full codebase review (~10,500 lines, ~73% sprint c
 
 - ~~`adapter-python/aria_underlay_adapter/artifact_store.py:10-15`~~ — ✅ FIXED (`3c5c7d3`): Path traversal blocked. `_root` is resolved at init; `save_json` resolves the target path and verifies it stays within `_root` before writing.
 - ~~`adapter-python/aria_underlay_adapter/renderers/h3c.py:69-72` and `huawei.py:69-72`~~ — ✅ FIXED (`3c5c7d3`): Literal "None" string in XML. `_port_mode_element` now checks `access_vlan is None` and raises `ValueError` instead of passing `None` to `str()`.
-- `adapter-python/aria_underlay_adapter/backends/mock_netconf.py:425-428` — Full-scope verify fail-open: `_scoped_vlan_ids` returns empty set for `full=True`, so extra-VLAN detection loop iterates over nothing
+- ~~`adapter-python/aria_underlay_adapter/backends/mock_netconf.py:425-428`~~ — ✅ FIXED: Full-scope verify now checks observed VLAN/interface IDs when `scope.full = true` or `scope is None`, so extra resources are detected instead of silently passing.
 
 ## Python — Medium Severity (8)
 
@@ -65,4 +65,4 @@ Comprehensive bug report from full codebase review (~10,500 lines, ~73% sprint c
 
 ## Status
 
-6 bugs fixed (d71a4d4 + 3c5c7d3). 2 of 4 high Rust bugs fixed. 2 of 3 high Python bugs fixed. 37 remaining.
+7 bugs fixed (d71a4d4 + 3c5c7d3 + current P0 mock verify fix). 2 of 4 high Rust bugs fixed. 3 of 3 high Python bugs fixed. 36 remaining.
