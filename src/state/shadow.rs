@@ -92,14 +92,15 @@ impl JsonFileShadowStateStore {
         &self.root
     }
 
-    fn path_for(&self, device_id: &DeviceId) -> PathBuf {
-        self.root.join(format!("{}.json", shadow_file_stem(device_id)))
+    fn path_for(&self, device_id: &DeviceId) -> UnderlayResult<PathBuf> {
+        validate_shadow_device_id(device_id)?;
+        Ok(self.root.join(format!("{}.json", device_id.0)))
     }
 }
 
 impl ShadowStateStore for JsonFileShadowStateStore {
     fn get(&self, device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
-        let path = self.path_for(device_id);
+        let path = self.path_for(device_id)?;
         if !path.exists() {
             return Ok(None);
         }
@@ -115,7 +116,7 @@ impl ShadowStateStore for JsonFileShadowStateStore {
             .unwrap_or_else(|| state.revision.max(1));
         state.revision = next_revision;
 
-        let path = self.path_for(&state.device_id);
+        let path = self.path_for(&state.device_id)?;
         let tmp_path = path.with_extension("json.tmp");
         let payload = serde_json::to_vec_pretty(&state)
             .map_err(|err| UnderlayError::Internal(format!("serialize shadow state: {err}")))?;
@@ -126,7 +127,7 @@ impl ShadowStateStore for JsonFileShadowStateStore {
     }
 
     fn remove(&self, device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
-        let path = self.path_for(device_id);
+        let path = self.path_for(device_id)?;
         if !path.exists() {
             return Ok(None);
         }
@@ -160,18 +161,15 @@ fn read_shadow_state(path: &Path) -> UnderlayResult<DeviceShadowState> {
         .map_err(|err| UnderlayError::Internal(format!("parse shadow state {:?}: {err}", path)))
 }
 
-fn shadow_file_stem(device_id: &DeviceId) -> String {
-    device_id
-        .0
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect()
+fn validate_shadow_device_id(device_id: &DeviceId) -> UnderlayResult<()> {
+    if !device_id.is_canonical() {
+        return Err(UnderlayError::InvalidDeviceState(format!(
+            "device_id {} is invalid for file shadow store: {}",
+            device_id.0,
+            DeviceId::canonical_rule()
+        )));
+    }
+    Ok(())
 }
 
 fn shadow_io_error(err: std::io::Error) -> UnderlayError {

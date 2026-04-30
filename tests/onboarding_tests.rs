@@ -39,6 +39,58 @@ fn register_device_starts_pending() {
 }
 
 #[test]
+fn register_device_rejects_invalid_connection_inputs() {
+    let inventory = DeviceInventory::default();
+    let registration = DeviceRegistrationService::new(inventory);
+
+    for (label, request) in [
+        (
+            "empty tenant_id",
+            register_request(|request| request.tenant_id = " ".into()),
+        ),
+        (
+            "non-canonical device_id",
+            register_request(|request| request.device_id = DeviceId("leaf/a".into())),
+        ),
+        (
+            "empty management_ip",
+            register_request(|request| request.management_ip = " ".into()),
+        ),
+        (
+            "zero management_port",
+            register_request(|request| request.management_port = 0),
+        ),
+        (
+            "empty secret_ref",
+            register_request(|request| request.secret_ref = " ".into()),
+        ),
+        (
+            "empty adapter_endpoint",
+            register_request(|request| request.adapter_endpoint = " ".into()),
+        ),
+        (
+            "empty known_hosts path",
+            register_request(|request| {
+                request.host_key_policy = HostKeyPolicy::KnownHostsFile { path: " ".into() }
+            }),
+        ),
+        (
+            "empty pinned fingerprint",
+            register_request(|request| {
+                request.host_key_policy = HostKeyPolicy::PinnedKey {
+                    fingerprint: " ".into(),
+                }
+            }),
+        ),
+    ] {
+        assert!(
+            registration.register(request).is_err(),
+            "{label} should be rejected"
+        );
+    }
+}
+
+#[test]
 fn auth_failed_adapter_error_maps_to_auth_failed_state() {
     let error = UnderlayError::AdapterOperation {
         code: "AUTH_FAILED".into(),
@@ -145,6 +197,42 @@ fn switch_pair_validation_accepts_leaf_pair() {
     };
 
     validate_switch_pair(&request).expect("leaf pair should be valid");
+}
+
+#[test]
+fn switch_pair_validation_rejects_invalid_site_and_switch_connection_inputs() {
+    for (label, request) in [
+        (
+            "empty request_id",
+            site_request(|request| request.request_id = " ".into()),
+        ),
+        (
+            "empty tenant_id",
+            site_request(|request| request.tenant_id = " ".into()),
+        ),
+        (
+            "empty site_id",
+            site_request(|request| request.site_id = " ".into()),
+        ),
+        (
+            "empty adapter_endpoint",
+            site_request(|request| request.adapter_endpoint = " ".into()),
+        ),
+        (
+            "non-canonical device_id",
+            site_request(|request| request.switches[0].device_id = DeviceId("leaf/a".into())),
+        ),
+        (
+            "empty management_ip",
+            site_request(|request| request.switches[0].management_ip = " ".into()),
+        ),
+        (
+            "zero management_port",
+            site_request(|request| request.switches[0].management_port = 0),
+        ),
+    ] {
+        assert!(validate_switch_pair(&request).is_err(), "{label} should fail");
+    }
 }
 
 #[test]
@@ -363,6 +451,42 @@ fn switch_bootstrap_with_credential(
         host_key_policy: HostKeyPolicy::TrustOnFirstUse,
         credential,
     }
+}
+
+fn register_request(mut mutate: impl FnMut(&mut RegisterDeviceRequest)) -> RegisterDeviceRequest {
+    let mut request = RegisterDeviceRequest {
+        tenant_id: "tenant-a".into(),
+        site_id: "site-a".into(),
+        device_id: DeviceId("leaf-a".into()),
+        management_ip: "127.0.0.1".into(),
+        management_port: 830,
+        vendor_hint: Some(Vendor::Unknown),
+        model_hint: None,
+        role: DeviceRole::LeafA,
+        secret_ref: "local/test-device".into(),
+        host_key_policy: HostKeyPolicy::TrustOnFirstUse,
+        adapter_endpoint: "http://127.0.0.1:50051".into(),
+    };
+    mutate(&mut request);
+    request
+}
+
+fn site_request(
+    mut mutate: impl FnMut(&mut InitializeUnderlaySiteRequest),
+) -> InitializeUnderlaySiteRequest {
+    let mut request = InitializeUnderlaySiteRequest {
+        request_id: "req-a".into(),
+        tenant_id: "tenant-a".into(),
+        site_id: "site-a".into(),
+        adapter_endpoint: "http://127.0.0.1:50051".into(),
+        switches: vec![
+            switch_bootstrap("leaf-a", DeviceRole::LeafA),
+            switch_bootstrap("leaf-b", DeviceRole::LeafB),
+        ],
+        allow_degraded: false,
+    };
+    mutate(&mut request);
+    request
 }
 
 #[derive(Debug)]

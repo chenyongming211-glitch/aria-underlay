@@ -127,19 +127,16 @@ fn file_shadow_store_removes_state() {
 }
 
 #[test]
-fn file_shadow_store_sanitizes_device_id_path() {
-    let root = temp_shadow_dir("sanitize");
+fn file_shadow_store_rejects_non_canonical_device_id() {
+    let root = temp_shadow_dir("reject-invalid-id");
     let store = JsonFileShadowStateStore::new(&root);
 
-    store
+    let err = store
         .put(shadow_state("../bad/device", 100))
-        .expect("file shadow put should sanitize device id path");
+        .expect_err("file shadow put should reject non-canonical device id");
 
-    assert!(root.join("___bad_device.json").exists());
-    assert!(store
-        .get(&DeviceId("../bad/device".into()))
-        .expect("file shadow get should succeed")
-        .is_some());
+    assert!(format!("{err}").contains("device_id"));
+    assert!(!root.join("___bad_device.json").exists());
 
     std::fs::remove_dir_all(root).ok();
 }

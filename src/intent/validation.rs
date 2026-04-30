@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::intent::{SwitchPairIntent, UnderlayDomainIntent, UnderlayTopology};
-use crate::model::{DeviceId, PortMode};
+use crate::model::{is_canonical_identifier, DeviceId, PortMode};
 use crate::{UnderlayError, UnderlayResult};
 
 pub fn validate_switch_pair_intent(intent: &SwitchPairIntent) -> UnderlayResult<()> {
@@ -16,7 +16,7 @@ pub fn validate_switch_pair_intent(intent: &SwitchPairIntent) -> UnderlayResult<
 
     let mut switch_ids = BTreeSet::new();
     for switch in &intent.switches {
-        validate_non_empty("switch device_id", &switch.device_id.0)?;
+        validate_device_id("switch device_id", &switch.device_id)?;
         if !switch_ids.insert(switch.device_id.clone()) {
             return Err(UnderlayError::InvalidIntent(format!(
                 "duplicate switch device_id {}",
@@ -65,7 +65,7 @@ pub fn validate_underlay_domain_intent(intent: &UnderlayDomainIntent) -> Underla
 
     let mut endpoint_ids = BTreeSet::new();
     for endpoint in &intent.endpoints {
-        validate_non_empty("management endpoint endpoint_id", &endpoint.endpoint_id)?;
+        validate_identifier("management endpoint endpoint_id", &endpoint.endpoint_id)?;
         validate_non_empty("management endpoint host", &endpoint.host)?;
         validate_non_empty("management endpoint secret_ref", &endpoint.secret_ref)?;
         if endpoint.port == 0 {
@@ -84,8 +84,8 @@ pub fn validate_underlay_domain_intent(intent: &UnderlayDomainIntent) -> Underla
 
     let mut member_ids = BTreeSet::new();
     for member in &intent.members {
-        validate_non_empty("switch member member_id", &member.member_id)?;
-        validate_non_empty(
+        validate_identifier("switch member member_id", &member.member_id)?;
+        validate_identifier(
             "switch member management_endpoint_id",
             &member.management_endpoint_id,
         )?;
@@ -147,6 +147,27 @@ fn validate_topology_shape(intent: &UnderlayDomainIntent) -> UnderlayResult<()> 
 fn validate_non_empty(field: &str, value: &str) -> UnderlayResult<()> {
     if value.trim().is_empty() {
         return Err(UnderlayError::InvalidIntent(format!("{field} is empty")));
+    }
+    Ok(())
+}
+
+fn validate_identifier(field: &str, value: &str) -> UnderlayResult<()> {
+    if !is_canonical_identifier(value) {
+        return Err(UnderlayError::InvalidIntent(format!(
+            "{field} is invalid: {}",
+            DeviceId::canonical_rule()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_device_id(field: &str, device_id: &DeviceId) -> UnderlayResult<()> {
+    if !device_id.is_canonical() {
+        return Err(UnderlayError::InvalidIntent(format!(
+            "{field} {} is invalid: {}",
+            device_id.0,
+            DeviceId::canonical_rule()
+        )));
     }
     Ok(())
 }

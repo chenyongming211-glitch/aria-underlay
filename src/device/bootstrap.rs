@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::adapter_client::AdapterClientPool;
+use crate::device::registration::{
+    validate_adapter_endpoint, validate_device_id, validate_host_key_policy,
+    validate_nonzero_port, validate_required,
+};
 use crate::device::secret::{NetconfCredentialInput, SecretStore};
 use crate::device::{
     DeviceInventory, DeviceLifecycleState, DeviceOnboardingService, DeviceRegistrationService,
@@ -226,6 +230,11 @@ impl UnderlaySiteInitializationService {
 }
 
 pub fn validate_switch_pair(request: &InitializeUnderlaySiteRequest) -> UnderlayResult<()> {
+    validate_required("request_id", &request.request_id)?;
+    validate_required("tenant_id", &request.tenant_id)?;
+    validate_required("site_id", &request.site_id)?;
+    validate_adapter_endpoint(&request.adapter_endpoint)?;
+
     if request.switches.len() != 2 {
         return Err(UnderlayError::InvalidDeviceState(
             "underlay site initialization requires exactly two switches".into(),
@@ -253,6 +262,13 @@ pub fn validate_switch_pair(request: &InitializeUnderlaySiteRequest) -> Underlay
         return Err(UnderlayError::InvalidDeviceState(
             "switch pair device_id values must be unique".into(),
         ));
+    }
+
+    for switch in &request.switches {
+        validate_device_id("switch device_id", &switch.device_id)?;
+        validate_required("switch management_ip", &switch.management_ip)?;
+        validate_nonzero_port("switch management_port", switch.management_port)?;
+        validate_host_key_policy(&switch.host_key_policy)?;
     }
 
     Ok(())
