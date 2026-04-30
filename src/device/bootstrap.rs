@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::adapter_client::AdapterClientPool;
 use crate::device::secret::{NetconfCredentialInput, SecretStore};
 use crate::device::{
     DeviceInventory, DeviceLifecycleState, DeviceOnboardingService, DeviceRegistrationService,
@@ -77,9 +78,24 @@ impl UnderlaySiteInitializationService {
         inventory: DeviceInventory,
         secret_store: Arc<dyn SecretStore>,
     ) -> Self {
+        Self::new_with_secret_store_and_adapter_pool(
+            inventory,
+            secret_store,
+            AdapterClientPool::default(),
+        )
+    }
+
+    pub fn new_with_secret_store_and_adapter_pool(
+        inventory: DeviceInventory,
+        secret_store: Arc<dyn SecretStore>,
+        adapter_pool: AdapterClientPool,
+    ) -> Self {
         Self {
             registration: DeviceRegistrationService::new(inventory.clone()),
-            onboarding: DeviceOnboardingService::new(inventory.clone()),
+            onboarding: DeviceOnboardingService::new_with_adapter_pool(
+                inventory.clone(),
+                adapter_pool.clone(),
+            ),
             inventory,
             secret_store,
         }

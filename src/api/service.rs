@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use crate::adapter_client::mapper::AdapterOperationStatus;
-use crate::adapter_client::{tx_request_context, AdapterClient};
+use crate::adapter_client::{tx_request_context, AdapterClient, AdapterClientPool};
 use crate::api::force_resolve::{
     ForceResolveTransactionRequest, ForceResolveTransactionResponse,
 };
@@ -54,6 +54,7 @@ pub struct AriaUnderlayService {
     secret_store: Arc<dyn SecretStore>,
     shadow_store: Arc<dyn ShadowStateStore>,
     event_sink: Arc<dyn EventSink>,
+    adapter_pool: AdapterClientPool,
 }
 
 impl AriaUnderlayService {
@@ -66,6 +67,7 @@ impl AriaUnderlayService {
             secret_store: Arc::new(InMemorySecretStore::default()),
             shadow_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
+            adapter_pool: AdapterClientPool::default(),
         }
     }
 
@@ -81,6 +83,7 @@ impl AriaUnderlayService {
             secret_store: Arc::new(InMemorySecretStore::default()),
             shadow_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
+            adapter_pool: AdapterClientPool::default(),
         }
     }
 
@@ -97,6 +100,7 @@ impl AriaUnderlayService {
             secret_store: Arc::new(InMemorySecretStore::default()),
             shadow_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
+            adapter_pool: AdapterClientPool::default(),
         }
     }
 
@@ -115,6 +119,7 @@ impl AriaUnderlayService {
             secret_store,
             shadow_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
+            adapter_pool: AdapterClientPool::default(),
         }
     }
 
@@ -134,11 +139,17 @@ impl AriaUnderlayService {
             secret_store,
             shadow_store,
             event_sink: Arc::new(NoopEventSink),
+            adapter_pool: AdapterClientPool::default(),
         }
     }
 
     pub fn with_event_sink(mut self, event_sink: Arc<dyn EventSink>) -> Self {
         self.event_sink = event_sink;
+        self
+    }
+
+    pub fn with_adapter_pool(mut self, adapter_pool: AdapterClientPool) -> Self {
+        self.adapter_pool = adapter_pool;
         self
     }
 
@@ -197,7 +208,7 @@ impl AriaUnderlayService {
 
         for desired in desired_states {
             let managed = self.inventory.get(&desired.device_id)?;
-            let mut client = AdapterClient::connect(managed.info.adapter_endpoint.clone()).await?;
+            let mut client = self.adapter_pool.client(&managed.info.adapter_endpoint)?;
             // Preflight diff needs an authoritative current view. If we scope this
             // only to desired objects, absent desired resources cannot be detected
             // as deletes. Post-commit verify is scoped by ChangeSet below.
@@ -214,7 +225,7 @@ impl AriaUnderlayService {
         device_id: &DeviceId,
     ) -> UnderlayResult<DeviceShadowState> {
         let managed = self.inventory.get(device_id)?;
-        let mut client = AdapterClient::connect(managed.info.adapter_endpoint.clone()).await?;
+        let mut client = self.adapter_pool.client(&managed.info.adapter_endpoint)?;
         client.get_current_state(&managed.info).await
     }
 
@@ -504,7 +515,7 @@ impl AriaUnderlayService {
             }
 
             let managed = self.inventory.get(&desired.device_id)?;
-            let mut client = AdapterClient::connect(managed.info.adapter_endpoint.clone()).await?;
+            let mut client = self.adapter_pool.client(&managed.info.adapter_endpoint)?;
             let rpc_context = tx_request_context(&managed.info, tx_context);
             let capability = match managed.capability {
                 Some(capability) => capability,
@@ -816,7 +827,7 @@ impl AriaUnderlayService {
 
         for device_id in &record.devices {
             let managed = self.inventory.get(device_id)?;
-            let mut client = AdapterClient::connect(managed.info.adapter_endpoint.clone()).await?;
+            let mut client = self.adapter_pool.client(&managed.info.adapter_endpoint)?;
             let rpc_context = tx_request_context(&managed.info, &tx_context);
             let outcome = client
                 .recover_with_context(&managed.info, &rpc_context, record.strategy, action)
@@ -877,9 +888,10 @@ impl UnderlayService for AriaUnderlayService {
         &self,
         request: InitializeUnderlaySiteRequest,
     ) -> UnderlayResult<InitializeUnderlaySiteResponse> {
-        UnderlaySiteInitializationService::new_with_secret_store(
+        UnderlaySiteInitializationService::new_with_secret_store_and_adapter_pool(
             self.inventory.clone(),
             self.secret_store.clone(),
+            self.adapter_pool.clone(),
         )
         .initialize_site(request)
         .await
@@ -896,7 +908,10 @@ impl UnderlayService for AriaUnderlayService {
         &self,
         device_id: DeviceId,
     ) -> UnderlayResult<DeviceOnboardingResponse> {
-        let lifecycle_state = DeviceOnboardingService::new(self.inventory.clone())
+        let lifecycle_state = DeviceOnboardingService::new_with_adapter_pool(
+            self.inventory.clone(),
+            self.adapter_pool.clone(),
+        )
             .onboard_device(device_id.clone())
             .await?;
         Ok(DeviceOnboardingResponse {
@@ -1083,7 +1098,7 @@ impl UnderlayService for AriaUnderlayService {
         request: ForceUnlockRequest,
     ) -> UnderlayResult<ForceUnlockResponse> {
         let managed = self.inventory.get(&request.device_id)?;
-        let mut client = AdapterClient::connect(managed.info.adapter_endpoint.clone()).await?;
+        let mut client = self.adapter_pool.client(&managed.info.adapter_endpoint)?;
         let context = RequestContext {
             request_id: request.request_id.clone(),
             tx_id: String::new(),

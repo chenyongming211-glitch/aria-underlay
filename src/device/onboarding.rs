@@ -1,4 +1,4 @@
-use crate::adapter_client::AdapterClient;
+use crate::adapter_client::AdapterClientPool;
 use crate::device::{DeviceInventory, DeviceLifecycleState};
 use crate::model::DeviceId;
 use crate::{UnderlayError, UnderlayResult};
@@ -6,11 +6,22 @@ use crate::{UnderlayError, UnderlayResult};
 #[derive(Debug, Clone)]
 pub struct DeviceOnboardingService {
     inventory: DeviceInventory,
+    adapter_pool: AdapterClientPool,
 }
 
 impl DeviceOnboardingService {
     pub fn new(inventory: DeviceInventory) -> Self {
-        Self { inventory }
+        Self::new_with_adapter_pool(inventory, AdapterClientPool::default())
+    }
+
+    pub fn new_with_adapter_pool(
+        inventory: DeviceInventory,
+        adapter_pool: AdapterClientPool,
+    ) -> Self {
+        Self {
+            inventory,
+            adapter_pool,
+        }
     }
 
     pub async fn onboard_device(&self, device_id: DeviceId) -> UnderlayResult<DeviceLifecycleState> {
@@ -33,7 +44,7 @@ impl DeviceOnboardingService {
         self.inventory
             .set_state(&device_id, DeviceLifecycleState::Probing)?;
 
-        let mut client = match AdapterClient::connect(managed.info.adapter_endpoint.clone()).await {
+        let mut client = match self.adapter_pool.client(&managed.info.adapter_endpoint) {
             Ok(client) => client,
             Err(err) => {
                 let state = lifecycle_state_for_onboarding_error(&err);

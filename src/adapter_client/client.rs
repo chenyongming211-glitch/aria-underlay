@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use dashmap::DashMap;
 use tonic::transport::Channel;
 
 use crate::adapter_client::mapper::{
@@ -24,6 +27,12 @@ pub struct AdapterClient {
 }
 
 impl AdapterClient {
+    pub fn from_channel(channel: Channel) -> Self {
+        Self {
+            inner: UnderlayAdapterClient::new(channel),
+        }
+    }
+
     pub async fn connect(endpoint: String) -> UnderlayResult<Self> {
         let inner = UnderlayAdapterClient::connect(endpoint)
             .await
@@ -394,6 +403,41 @@ impl AdapterClient {
         })?;
 
         adapter_result_to_outcome(result)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AdapterClientPool {
+    channels: Arc<DashMap<String, Channel>>,
+}
+
+impl AdapterClientPool {
+    pub fn client(&self, endpoint: &str) -> UnderlayResult<AdapterClient> {
+        if let Some(channel) = self.channels.get(endpoint) {
+            return Ok(AdapterClient::from_channel(channel.value().clone()));
+        }
+
+        let channel = Channel::from_shared(endpoint.to_string())
+            .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?
+            .connect_lazy();
+        let entry = self
+            .channels
+            .entry(endpoint.to_string())
+            .or_insert(channel);
+
+        Ok(AdapterClient::from_channel(entry.value().clone()))
+    }
+
+    pub fn invalidate(&self, endpoint: &str) {
+        self.channels.remove(endpoint);
+    }
+
+    pub fn cached_endpoint_count(&self) -> usize {
+        self.channels.len()
+    }
+
+    pub fn contains_endpoint(&self, endpoint: &str) -> bool {
+        self.channels.contains_key(endpoint)
     }
 }
 
