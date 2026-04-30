@@ -35,6 +35,12 @@ pub enum StoredNetconfCredential {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretProvisioningResult {
+    pub secret_ref: String,
+    pub cleanup_on_registration_failure: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct InMemorySecretStore {
     inner: Arc<DashMap<String, StoredNetconfCredential>>,
@@ -47,7 +53,9 @@ pub trait SecretStore: std::fmt::Debug + Send + Sync {
         site_id: &str,
         device_id: &DeviceId,
         credential: NetconfCredentialInput,
-    ) -> UnderlayResult<String>;
+    ) -> UnderlayResult<SecretProvisioningResult>;
+
+    fn delete(&self, secret_ref: &str) -> UnderlayResult<()>;
 }
 
 impl SecretStore for InMemorySecretStore {
@@ -57,7 +65,7 @@ impl SecretStore for InMemorySecretStore {
         site_id: &str,
         device_id: &DeviceId,
         credential: NetconfCredentialInput,
-    ) -> UnderlayResult<String> {
+    ) -> UnderlayResult<SecretProvisioningResult> {
         match credential {
             NetconfCredentialInput::ExistingSecretRef { secret_ref } => {
                 if secret_ref.trim().is_empty() {
@@ -65,7 +73,10 @@ impl SecretStore for InMemorySecretStore {
                         "secret_ref cannot be empty".into(),
                     ));
                 }
-                Ok(secret_ref)
+                Ok(SecretProvisioningResult {
+                    secret_ref,
+                    cleanup_on_registration_failure: false,
+                })
             }
             NetconfCredentialInput::Password { username, password } => {
                 validate_username(&username)?;
@@ -79,7 +90,10 @@ impl SecretStore for InMemorySecretStore {
                     secret_ref.clone(),
                     StoredNetconfCredential::Password { username, password },
                 );
-                Ok(secret_ref)
+                Ok(SecretProvisioningResult {
+                    secret_ref,
+                    cleanup_on_registration_failure: true,
+                })
             }
             NetconfCredentialInput::PrivateKey {
                 username,
@@ -101,9 +115,17 @@ impl SecretStore for InMemorySecretStore {
                         passphrase,
                     },
                 );
-                Ok(secret_ref)
+                Ok(SecretProvisioningResult {
+                    secret_ref,
+                    cleanup_on_registration_failure: true,
+                })
             }
         }
+    }
+
+    fn delete(&self, secret_ref: &str) -> UnderlayResult<()> {
+        self.inner.remove(secret_ref);
+        Ok(())
     }
 }
 

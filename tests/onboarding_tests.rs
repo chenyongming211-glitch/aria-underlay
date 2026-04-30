@@ -5,8 +5,8 @@ use aria_underlay::device::{
     bootstrap::validate_switch_pair, onboarding::lifecycle_state_for_onboarding_error,
     DeviceInventory, DeviceLifecycleState, DeviceRegistrationService, HostKeyPolicy,
     InMemorySecretStore, InitializeUnderlaySiteRequest, NetconfCredentialInput,
-    RegisterDeviceRequest, SecretStore, SiteInitializationStatus, SwitchBootstrapRequest,
-    UnderlaySiteInitializationService,
+    RegisterDeviceRequest, SecretProvisioningResult, SecretStore, SiteInitializationStatus,
+    SwitchBootstrapRequest, UnderlaySiteInitializationService,
 };
 use aria_underlay::intent::validation::validate_switch_pair_intent;
 use aria_underlay::intent::SwitchPairIntent;
@@ -82,7 +82,7 @@ fn adapter_transport_error_maps_to_unreachable_state() {
 fn secret_store_creates_device_scoped_secret_ref() {
     let store = InMemorySecretStore::default();
 
-    let secret_ref = store
+    let secret = store
         .create_for_device(
             "tenant-a",
             "site-a",
@@ -94,8 +94,9 @@ fn secret_store_creates_device_scoped_secret_ref() {
         )
         .expect("secret creation should succeed");
 
-    assert_eq!(secret_ref, "local/tenant-a/site-a/leaf-a");
-    assert!(store.get(&secret_ref).is_some());
+    assert_eq!(secret.secret_ref, "local/tenant-a/site-a/leaf-a");
+    assert!(secret.cleanup_on_registration_failure);
+    assert!(store.get(&secret.secret_ref).is_some());
 }
 
 #[test]
@@ -192,6 +193,123 @@ async fn site_initialization_accepts_custom_secret_store() {
 }
 
 #[tokio::test]
+async fn site_initialization_cleans_created_secret_when_registration_fails() {
+    let inventory = DeviceInventory::default();
+    DeviceRegistrationService::new(inventory.clone())
+        .register(RegisterDeviceRequest {
+            tenant_id: "tenant-a".into(),
+            site_id: "site-a".into(),
+            device_id: DeviceId("leaf-a".into()),
+            management_ip: "127.0.0.1".into(),
+            management_port: 830,
+            vendor_hint: Some(Vendor::Unknown),
+            model_hint: None,
+            role: DeviceRole::LeafA,
+            secret_ref: "local/preexisting-leaf-a".into(),
+            host_key_policy: HostKeyPolicy::TrustOnFirstUse,
+            adapter_endpoint: "http://127.0.0.1:50051".into(),
+        })
+        .expect("preexisting device should be registered");
+
+    let secret_store = InMemorySecretStore::default();
+    let initializer = UnderlaySiteInitializationService::new(inventory, secret_store.clone());
+
+    let response = initializer
+        .initialize_site(InitializeUnderlaySiteRequest {
+            request_id: "req-a".into(),
+            tenant_id: "tenant-a".into(),
+            site_id: "site-a".into(),
+            adapter_endpoint: "http://127.0.0.1:50051".into(),
+            switches: vec![
+                switch_bootstrap_with_credential(
+                    "leaf-a",
+                    DeviceRole::LeafA,
+                    NetconfCredentialInput::Password {
+                        username: "netconf".into(),
+                        password: "secret".into(),
+                    },
+                ),
+                switch_bootstrap("leaf-b", DeviceRole::LeafB),
+            ],
+            allow_degraded: false,
+        })
+        .await
+        .expect("initialization should return per-device registration errors");
+
+    let leaf_a = response
+        .devices
+        .iter()
+        .find(|device| device.device_id == DeviceId("leaf-a".into()))
+        .expect("leaf-a result should be present");
+    assert_eq!(leaf_a.secret_ref, None);
+    assert!(leaf_a
+        .error
+        .as_deref()
+        .is_some_and(|error| error.contains("device already exists")));
+    assert!(secret_store
+        .get("local/tenant-a/site-a/leaf-a")
+        .is_none());
+}
+
+#[tokio::test]
+async fn site_initialization_reports_orphan_when_secret_cleanup_fails() {
+    let inventory = DeviceInventory::default();
+    DeviceRegistrationService::new(inventory.clone())
+        .register(RegisterDeviceRequest {
+            tenant_id: "tenant-a".into(),
+            site_id: "site-a".into(),
+            device_id: DeviceId("leaf-a".into()),
+            management_ip: "127.0.0.1".into(),
+            management_port: 830,
+            vendor_hint: Some(Vendor::Unknown),
+            model_hint: None,
+            role: DeviceRole::LeafA,
+            secret_ref: "local/preexisting-leaf-a".into(),
+            host_key_policy: HostKeyPolicy::TrustOnFirstUse,
+            adapter_endpoint: "http://127.0.0.1:50051".into(),
+        })
+        .expect("preexisting device should be registered");
+
+    let initializer =
+        UnderlaySiteInitializationService::new(inventory, CleanupFailingSecretStore);
+
+    let response = initializer
+        .initialize_site(InitializeUnderlaySiteRequest {
+            request_id: "req-a".into(),
+            tenant_id: "tenant-a".into(),
+            site_id: "site-a".into(),
+            adapter_endpoint: "http://127.0.0.1:50051".into(),
+            switches: vec![
+                switch_bootstrap_with_credential(
+                    "leaf-a",
+                    DeviceRole::LeafA,
+                    NetconfCredentialInput::Password {
+                        username: "netconf".into(),
+                        password: "secret".into(),
+                    },
+                ),
+                switch_bootstrap("leaf-b", DeviceRole::LeafB),
+            ],
+            allow_degraded: false,
+        })
+        .await
+        .expect("initialization should surface registration and cleanup errors");
+
+    let leaf_a = response
+        .devices
+        .iter()
+        .find(|device| device.device_id == DeviceId("leaf-a".into()))
+        .expect("leaf-a result should be present");
+    assert_eq!(
+        leaf_a.secret_ref.as_deref(),
+        Some("local/tenant-a/site-a/leaf-a")
+    );
+    let error = leaf_a.error.as_deref().expect("error should be present");
+    assert!(error.contains("device already exists"));
+    assert!(error.contains("secret cleanup failed"));
+}
+
+#[tokio::test]
 async fn underlay_service_initializes_site_through_public_api() {
     let service = AriaUnderlayService::new_with_components(
         DeviceInventory::default(),
@@ -221,6 +339,20 @@ async fn underlay_service_initializes_site_through_public_api() {
 }
 
 fn switch_bootstrap(device_id: &str, role: DeviceRole) -> SwitchBootstrapRequest {
+    switch_bootstrap_with_credential(
+        device_id,
+        role,
+        NetconfCredentialInput::ExistingSecretRef {
+            secret_ref: format!("local/{device_id}"),
+        },
+    )
+}
+
+fn switch_bootstrap_with_credential(
+    device_id: &str,
+    role: DeviceRole,
+    credential: NetconfCredentialInput,
+) -> SwitchBootstrapRequest {
     SwitchBootstrapRequest {
         device_id: DeviceId(device_id.into()),
         role,
@@ -229,9 +361,7 @@ fn switch_bootstrap(device_id: &str, role: DeviceRole) -> SwitchBootstrapRequest
         vendor_hint: Some(Vendor::Unknown),
         model_hint: None,
         host_key_policy: HostKeyPolicy::TrustOnFirstUse,
-        credential: NetconfCredentialInput::ExistingSecretRef {
-            secret_ref: format!("local/{device_id}"),
-        },
+        credential,
     }
 }
 
@@ -245,9 +375,35 @@ impl SecretStore for RejectingSecretStore {
         _site_id: &str,
         _device_id: &DeviceId,
         _credential: NetconfCredentialInput,
-    ) -> aria_underlay::UnderlayResult<String> {
+    ) -> aria_underlay::UnderlayResult<SecretProvisioningResult> {
         Err(UnderlayError::InvalidDeviceState(
             "test secret store rejected credential".into(),
         ))
+    }
+
+    fn delete(&self, _secret_ref: &str) -> aria_underlay::UnderlayResult<()> {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct CleanupFailingSecretStore;
+
+impl SecretStore for CleanupFailingSecretStore {
+    fn create_for_device(
+        &self,
+        tenant_id: &str,
+        site_id: &str,
+        device_id: &DeviceId,
+        _credential: NetconfCredentialInput,
+    ) -> aria_underlay::UnderlayResult<SecretProvisioningResult> {
+        Ok(SecretProvisioningResult {
+            secret_ref: format!("local/{tenant_id}/{site_id}/{}", device_id.0),
+            cleanup_on_registration_failure: true,
+        })
+    }
+
+    fn delete(&self, _secret_ref: &str) -> aria_underlay::UnderlayResult<()> {
+        Err(UnderlayError::Internal("secret cleanup failed".into()))
     }
 }

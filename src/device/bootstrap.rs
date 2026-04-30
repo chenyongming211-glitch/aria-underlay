@@ -114,7 +114,7 @@ impl UnderlaySiteInitializationService {
         request: &InitializeUnderlaySiteRequest,
         switch: &SwitchBootstrapRequest,
     ) -> DeviceInitializationResult {
-        let secret_ref = match self.secret_store.create_for_device(
+        let secret = match self.secret_store.create_for_device(
             &request.tenant_id,
             &request.site_id,
             &switch.device_id,
@@ -131,6 +131,7 @@ impl UnderlaySiteInitializationService {
                 };
             }
         };
+        let secret_ref = secret.secret_ref.clone();
 
         let register_result = self.registration.register(RegisterDeviceRequest {
             tenant_id: request.tenant_id.clone(),
@@ -147,6 +148,14 @@ impl UnderlaySiteInitializationService {
         });
 
         if let Err(error) = register_result {
+            if secret.cleanup_on_registration_failure {
+                return self.registration_failure_result_with_secret_cleanup(
+                    switch,
+                    secret_ref,
+                    error,
+                );
+            }
+
             return DeviceInitializationResult {
                 device_id: switch.device_id.clone(),
                 role: switch.role,
@@ -169,6 +178,33 @@ impl UnderlaySiteInitializationService {
             secret_ref: Some(secret_ref),
             lifecycle_state,
             error: onboarding_result.err().map(|error| error.to_string()),
+        }
+    }
+
+    fn registration_failure_result_with_secret_cleanup(
+        &self,
+        switch: &SwitchBootstrapRequest,
+        secret_ref: String,
+        registration_error: UnderlayError,
+    ) -> DeviceInitializationResult {
+        if let Err(cleanup_error) = self.secret_store.delete(&secret_ref) {
+            return DeviceInitializationResult {
+                device_id: switch.device_id.clone(),
+                role: switch.role,
+                secret_ref: Some(secret_ref),
+                lifecycle_state: None,
+                error: Some(format!(
+                    "{registration_error}; secret cleanup failed for created secret: {cleanup_error}"
+                )),
+            };
+        }
+
+        DeviceInitializationResult {
+            device_id: switch.device_id.clone(),
+            role: switch.role,
+            secret_ref: None,
+            lifecycle_state: None,
+            error: Some(registration_error.to_string()),
         }
     }
 }

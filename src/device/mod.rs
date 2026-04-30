@@ -20,4 +20,7 @@ pub use render::{
     renderer_for_vendor, CiscoRenderer, DeviceConfigRenderer, H3cRenderer, HuaweiRenderer,
     RenderedConfig, RenderedConfigFormat, RuijieRenderer,
 };
-pub use secret::{InMemorySecretStore, NetconfCredentialInput, SecretStore, StoredNetconfCredential};
+pub use secret::{
+    InMemorySecretStore, NetconfCredentialInput, SecretProvisioningResult, SecretStore,
+    StoredNetconfCredential,
+};

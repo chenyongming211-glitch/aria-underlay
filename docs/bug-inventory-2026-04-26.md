@@ -15,7 +15,7 @@ Comprehensive bug report from full codebase review (~10,500 lines, ~73% sprint c
 - `src/api/service.rs:1043-1052` — `aggregate_apply_status` labels partial failure as `SuccessWithWarning` (misleading aggregate status)
 - `src/tx/lock_strategy.rs:9` + `src/tx/endpoint_lock.rs:65` — ~~`jitter: bool` field defined but never used in exponential backoff~~ ✅ FIXED (`3c5c7d3`): Jitter now applied as up to 25% randomized addition to backoff delay when `policy.jitter` is true.
 - `src/tx/journal.rs:99` — `InMemoryTxJournalStore` uses `std::sync::Mutex` in async context (thread blocking)
-- `src/device/bootstrap.rs:117-157` — Orphaned secrets when registration fails after secret creation, no cleanup
+- ~~`src/device/bootstrap.rs:117-157` — Orphaned secrets when registration fails after secret creation, no cleanup~~ ✅ FIXED: `SecretStore::create_for_device` now returns ownership/cleanup metadata; site initialization deletes secrets created by the current request if registration fails, and reports cleanup failures with the retained `secret_ref` instead of hiding an orphan.
 - `src/api/service.rs:178-181` — No gRPC connection pooling; new `AdapterClient::connect()` per operation (connection churn, fd exhaustion)
 - `src/api/service.rs:722,870` — Recovery reads journal before lock, doesn't re-read after lock acquisition (potential duplicate recovery attempts)
 - `src/api/service.rs:339-356` — Journal `Committed` written before shadow store update; crash leaves stale shadow
