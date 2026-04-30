@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex,
+};
 
 use aria_underlay::api::request::{ApplyDomainIntentRequest, ApplyOptions};
 use aria_underlay::api::response::ApplyStatus;
@@ -144,7 +147,7 @@ async fn successful_device_apply_marks_transaction_in_doubt_when_shadow_update_f
         Default::default(),
         Default::default(),
         Arc::new(aria_underlay::device::InMemorySecretStore::default()),
-        Arc::new(FailingShadowStore),
+        Arc::new(FailingAfterFirstShadowStore::default()),
     );
 
     let response = service
@@ -312,23 +315,42 @@ enum AdapterFailurePoint {
     Verify,
 }
 
-#[derive(Debug)]
-struct FailingShadowStore;
+#[derive(Debug, Default)]
+struct FailingAfterFirstShadowStore {
+    puts: AtomicUsize,
+    state: Mutex<Option<DeviceShadowState>>,
+}
 
-impl ShadowStateStore for FailingShadowStore {
+impl ShadowStateStore for FailingAfterFirstShadowStore {
     fn get(&self, _device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
-        Ok(None)
+        self.state
+            .lock()
+            .map(|state| state.clone())
+            .map_err(|_| UnderlayError::Internal("shadow test store mutex poisoned".into()))
     }
 
-    fn put(&self, _state: DeviceShadowState) -> UnderlayResult<DeviceShadowState> {
-        Err(UnderlayError::Internal("shadow store unavailable".into()))
+    fn put(&self, state: DeviceShadowState) -> UnderlayResult<DeviceShadowState> {
+        if self.puts.fetch_add(1, Ordering::SeqCst) == 0 {
+            *self.state.lock().map_err(|_| {
+                UnderlayError::Internal("shadow test store mutex poisoned".into())
+            })? = Some(state.clone());
+            Ok(state)
+        } else {
+            Err(UnderlayError::Internal("shadow store unavailable".into()))
+        }
     }
 
     fn remove(&self, _device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
-        Ok(None)
+        self.state
+            .lock()
+            .map(|mut state| state.take())
+            .map_err(|_| UnderlayError::Internal("shadow test store mutex poisoned".into()))
     }
 
     fn list(&self) -> UnderlayResult<Vec<DeviceShadowState>> {
-        Ok(Vec::new())
+        self.state
+            .lock()
+            .map(|state| state.clone().into_iter().collect())
+            .map_err(|_| UnderlayError::Internal("shadow test store mutex poisoned".into()))
     }
 }
