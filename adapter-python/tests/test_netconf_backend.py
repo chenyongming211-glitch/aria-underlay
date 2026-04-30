@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from aria_underlay_adapter.backends.netconf import (
     BASE_10,
     CANDIDATE,
@@ -18,6 +20,9 @@ from aria_underlay_adapter.drivers.netconf_backed import NetconfBackedDriver
 from aria_underlay_adapter.errors import AdapterError
 from aria_underlay_adapter.proto import aria_underlay_adapter_pb2 as pb2
 from aria_underlay_adapter.renderers.huawei import HuaweiRenderer
+
+
+FIXTURES = Path(__file__).parent / "fixtures" / "state_parsers"
 
 
 def test_capability_from_raw_detects_confirmed_commit_11():
@@ -136,6 +141,167 @@ def test_netconf_driver_get_state_requires_registered_parser_before_device_read(
     )
 
     assert response.errors[0].code == "STATE_PARSER_VENDOR_UNSUPPORTED"
+    assert session.calls == []
+
+
+def test_netconf_driver_get_state_can_use_fixture_verified_parser_when_enabled():
+    session = _RecordingSession(reply=_Reply(_huawei_fixture_xml()))
+    driver = NetconfBackedDriver(
+        _BackendWithSession(session),
+        allow_fixture_verified_parser=True,
+    )
+
+    response = driver.get_current_state(
+        pb2.GetCurrentStateRequest(
+            device=pb2.DeviceRef(
+                device_id="leaf-a",
+                vendor_hint=pb2.VENDOR_HUAWEI,
+            ),
+            scope=pb2.StateScope(full=True),
+        )
+    )
+
+    assert response.errors == []
+    assert response.state.device_id == "leaf-a"
+    assert [(vlan.vlan_id, vlan.name, vlan.description) for vlan in response.state.vlans] == [
+        (100, "prod", "production vlan"),
+        (200, "backup", ""),
+    ]
+    assert response.state.interfaces[0].name == "GE1/0/1"
+    assert response.state.interfaces[0].mode.kind == pb2.PORT_MODE_KIND_ACCESS
+    assert response.state.interfaces[0].mode.access_vlan == 100
+    assert session.calls == [("get_config", {"source": "running"})]
+
+
+def test_netconf_driver_get_state_can_use_h3c_fixture_verified_parser_when_enabled():
+    session = _RecordingSession(reply=_Reply(_h3c_fixture_xml()))
+    driver = NetconfBackedDriver(
+        _BackendWithSession(session),
+        allow_fixture_verified_parser=True,
+    )
+
+    response = driver.get_current_state(
+        pb2.GetCurrentStateRequest(
+            device=pb2.DeviceRef(
+                device_id="leaf-b",
+                vendor_hint=pb2.VENDOR_H3C,
+            ),
+            scope=pb2.StateScope(full=True),
+        )
+    )
+
+    assert response.errors == []
+    assert response.state.device_id == "leaf-b"
+    assert [vlan.vlan_id for vlan in response.state.vlans] == [100, 200]
+    assert [interface.name for interface in response.state.interfaces] == [
+        "GigabitEthernet1/0/1",
+        "GigabitEthernet1/0/2",
+    ]
+
+
+def test_netconf_driver_verify_succeeds_with_fixture_verified_parser_when_enabled():
+    session = _RecordingSession(reply=_Reply(_huawei_fixture_xml()))
+    driver = NetconfBackedDriver(
+        _BackendWithSession(session),
+        allow_fixture_verified_parser=True,
+    )
+
+    response = driver.verify(
+        tx_id="tx-1",
+        device=pb2.DeviceRef(vendor_hint=pb2.VENDOR_HUAWEI),
+        desired_state=_fixture_desired_state(),
+        scope=pb2.StateScope(full=False, vlan_ids=[100], interface_names=["GE1/0/1"]),
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_NO_CHANGE
+    assert response.result.errors == []
+    assert session.calls == [
+        (
+            "get_config",
+            {
+                "source": "running",
+                "filter": (
+                    "subtree",
+                    '<filter type="subtree"><vlans><vlan><vlan-id>100</vlan-id></vlan></vlans><interfaces><interface><name>GE1/0/1</name></interface></interfaces></filter>',
+                ),
+            },
+        )
+    ]
+
+
+def test_netconf_driver_verify_reports_fixture_mismatch_when_enabled():
+    session = _RecordingSession(reply=_Reply(_huawei_fixture_xml()))
+    driver = NetconfBackedDriver(
+        _BackendWithSession(session),
+        allow_fixture_verified_parser=True,
+    )
+    desired = _fixture_desired_state(vlan_name="wrong")
+
+    response = driver.verify(
+        tx_id="tx-1",
+        device=pb2.DeviceRef(vendor_hint=pb2.VENDOR_HUAWEI),
+        desired_state=desired,
+        scope=pb2.StateScope(full=False, vlan_ids=[100]),
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
+    assert response.result.changed is False
+    assert response.result.errors[0].code == "VERIFY_FAILED"
+    assert "VLAN 100 name mismatch" in response.result.errors[0].raw_error_summary
+
+
+def test_netconf_driver_get_state_scopes_fixture_verified_parser_when_enabled():
+    session = _RecordingSession(reply=_Reply(_huawei_fixture_xml()))
+    driver = NetconfBackedDriver(
+        _BackendWithSession(session),
+        allow_fixture_verified_parser=True,
+    )
+
+    response = driver.get_current_state(
+        pb2.GetCurrentStateRequest(
+            device=pb2.DeviceRef(vendor_hint=pb2.VENDOR_HUAWEI),
+            scope=pb2.StateScope(
+                full=False,
+                vlan_ids=[100],
+                interface_names=["GE1/0/1"],
+            ),
+        )
+    )
+
+    assert response.errors == []
+    assert [vlan.vlan_id for vlan in response.state.vlans] == [100]
+    assert [interface.name for interface in response.state.interfaces] == ["GE1/0/1"]
+    assert session.calls == [
+        (
+            "get_config",
+            {
+                "source": "running",
+                "filter": (
+                    "subtree",
+                    '<filter type="subtree"><vlans><vlan><vlan-id>100</vlan-id></vlan></vlans><interfaces><interface><name>GE1/0/1</name></interface></interfaces></filter>',
+                ),
+            },
+        )
+    ]
+
+
+def test_netconf_driver_get_state_empty_scope_skips_fixture_parser_device_read():
+    session = _RecordingSession(reply=_Reply(_huawei_fixture_xml()))
+    driver = NetconfBackedDriver(
+        _BackendWithSession(session),
+        allow_fixture_verified_parser=True,
+    )
+
+    response = driver.get_current_state(
+        pb2.GetCurrentStateRequest(
+            device=pb2.DeviceRef(vendor_hint=pb2.VENDOR_HUAWEI),
+            scope=pb2.StateScope(full=False),
+        )
+    )
+
+    assert response.errors == []
+    assert response.state.vlans == []
+    assert response.state.interfaces == []
     assert session.calls == []
 
 
@@ -688,6 +854,38 @@ def _desired_state():
         ]
 
     return _Desired()
+
+
+def _fixture_desired_state(vlan_name="prod"):
+    return pb2.DesiredDeviceState(
+        device_id="leaf-a",
+        vlans=[
+            pb2.VlanConfig(
+                vlan_id=100,
+                name=vlan_name,
+                description="production vlan",
+            )
+        ],
+        interfaces=[
+            pb2.InterfaceConfig(
+                name="GE1/0/1",
+                admin_state=pb2.ADMIN_STATE_UP,
+                description="server uplink",
+                mode=pb2.PortMode(
+                    kind=pb2.PORT_MODE_KIND_ACCESS,
+                    access_vlan=100,
+                ),
+            )
+        ],
+    )
+
+
+def _huawei_fixture_xml():
+    return (FIXTURES / "huawei" / "vrp8_running.xml").read_text()
+
+
+def _h3c_fixture_xml():
+    return (FIXTURES / "h3c" / "comware7_running.xml").read_text()
 
 
 class _Scope:

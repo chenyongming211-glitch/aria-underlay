@@ -29,6 +29,7 @@ class CandidateConfigRenderer(Protocol):
 
 class RunningStateParser(Protocol):
     production_ready: bool
+    fixture_verified: bool
 
     def parse_running(self, xml: str, scope=None) -> dict: ...
 
@@ -46,6 +47,7 @@ class NcclientNetconfBackend:
     timeout_secs: int = 30
     config_renderer: CandidateConfigRenderer | None = None
     state_parser: RunningStateParser | None = None
+    allow_fixture_verified_state_parser: bool = False
 
     def get_capabilities(self) -> BackendCapability:
         try:
@@ -95,7 +97,12 @@ class NcclientNetconfBackend:
         except Exception as exc:
             raise _adapter_error_from_ncclient_exception(exc) from exc
 
-        return _parse_running_state(self.state_parser, xml, scope)
+        return _parse_running_state(
+            self.state_parser,
+            xml,
+            scope,
+            allow_fixture_verified=self.allow_fixture_verified_state_parser,
+        )
 
     def prepare_candidate(self, desired_state=None) -> None:
         if desired_state is None:
@@ -364,7 +371,12 @@ class NcclientNetconfBackend:
         except Exception as exc:
             raise _adapter_error_from_ncclient_exception(exc) from exc
 
-        observed = _parse_running_state(self.state_parser, xml, scope)
+        observed = _parse_running_state(
+            self.state_parser,
+            xml,
+            scope,
+            allow_fixture_verified=self.allow_fixture_verified_state_parser,
+        )
         _verify_vlans(desired_state, observed, scope)
         _verify_interfaces(desired_state, observed, scope)
 
@@ -501,7 +513,13 @@ def _running_xml_from_reply(reply) -> str:
     return str(reply)
 
 
-def _parse_running_state(parser, xml: str, scope=None) -> dict:
+def _parse_running_state(
+    parser,
+    xml: str,
+    scope=None,
+    *,
+    allow_fixture_verified: bool = False,
+) -> dict:
     if parser is None:
         raise AdapterError(
             code="NETCONF_STATE_PARSE_NOT_IMPLEMENTED",
@@ -513,7 +531,9 @@ def _parse_running_state(parser, xml: str, scope=None) -> dict:
             ),
             retryable=False,
         )
-    if not getattr(parser, "production_ready", False):
+    if not getattr(parser, "production_ready", False) and not (
+        allow_fixture_verified and getattr(parser, "fixture_verified", False)
+    ):
         raise AdapterError(
             code="NETCONF_STATE_PARSER_NOT_PRODUCTION_READY",
             message="NETCONF running state parser is not production ready",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import replace
 
 from aria_underlay_adapter.backends.base import NetconfBackend
@@ -14,8 +15,14 @@ except ImportError as exc:  # pragma: no cover
 
 
 class NetconfBackedDriver:
-    def __init__(self, backend: NetconfBackend):
+    def __init__(
+        self,
+        backend: NetconfBackend,
+        *,
+        allow_fixture_verified_parser: bool = False,
+    ):
         self._backend = backend
+        self._allow_fixture_verified_parser = allow_fixture_verified_parser
 
     def get_capabilities(self, request):
         try:
@@ -105,7 +112,7 @@ class NetconfBackedDriver:
             return self._backend
 
         renderer = renderer_for_vendor(request.device.vendor_hint)
-        return replace(self._backend, config_renderer=renderer)
+        return self._replace_backend(config_renderer=renderer)
 
     def _backend_for_state_read(self, device):
         if not hasattr(self._backend, "state_parser"):
@@ -113,8 +120,23 @@ class NetconfBackedDriver:
         if getattr(self._backend, "state_parser", None) is not None:
             return self._backend
 
-        parser = state_parser_for_vendor(device.vendor_hint)
-        return replace(self._backend, state_parser=parser)
+        parser = state_parser_for_vendor(
+            device.vendor_hint,
+            allow_fixture_verified=self._allow_fixture_verified_parser,
+        )
+        return self._replace_backend(
+            state_parser=parser,
+            allow_fixture_verified_state_parser=self._allow_fixture_verified_parser,
+        )
+
+    def _replace_backend(self, **changes):
+        try:
+            return replace(self._backend, **changes)
+        except TypeError:
+            backend = copy.copy(self._backend)
+            for name, value in changes.items():
+                object.__setattr__(backend, name, value)
+            return backend
 
     def commit(self, tx_id, device, strategy=None, confirm_timeout_secs=120):
         try:
