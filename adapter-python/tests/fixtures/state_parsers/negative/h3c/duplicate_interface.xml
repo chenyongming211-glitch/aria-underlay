@@ -1,0 +1,18 @@
+<data>
+  <interfaces>
+    <interface>
+      <name>GigabitEthernet1/0/1</name>
+      <port-mode>
+        <kind>access</kind>
+        <access-vlan>100</access-vlan>
+      </port-mode>
+    </interface>
+    <interface>
+      <name>GigabitEthernet1/0/1</name>
+      <port-mode>
+        <kind>access</kind>
+        <access-vlan>100</access-vlan>
+      </port-mode>
+    </interface>
+  </interfaces>
+</data>

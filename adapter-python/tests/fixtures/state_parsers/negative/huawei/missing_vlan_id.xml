@@ -1,0 +1,7 @@
+<data>
+  <vlans>
+    <vlan>
+      <name>prod</name>
+    </vlan>
+  </vlans>
+</data>

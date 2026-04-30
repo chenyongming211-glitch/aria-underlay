@@ -1,0 +1,10 @@
+<data>
+  <interfaces>
+    <interface>
+      <name>GigabitEthernet1/0/1</name>
+      <port-mode>
+        <kind>trunk</kind>
+      </port-mode>
+    </interface>
+  </interfaces>
+</data>

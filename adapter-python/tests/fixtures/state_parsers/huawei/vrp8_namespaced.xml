@@ -1,0 +1,20 @@
+<vrp:data xmlns:vrp="urn:huawei:vrp8:test">
+  <vrp:vlans>
+    <vrp:vlan>
+      <vrp:vlan-id>300</vrp:vlan-id>
+      <vrp:name>ns-prod</vrp:name>
+      <vrp:description>namespaced production vlan</vrp:description>
+    </vrp:vlan>
+  </vrp:vlans>
+  <vrp:interfaces>
+    <vrp:interface>
+      <vrp:name>GE1/0/3</vrp:name>
+      <vrp:admin-state>up</vrp:admin-state>
+      <vrp:description>namespaced access</vrp:description>
+      <vrp:port-mode>
+        <vrp:kind>ACCESS</vrp:kind>
+        <vrp:access-vlan>300</vrp:access-vlan>
+      </vrp:port-mode>
+    </vrp:interface>
+  </vrp:interfaces>
+</vrp:data>

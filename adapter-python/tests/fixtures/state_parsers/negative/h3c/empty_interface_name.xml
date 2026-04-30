@@ -1,0 +1,11 @@
+<data>
+  <interfaces>
+    <interface>
+      <name>   </name>
+      <port-mode>
+        <kind>access</kind>
+        <access-vlan>100</access-vlan>
+      </port-mode>
+    </interface>
+  </interfaces>
+</data>

@@ -1,0 +1,10 @@
+<data>
+  <vlans>
+    <vlan>
+      <vlan-id>100</vlan-id>
+    </vlan>
+    <vlan>
+      <vlan-id>100</vlan-id>
+    </vlan>
+  </vlans>
+</data>

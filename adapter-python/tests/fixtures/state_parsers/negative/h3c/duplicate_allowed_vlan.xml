@@ -1,0 +1,14 @@
+<data>
+  <interfaces>
+    <interface>
+      <name>GigabitEthernet1/0/1</name>
+      <port-mode>
+        <kind>trunk</kind>
+        <allowed-vlans>
+          <vlan-id>100</vlan-id>
+          <vlan-id>100</vlan-id>
+        </allowed-vlans>
+      </port-mode>
+    </interface>
+  </interfaces>
+</data>

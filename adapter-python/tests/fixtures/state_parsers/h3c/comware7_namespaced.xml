@@ -1,0 +1,24 @@
+<cw:data xmlns:cw="urn:h3c:comware7:test">
+  <cw:vlans>
+    <cw:vlan>
+      <cw:vlan-id>300</cw:vlan-id>
+      <cw:name>ns-prod</cw:name>
+      <cw:description>namespaced production vlan</cw:description>
+    </cw:vlan>
+  </cw:vlans>
+  <cw:interfaces>
+    <cw:interface>
+      <cw:name>GigabitEthernet1/0/3</cw:name>
+      <cw:admin-state>up</cw:admin-state>
+      <cw:description>namespaced trunk</cw:description>
+      <cw:port-mode>
+        <cw:kind>Trunk</cw:kind>
+        <cw:native-vlan>300</cw:native-vlan>
+        <cw:allowed-vlans>
+          <cw:vlan-id>300</cw:vlan-id>
+          <cw:vlan-id>301</cw:vlan-id>
+        </cw:allowed-vlans>
+      </cw:port-mode>
+    </cw:interface>
+  </cw:interfaces>
+</cw:data>
