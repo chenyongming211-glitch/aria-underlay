@@ -1519,7 +1519,12 @@ fn degraded_strategy_warnings(strategy: TransactionStrategy) -> Vec<String> {
 
 fn journal_error_fields(error: &UnderlayError) -> (String, String) {
     match error {
-        UnderlayError::AdapterOperation { code, message, .. } => (code.clone(), message.clone()),
+        UnderlayError::AdapterOperation {
+            code,
+            message,
+            errors,
+            ..
+        } => (code.clone(), adapter_error_message(message, errors)),
         UnderlayError::AdapterTransport(message) => {
             ("ADAPTER_TRANSPORT".into(), message.clone())
         }
@@ -1536,6 +1541,28 @@ fn journal_error_fields(error: &UnderlayError) -> (String, String) {
         }
         UnderlayError::DeviceNotFound(device_id) => ("DEVICE_NOT_FOUND".into(), device_id.clone()),
         UnderlayError::Internal(message) => ("INTERNAL".into(), message.clone()),
+    }
+}
+
+fn adapter_error_message(
+    message: &str,
+    errors: &[crate::AdapterErrorDetail],
+) -> String {
+    if errors.is_empty() {
+        return message.to_string();
+    }
+
+    let additional = errors
+        .iter()
+        .take(8)
+        .map(|error| format!("{}: {}", error.code, error.message))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let truncated = errors.len().saturating_sub(8);
+    if truncated == 0 {
+        format!("{message}; additional adapter errors: {additional}")
+    } else {
+        format!("{message}; additional adapter errors: {additional}; {truncated} more")
     }
 }
 
@@ -1664,6 +1691,32 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn journal_error_fields_preserves_additional_adapter_errors() {
+        let error = UnderlayError::AdapterOperation {
+            code: "FIRST".into(),
+            message: "first error".into(),
+            retryable: false,
+            errors: vec![
+                crate::AdapterErrorDetail {
+                    code: "SECOND".into(),
+                    message: "second error".into(),
+                },
+                crate::AdapterErrorDetail {
+                    code: "THIRD".into(),
+                    message: "third error".into(),
+                },
+            ],
+        };
+
+        let (code, message) = journal_error_fields(&error);
+
+        assert_eq!(code, "FIRST");
+        assert!(message.contains("first error"));
+        assert!(message.contains("SECOND: second error"));
+        assert!(message.contains("THIRD: third error"));
     }
 
     fn service_with_device_state(state: DeviceLifecycleState) -> AriaUnderlayService {

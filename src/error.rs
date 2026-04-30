@@ -23,7 +23,6 @@ pub enum UnderlayError {
         code: String,
         message: String,
         retryable: bool,
-        #[allow(dead_code)]
         errors: Vec<AdapterErrorDetail>,
     },
 
