@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import tempfile
 from typing import Iterable, Protocol
 from xml.sax.saxutils import escape
 
@@ -44,6 +45,8 @@ class NcclientNetconfBackend:
     key_path: str | None = None
     passphrase: str | None = None
     hostkey_verify: bool = False
+    known_hosts_path: str | None = None
+    pinned_host_key_fingerprint: str | None = None
     look_for_keys: bool = False
     timeout_secs: int = 30
     config_renderer: CandidateConfigRenderer | None = None
@@ -62,6 +65,19 @@ class NcclientNetconfBackend:
         return capability_from_raw(raw)
 
     def _connect(self):
+        if self.pinned_host_key_fingerprint:
+            raise AdapterError(
+                code="HOST_KEY_PINNING_UNSUPPORTED",
+                message="NETCONF pinned fingerprint verification is not implemented",
+                normalized_error="host key pinning unsupported",
+                raw_error_summary=(
+                    "DeviceRef carries a pinned fingerprint, but ncclient exposes only "
+                    "known_hosts verification or exact hostkey_b64 pinning; refusing "
+                    "to silently downgrade host key verification"
+                ),
+                retryable=False,
+            )
+
         try:
             from ncclient import manager
         except ImportError as exc:  # pragma: no cover - dependency exists in CI package
@@ -73,18 +89,42 @@ class NcclientNetconfBackend:
                 retryable=False,
             ) from exc
 
-        return manager.connect(
-            host=self.host,
-            port=self.port,
-            username=self.username,
-            password=self.password,
-            key_filename=self.key_path,
-            hostkey_verify=self.hostkey_verify,
-            look_for_keys=self.look_for_keys,
-            allow_agent=False,
-            passphrase=self.passphrase,
-            timeout=self.timeout_secs,
-        )
+        connect_args = {
+            "host": self.host,
+            "port": self.port,
+            "username": self.username,
+            "password": self.password,
+            "key_filename": self.key_path,
+            "hostkey_verify": self.hostkey_verify,
+            "look_for_keys": self.look_for_keys,
+            "allow_agent": False,
+            "passphrase": self.passphrase,
+            "timeout": self.timeout_secs,
+        }
+
+        if self.known_hosts_path:
+            return self._connect_with_known_hosts_file(manager, connect_args)
+
+        return manager.connect(**connect_args)
+
+    def _connect_with_known_hosts_file(self, manager, connect_args):
+        path = self.known_hosts_path or ""
+        if "\n" in path or "\r" in path:
+            raise AdapterError(
+                code="HOST_KEY_POLICY_INVALID",
+                message="known_hosts path contains invalid characters",
+                normalized_error="invalid known_hosts path",
+                raw_error_summary="known_hosts path must be a single-line filesystem path",
+                retryable=False,
+            )
+
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as ssh_config:
+            ssh_config.write("Host *\n")
+            ssh_config.write(f"  UserKnownHostsFile {path}\n")
+            ssh_config.flush()
+            connect_args = dict(connect_args)
+            connect_args["ssh_config"] = ssh_config.name
+            return manager.connect(**connect_args)
 
     def get_current_state(self, scope=None) -> dict:
         if _scope_is_empty(scope):

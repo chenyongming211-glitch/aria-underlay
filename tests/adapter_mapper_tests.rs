@@ -1,15 +1,63 @@
 use aria_underlay::adapter_client::mapper::{
     adapter_result_to_outcome, capability_from_proto, desired_state_to_proto, extract_adapter_errors,
-    recovery_action_to_proto, shadow_state_from_proto, state_scope_from_change_set,
-    state_scope_from_desired, AdapterOperationStatus,
+    device_ref_from_info, recovery_action_to_proto, shadow_state_from_proto,
+    state_scope_from_change_set, state_scope_from_desired, AdapterOperationStatus,
 };
+use aria_underlay::device::{DeviceInfo, DeviceLifecycleState, HostKeyPolicy};
 use aria_underlay::engine::diff::{ChangeOp, ChangeSet};
-use aria_underlay::model::{AdminState, DeviceId, InterfaceConfig, PortMode, VlanConfig};
+use aria_underlay::model::{
+    AdminState, DeviceId, DeviceRole, InterfaceConfig, PortMode, Vendor, VlanConfig,
+};
 use aria_underlay::planner::device_plan::DeviceDesiredState;
 use aria_underlay::proto::adapter;
 use aria_underlay::tx::RecoveryAction;
 use aria_underlay::UnderlayError;
 use std::collections::BTreeMap;
+
+#[test]
+fn maps_host_key_policy_to_device_ref() {
+    let known_hosts = DeviceInfo {
+        tenant_id: "tenant-a".into(),
+        site_id: "site-a".into(),
+        id: DeviceId("leaf-a".into()),
+        management_ip: "192.0.2.10".into(),
+        management_port: 830,
+        vendor_hint: Some(Vendor::Huawei),
+        model_hint: None,
+        role: DeviceRole::LeafA,
+        secret_ref: "local/leaf-a".into(),
+        host_key_policy: HostKeyPolicy::KnownHostsFile {
+            path: "/etc/aria/known_hosts".into(),
+        },
+        adapter_endpoint: "http://127.0.0.1:50051".into(),
+        lifecycle_state: DeviceLifecycleState::Ready,
+    };
+
+    let known_hosts_ref = device_ref_from_info(&known_hosts);
+
+    assert_eq!(
+        known_hosts_ref.host_key_policy,
+        adapter::HostKeyPolicy::KnownHostsFile as i32
+    );
+    assert_eq!(known_hosts_ref.known_hosts_path, "/etc/aria/known_hosts");
+    assert_eq!(known_hosts_ref.pinned_host_key_fingerprint, "");
+
+    let pinned = DeviceInfo {
+        host_key_policy: HostKeyPolicy::PinnedKey {
+            fingerprint: "SHA256:abc123".into(),
+        },
+        ..known_hosts
+    };
+
+    let pinned_ref = device_ref_from_info(&pinned);
+
+    assert_eq!(
+        pinned_ref.host_key_policy,
+        adapter::HostKeyPolicy::PinnedKey as i32
+    );
+    assert_eq!(pinned_ref.known_hosts_path, "");
+    assert_eq!(pinned_ref.pinned_host_key_fingerprint, "SHA256:abc123");
+}
 
 #[test]
 fn maps_capability_warnings() {

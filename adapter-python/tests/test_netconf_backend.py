@@ -57,6 +57,22 @@ def test_legacy_netconf_backend_name_points_to_ncclient_backend():
     assert NetconfBackend is NcclientNetconfBackend
 
 
+def test_ncclient_backend_rejects_pinned_fingerprint_without_exact_pin_support():
+    backend = NcclientNetconfBackend(
+        host="192.0.2.10",
+        hostkey_verify=True,
+        pinned_host_key_fingerprint="SHA256:abc123",
+    )
+
+    try:
+        backend._connect()
+    except AdapterError as error:
+        assert error.code == "HOST_KEY_PINNING_UNSUPPORTED"
+        assert error.retryable is False
+    else:
+        raise AssertionError("pinned fingerprint policy must fail closed until exact pinning exists")
+
+
 def test_prepare_candidate_locks_discards_and_unlocks_when_renderer_missing():
     session = _RecordingSession()
     backend = _BackendWithSession(session)

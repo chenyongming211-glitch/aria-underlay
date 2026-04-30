@@ -1,6 +1,5 @@
-use crate::device::capability::BackendKind;
+use crate::device::{capability::BackendKind, DeviceCapabilityProfile, DeviceInfo, HostKeyPolicy};
 use crate::engine::diff::{ChangeOp, ChangeSet};
-use crate::device::{DeviceCapabilityProfile, DeviceInfo};
 use crate::model::{AdminState, DeviceId, InterfaceConfig, PortMode, Vendor, VlanConfig};
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::proto::adapter;
@@ -32,6 +31,9 @@ pub fn extract_adapter_errors(errors: Vec<adapter::AdapterError>) -> Option<Unde
 }
 
 pub fn device_ref_from_info(info: &DeviceInfo) -> adapter::DeviceRef {
+    let (host_key_policy, known_hosts_path, pinned_host_key_fingerprint) =
+        host_key_policy_to_proto(&info.host_key_policy);
+
     adapter::DeviceRef {
         device_id: info.id.0.clone(),
         management_ip: info.management_ip.clone(),
@@ -39,6 +41,31 @@ pub fn device_ref_from_info(info: &DeviceInfo) -> adapter::DeviceRef {
         vendor_hint: vendor_to_proto(info.vendor_hint.unwrap_or(Vendor::Unknown)) as i32,
         model_hint: info.model_hint.clone().unwrap_or_default(),
         secret_ref: info.secret_ref.clone(),
+        host_key_policy: host_key_policy as i32,
+        known_hosts_path,
+        pinned_host_key_fingerprint,
+    }
+}
+
+fn host_key_policy_to_proto(
+    policy: &HostKeyPolicy,
+) -> (adapter::HostKeyPolicy, String, String) {
+    match policy {
+        HostKeyPolicy::TrustOnFirstUse => (
+            adapter::HostKeyPolicy::TrustOnFirstUse,
+            String::new(),
+            String::new(),
+        ),
+        HostKeyPolicy::KnownHostsFile { path } => (
+            adapter::HostKeyPolicy::KnownHostsFile,
+            path.clone(),
+            String::new(),
+        ),
+        HostKeyPolicy::PinnedKey { fingerprint } => (
+            adapter::HostKeyPolicy::PinnedKey,
+            String::new(),
+            fingerprint.clone(),
+        ),
     }
 }
 

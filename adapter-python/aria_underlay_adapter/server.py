@@ -178,6 +178,10 @@ def _netconf_driver_from_device(
         secret = secret_provider.resolve(device.secret_ref)
     except AdapterError as error:
         return AdapterErrorDriver(error)
+    try:
+        host_key_kwargs = _host_key_policy_kwargs(device)
+    except AdapterError as error:
+        return AdapterErrorDriver(error)
 
     return NetconfBackedDriver(
         NcclientNetconfBackend(
@@ -187,7 +191,64 @@ def _netconf_driver_from_device(
             password=secret.password,
             key_path=secret.key_path,
             passphrase=secret.passphrase,
+            **host_key_kwargs,
         )
+    )
+
+
+def _host_key_policy_kwargs(device):
+    policy = getattr(device, "host_key_policy", pb2.HOST_KEY_POLICY_UNSPECIFIED)
+
+    if policy == pb2.HOST_KEY_POLICY_TRUST_ON_FIRST_USE:
+        return {
+            "hostkey_verify": True,
+        }
+
+    if policy == pb2.HOST_KEY_POLICY_KNOWN_HOSTS_FILE:
+        known_hosts_path = getattr(device, "known_hosts_path", "")
+        if not known_hosts_path:
+            raise AdapterError(
+                code="HOST_KEY_POLICY_INVALID",
+                message="known_hosts host key policy requires a path",
+                normalized_error="known_hosts path missing",
+                raw_error_summary="DeviceRef.known_hosts_path is empty",
+                retryable=False,
+            )
+        return {
+            "hostkey_verify": True,
+            "known_hosts_path": known_hosts_path,
+        }
+
+    if policy == pb2.HOST_KEY_POLICY_PINNED_KEY:
+        fingerprint = getattr(device, "pinned_host_key_fingerprint", "")
+        if not fingerprint:
+            raise AdapterError(
+                code="HOST_KEY_POLICY_INVALID",
+                message="pinned host key policy requires a fingerprint",
+                normalized_error="pinned host key fingerprint missing",
+                raw_error_summary="DeviceRef.pinned_host_key_fingerprint is empty",
+                retryable=False,
+            )
+        return {
+            "hostkey_verify": True,
+            "pinned_host_key_fingerprint": fingerprint,
+        }
+
+    if policy == pb2.HOST_KEY_POLICY_UNSPECIFIED:
+        raise AdapterError(
+            code="HOST_KEY_POLICY_REQUIRED",
+            message="host key policy is required for NETCONF devices",
+            normalized_error="host key policy missing",
+            raw_error_summary="DeviceRef.host_key_policy is HOST_KEY_POLICY_UNSPECIFIED",
+            retryable=False,
+        )
+
+    raise AdapterError(
+        code="HOST_KEY_POLICY_UNSUPPORTED",
+        message="host key policy is unsupported",
+        normalized_error="unsupported host key policy",
+        raw_error_summary=f"DeviceRef.host_key_policy={policy!r}",
+        retryable=False,
     )
 
 

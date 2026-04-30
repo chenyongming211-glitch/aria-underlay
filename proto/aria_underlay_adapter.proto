@@ -70,6 +70,13 @@ enum PortModeKind {
   PORT_MODE_KIND_TRUNK = 2;
 }
 
+enum HostKeyPolicy {
+  HOST_KEY_POLICY_UNSPECIFIED = 0;
+  HOST_KEY_POLICY_TRUST_ON_FIRST_USE = 1;
+  HOST_KEY_POLICY_KNOWN_HOSTS_FILE = 2;
+  HOST_KEY_POLICY_PINNED_KEY = 3;
+}
+
 message RequestContext {
   string request_id = 1;
   string tx_id = 2;
@@ -85,6 +92,9 @@ message DeviceRef {
   Vendor vendor_hint = 4;
   string model_hint = 5;
   string secret_ref = 6;
+  HostKeyPolicy host_key_policy = 7;
+  string known_hosts_path = 8;
+  string pinned_host_key_fingerprint = 9;
 }
 
 message DeviceCapability {

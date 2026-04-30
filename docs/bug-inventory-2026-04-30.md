@@ -15,7 +15,7 @@ trusted as-is.
 | Priority | Finding | Status | Current owner |
 | --- | --- | --- | --- |
 | P0 | ConfirmedCommit recovery blind spot after `FinalConfirming` | Fixed in current hardening change set; CI validation required because local Rust toolchain is unavailable | Rust transaction recovery |
-| P1 | `HostKeyPolicy` not wired from Rust `DeviceInfo` to Python NETCONF backend | Confirmed | Proto + Rust mapper + Python server/backend |
+| P1 | `HostKeyPolicy` not wired from Rust `DeviceInfo` to Python NETCONF backend | Fixed in current change set; pinned fingerprint execution remains fail-closed until exact pinning support | Proto + Rust mapper + Python server/backend |
 | P1 | Additional adapter error details dropped from journal diagnostics | Confirmed | Rust error/journal mapping |
 | P2 | Rust `device/render.rs` renderer skeletons are dead code | Confirmed low-risk tech debt | Rust device module |
 | P2 | Python vendor driver stubs raise `NotImplementedError` on construction | Confirmed low-risk tech debt | Python driver registry |
@@ -104,6 +104,16 @@ commit expired and the device rolled back before recovery.
 **Impact:** All NETCONF connections use `hostkey_verify=False` regardless of configured policy. No TOFU enforcement, no known-hosts checking.
 
 **Fix direction:** Add `host_key_policy` to the `DeviceRef` protobuf message, populate it in `device_ref_from_info()`, consume in `_netconf_driver_from_device`.
+
+**Resolution 2026-04-30:** `DeviceRef` now carries `host_key_policy`,
+`known_hosts_path`, and `pinned_host_key_fingerprint`. Rust
+`device_ref_from_info()` maps all three `HostKeyPolicy` variants. Python
+`_netconf_driver_from_device()` passes the policy into `NcclientNetconfBackend`.
+`KnownHostsFile` is enforced with `hostkey_verify=True` and an ncclient SSH
+config shim for `UserKnownHostsFile`. `PinnedKey` is transported but session
+opening fails closed with `HOST_KEY_PINNING_UNSUPPORTED` because ncclient exposes
+exact `hostkey_b64` pinning while the Rust model currently stores only a
+fingerprint.
 
 ---
 
