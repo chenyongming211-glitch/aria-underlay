@@ -3,5 +3,6 @@ pub mod shadow;
 pub mod snapshot;
 
 pub use shadow::{
-    missing_shadow_state, DeviceShadowState, InMemoryShadowStateStore, ShadowStateStore,
+    missing_shadow_state, DeviceShadowState, InMemoryShadowStateStore, JsonFileShadowStateStore,
+    ShadowStateStore,
 };

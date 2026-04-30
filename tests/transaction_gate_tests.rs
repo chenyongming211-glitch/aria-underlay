@@ -14,9 +14,10 @@ use aria_underlay::intent::{
 };
 use aria_underlay::model::{AdminState, DeviceId, DeviceRole, PortMode, Vendor};
 use aria_underlay::state::drift::DriftPolicy;
-use aria_underlay::state::{DeviceShadowState, ShadowStateStore};
+use aria_underlay::state::{DeviceShadowState, JsonFileShadowStateStore, ShadowStateStore};
 use aria_underlay::tx::{
-    InMemoryTxJournalStore, TxContext, TxJournalRecord, TxJournalStore, TxPhase,
+    InMemoryTxJournalStore, JsonFileTxJournalStore, TxContext, TxJournalRecord, TxJournalStore,
+    TxPhase,
 };
 use aria_underlay::{UnderlayError, UnderlayResult};
 
@@ -173,6 +174,49 @@ async fn successful_device_apply_marks_transaction_in_doubt_when_shadow_update_f
     assert_eq!(record.error_code.as_deref(), Some("INTERNAL"));
 }
 
+#[tokio::test]
+async fn successful_device_apply_persists_shadow_across_service_recreation() {
+    let endpoint = start_fake_adapter(AdapterFailurePoint::None).await;
+    let inventory = inventory_with_endpoint_at(
+        "stack-mgmt",
+        DeviceLifecycleState::Ready,
+        endpoint,
+    );
+    let journal_root = temp_store_dir("journal");
+    let shadow_root = temp_store_dir("shadow");
+    let service = AriaUnderlayService::new_with_shadow_store(
+        inventory,
+        Arc::new(JsonFileTxJournalStore::new(&journal_root)),
+        Default::default(),
+        Default::default(),
+        Arc::new(aria_underlay::device::InMemorySecretStore::default()),
+        Arc::new(JsonFileShadowStateStore::new(&shadow_root)),
+    );
+
+    let response = service
+        .apply_domain_intent(apply_request_with_vlan(200, DriftPolicy::ReportOnly))
+        .await
+        .expect("successful fake adapter apply should complete");
+
+    assert_eq!(response.status, ApplyStatus::Success);
+
+    let restarted_shadow = JsonFileShadowStateStore::new(&shadow_root);
+    let state = restarted_shadow
+        .get(&DeviceId("stack-mgmt".into()))
+        .expect("file shadow get should succeed after service recreation")
+        .expect("file shadow should persist successful apply");
+
+    assert_eq!(state.revision, 2);
+    assert!(state.vlans.contains_key(&200));
+    assert_eq!(
+        state.interfaces["GE1/0/1"].mode,
+        PortMode::Access { vlan_id: 200 }
+    );
+
+    std::fs::remove_dir_all(journal_root).ok();
+    std::fs::remove_dir_all(shadow_root).ok();
+}
+
 async fn assert_adapter_failure_records_terminal_phase(
     failure_point: AdapterFailurePoint,
     expected_error: &str,
@@ -256,6 +300,10 @@ fn domain_intent(vlan_id: u16) -> UnderlayDomainIntent {
             mode: PortMode::Access { vlan_id },
         }],
     }
+}
+
+fn temp_store_dir(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("aria-underlay-transaction-{name}-{}", uuid::Uuid::new_v4()))
 }
 
 fn inventory_with_endpoint(device_id: &str, state: DeviceLifecycleState) -> DeviceInventory {

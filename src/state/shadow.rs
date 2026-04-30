@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -74,6 +76,106 @@ impl ShadowStateStore for InMemoryShadowStateStore {
         states.sort_by(|left, right| left.device_id.cmp(&right.device_id));
         Ok(states)
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct JsonFileShadowStateStore {
+    root: PathBuf,
+}
+
+impl JsonFileShadowStateStore {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    fn path_for(&self, device_id: &DeviceId) -> PathBuf {
+        self.root.join(format!("{}.json", shadow_file_stem(device_id)))
+    }
+}
+
+impl ShadowStateStore for JsonFileShadowStateStore {
+    fn get(&self, device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
+        let path = self.path_for(device_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+        read_shadow_state(&path).map(Some)
+    }
+
+    fn put(&self, mut state: DeviceShadowState) -> UnderlayResult<DeviceShadowState> {
+        fs::create_dir_all(&self.root).map_err(shadow_io_error)?;
+
+        let next_revision = self
+            .get(&state.device_id)?
+            .map(|current| current.revision.saturating_add(1))
+            .unwrap_or_else(|| state.revision.max(1));
+        state.revision = next_revision;
+
+        let path = self.path_for(&state.device_id);
+        let tmp_path = path.with_extension("json.tmp");
+        let payload = serde_json::to_vec_pretty(&state)
+            .map_err(|err| UnderlayError::Internal(format!("serialize shadow state: {err}")))?;
+
+        fs::write(&tmp_path, payload).map_err(shadow_io_error)?;
+        fs::rename(&tmp_path, &path).map_err(shadow_io_error)?;
+        Ok(state)
+    }
+
+    fn remove(&self, device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
+        let path = self.path_for(device_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let state = read_shadow_state(&path)?;
+        fs::remove_file(&path).map_err(shadow_io_error)?;
+        Ok(Some(state))
+    }
+
+    fn list(&self) -> UnderlayResult<Vec<DeviceShadowState>> {
+        if !self.root.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut states = Vec::new();
+        for entry in fs::read_dir(&self.root).map_err(shadow_io_error)? {
+            let path = entry.map_err(shadow_io_error)?.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            states.push(read_shadow_state(&path)?);
+        }
+        states.sort_by(|left, right| left.device_id.cmp(&right.device_id));
+        Ok(states)
+    }
+}
+
+fn read_shadow_state(path: &Path) -> UnderlayResult<DeviceShadowState> {
+    let payload = fs::read(path).map_err(shadow_io_error)?;
+    serde_json::from_slice(&payload)
+        .map_err(|err| UnderlayError::Internal(format!("parse shadow state {:?}: {err}", path)))
+}
+
+fn shadow_file_stem(device_id: &DeviceId) -> String {
+    device_id
+        .0
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn shadow_io_error(err: std::io::Error) -> UnderlayError {
+    UnderlayError::Internal(format!("shadow state io error: {err}"))
 }
 
 pub fn missing_shadow_state(device_id: &DeviceId) -> UnderlayError {

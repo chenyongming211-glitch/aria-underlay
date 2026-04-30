@@ -8,7 +8,8 @@ use aria_underlay::device::{DeviceInfo, DeviceInventory, DeviceLifecycleState, H
 use aria_underlay::model::{DeviceId, DeviceRole, Vendor};
 use aria_underlay::proto::adapter;
 use aria_underlay::tx::{
-    InMemoryTxJournalStore, TxContext, TxJournalRecord, TxJournalStore, TxPhase,
+    InMemoryTxJournalStore, JsonFileTxJournalStore, TxContext, TxJournalRecord, TxJournalStore,
+    TxPhase,
 };
 use aria_underlay::UnderlayError;
 use aria_underlay::tx::recovery::{
@@ -228,6 +229,77 @@ async fn recover_pending_transactions_reloads_candidate_before_recovery() {
         .expect("journal get should succeed")
         .expect("journal record should still exist");
     assert_eq!(record.phase, TxPhase::Committed);
+}
+
+#[tokio::test]
+async fn file_backed_recovery_marks_pending_record_in_doubt_after_service_recreation() {
+    let root = temp_journal_dir("restart-pending");
+    JsonFileTxJournalStore::new(&root)
+        .put(&journal_record("tx-restart-started", TxPhase::Started, "leaf-a"))
+        .expect("file journal should store started record before restart");
+
+    let restarted_journal = Arc::new(JsonFileTxJournalStore::new(&root));
+    let service =
+        AriaUnderlayService::new_with_journal(DeviceInventory::default(), restarted_journal.clone());
+
+    let report = service
+        .recover_pending_transactions()
+        .await
+        .expect("file-backed recovery scan should succeed after service recreation");
+
+    assert_eq!(report.recovered, 0);
+    assert_eq!(report.in_doubt, 1);
+    assert_eq!(report.pending, 1);
+    assert_eq!(report.tx_ids, vec!["tx-restart-started"]);
+
+    let record = restarted_journal
+        .get("tx-restart-started")
+        .expect("file journal get should succeed")
+        .expect("file journal record should exist after recovery");
+    assert_eq!(record.phase, TxPhase::InDoubt);
+    assert_eq!(record.error_code.as_deref(), Some("DEVICE_NOT_FOUND"));
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[tokio::test]
+async fn file_backed_force_resolved_record_stays_terminal_after_service_recreation() {
+    let root = temp_journal_dir("restart-force-resolved");
+    let journal = Arc::new(JsonFileTxJournalStore::new(&root));
+    journal
+        .put(&journal_record("tx-restart-manual", TxPhase::InDoubt, "leaf-a"))
+        .expect("file journal should store in-doubt record before force resolve");
+    let service = AriaUnderlayService::new_with_journal(DeviceInventory::default(), journal);
+
+    service
+        .force_resolve_transaction(force_resolve_request("tx-restart-manual"))
+        .await
+        .expect("file-backed force resolve should succeed");
+
+    let restarted_journal = Arc::new(JsonFileTxJournalStore::new(&root));
+    let restarted_service =
+        AriaUnderlayService::new_with_journal(DeviceInventory::default(), restarted_journal.clone());
+    let report = restarted_service
+        .recover_pending_transactions()
+        .await
+        .expect("recovery scan should ignore force-resolved file journal record");
+    let in_doubt = restarted_service
+        .list_in_doubt_transactions(ListInDoubtTransactionsRequest { device_id: None })
+        .await
+        .expect("list in-doubt should ignore force-resolved file journal record");
+
+    assert_eq!(report.pending, 0);
+    assert_eq!(report.in_doubt, 0);
+    assert!(in_doubt.transactions.is_empty());
+
+    let record = restarted_journal
+        .get("tx-restart-manual")
+        .expect("file journal get should succeed")
+        .expect("file journal record should still exist after restart");
+    assert_eq!(record.phase, TxPhase::ForceResolved);
+    assert!(record.manual_resolution.is_some());
+
+    std::fs::remove_dir_all(root).ok();
 }
 
 #[tokio::test]
@@ -480,6 +552,10 @@ fn force_resolve_request(tx_id: &str) -> ForceResolveTransactionRequest {
         reason: "validated device state out of band".into(),
         break_glass_enabled: true,
     }
+}
+
+fn temp_journal_dir(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("aria-underlay-recovery-{name}-{}", uuid::Uuid::new_v4()))
 }
 
 fn inventory_with_recovery_endpoint(device_id: &str, adapter_endpoint: String) -> DeviceInventory {

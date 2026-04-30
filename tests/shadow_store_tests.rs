@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use aria_underlay::model::{DeviceId, VlanConfig};
 use aria_underlay::state::{
-    DeviceShadowState, InMemoryShadowStateStore, ShadowStateStore,
+    DeviceShadowState, InMemoryShadowStateStore, JsonFileShadowStateStore, ShadowStateStore,
 };
 
 #[test]
@@ -41,6 +41,109 @@ fn in_memory_shadow_store_lists_states_in_device_order() {
     assert_eq!(states[1].device_id.0, "leaf-b");
 }
 
+#[test]
+fn file_shadow_store_round_trips_across_store_recreation() {
+    let root = temp_shadow_dir("round-trip");
+    let store = JsonFileShadowStateStore::new(&root);
+
+    let stored = store
+        .put(shadow_state("leaf-a", 100))
+        .expect("file shadow put should succeed");
+    assert_eq!(stored.revision, 1);
+
+    let recreated = JsonFileShadowStateStore::new(&root);
+    let loaded = recreated
+        .get(&DeviceId("leaf-a".into()))
+        .expect("file shadow get should succeed")
+        .expect("file shadow should exist after store recreation");
+
+    assert_eq!(loaded.device_id, DeviceId("leaf-a".into()));
+    assert_eq!(loaded.revision, 1);
+    assert!(loaded.vlans.contains_key(&100));
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn file_shadow_store_increments_revision_across_store_recreation() {
+    let root = temp_shadow_dir("revision");
+    JsonFileShadowStateStore::new(&root)
+        .put(shadow_state("leaf-a", 100))
+        .expect("first file shadow put should succeed");
+
+    let recreated = JsonFileShadowStateStore::new(&root);
+    let updated = recreated
+        .put(shadow_state("leaf-a", 200))
+        .expect("second file shadow put should succeed");
+
+    assert_eq!(updated.revision, 2);
+    assert!(updated.vlans.contains_key(&200));
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn file_shadow_store_lists_states_in_device_order_after_recreation() {
+    let root = temp_shadow_dir("list");
+    let store = JsonFileShadowStateStore::new(&root);
+    store
+        .put(shadow_state("leaf-b", 200))
+        .expect("leaf-b file shadow put should succeed");
+    store
+        .put(shadow_state("leaf-a", 100))
+        .expect("leaf-a file shadow put should succeed");
+
+    let states = JsonFileShadowStateStore::new(&root)
+        .list()
+        .expect("file shadow list should succeed");
+
+    assert_eq!(states.len(), 2);
+    assert_eq!(states[0].device_id.0, "leaf-a");
+    assert_eq!(states[1].device_id.0, "leaf-b");
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn file_shadow_store_removes_state() {
+    let root = temp_shadow_dir("remove");
+    let store = JsonFileShadowStateStore::new(&root);
+    store
+        .put(shadow_state("leaf-a", 100))
+        .expect("file shadow put should succeed");
+
+    let removed = store
+        .remove(&DeviceId("leaf-a".into()))
+        .expect("file shadow remove should succeed")
+        .expect("removed file shadow should be returned");
+
+    assert_eq!(removed.device_id, DeviceId("leaf-a".into()));
+    assert!(store
+        .get(&DeviceId("leaf-a".into()))
+        .expect("file shadow get should succeed")
+        .is_none());
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn file_shadow_store_sanitizes_device_id_path() {
+    let root = temp_shadow_dir("sanitize");
+    let store = JsonFileShadowStateStore::new(&root);
+
+    store
+        .put(shadow_state("../bad/device", 100))
+        .expect("file shadow put should sanitize device id path");
+
+    assert!(root.join("___bad_device.json").exists());
+    assert!(store
+        .get(&DeviceId("../bad/device".into()))
+        .expect("file shadow get should succeed")
+        .is_some());
+
+    std::fs::remove_dir_all(root).ok();
+}
+
 fn shadow_state(device_id: &str, vlan_id: u16) -> DeviceShadowState {
     DeviceShadowState {
         device_id: DeviceId(device_id.into()),
@@ -56,4 +159,8 @@ fn shadow_state(device_id: &str, vlan_id: u16) -> DeviceShadowState {
         interfaces: BTreeMap::new(),
         warnings: Vec::new(),
     }
+}
+
+fn temp_shadow_dir(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("aria-underlay-shadow-{name}-{}", uuid::Uuid::new_v4()))
 }
