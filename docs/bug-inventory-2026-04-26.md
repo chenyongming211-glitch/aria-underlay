@@ -1,10 +1,10 @@
 # Bug Inventory — 2026-04-26
 
-Comprehensive bug report from full codebase review (~10,500 lines, ~73% sprint completion). 9 bugs fixed, 34 remaining.
+Comprehensive bug report from full codebase review (~10,500 lines, ~73% sprint completion). 11 bugs fixed, 32 remaining.
 
 ## Rust — High Severity (4)
 
-- **GC no-op** — `src/worker/gc.rs:28`: `JournalGc::run_once` is empty `{}`. Journal records and artifacts accumulate unboundedly (memory/disk leak). RetentionPolicy defined but never used.
+- ~~**GC no-op**~~ — ✅ FIXED: `JournalGc::run_once` now prunes old terminal journal records by retention policy, never auto-deletes `InDoubt` or non-terminal records, and can clean terminal rollback artifacts with per-device retention caps.
 - ~~**Weak intent validation**~~ — ✅ FIXED: `validate_switch_pair_intent` and `validate_underlay_domain_intent` now reject empty IDs, duplicate switches/endpoints/members/VLANs/interfaces, invalid VLAN ranges, undeclared VLAN references, empty endpoint credential refs, and topology/management endpoint shape mismatches.
 - ~~**Journal write silently ignored**~~ — ✅ FIXED (`d71a4d4`): `let _ = self.journal.put(...)` replaced with proper `if let Err(...)` that includes the journal failure in the returned error message. Now at line 407 (not 378).
 - ~~**Shadow write downgraded to warning**~~ — ✅ FIXED (`d71a4d4`): Shadow store write failure now returns early with `SuccessWithWarning` + explicit error_code instead of bare warning in a Success result. Now at line 382.
@@ -20,7 +20,7 @@ Comprehensive bug report from full codebase review (~10,500 lines, ~73% sprint c
 - `src/api/service.rs:722,870` — Recovery reads journal before lock, doesn't re-read after lock acquisition (potential duplicate recovery attempts)
 - `src/api/service.rs:339-356` — Journal `Committed` written before shadow store update; crash leaves stale shadow
 - `src/api/service.rs:880-908` — Recovery attempt history lost when transitioning to `InDoubt` (operator sees no prior-attempt context)
-- `src/tx/journal.rs:29-35` — `Failed` records are terminal but accumulate forever without GC
+- ~~`src/tx/journal.rs:29-35` — `Failed` records are terminal but accumulate forever without GC~~ ✅ FIXED: `Failed` records are included in terminal GC with a separate `failed_journal_retention_days` policy.
 - `src/adapter_client/mapper.rs:154-161` — ~~No 802.1Q VLAN ID validation (0, 4095, >4094 accepted)~~ ✅ FIXED (`3c5c7d3`): VLAN IDs outside 1–4094 now rejected at mapper boundary.
 - `tests/recovery_tests.rs:290` + `tests/transaction_gate_tests.rs:260` — Fixed 50ms sleep for test server startup (TOCTOU race, CI flakiness)
 
@@ -65,4 +65,4 @@ Comprehensive bug report from full codebase review (~10,500 lines, ~73% sprint c
 
 ## Status
 
-9 bugs fixed (d71a4d4 + 3c5c7d3 + P0 mock verify fix + current P0 intent validation fix). 3 of 4 high Rust bugs fixed. 3 of 3 high Python bugs fixed. 34 remaining.
+11 bugs fixed (d71a4d4 + 3c5c7d3 + P0 mock verify fix + P0 intent validation fix + current P0 journal/artifact GC fix). 4 of 4 high Rust bugs fixed. 3 of 3 high Python bugs fixed. 32 remaining.
