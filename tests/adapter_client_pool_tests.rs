@@ -1,8 +1,8 @@
 use aria_underlay::adapter_client::AdapterClientPool;
 use aria_underlay::UnderlayError;
 
-#[test]
-fn adapter_client_pool_reuses_channel_for_same_endpoint() {
+#[tokio::test]
+async fn adapter_client_pool_reuses_channel_for_same_endpoint() {
     let pool = AdapterClientPool::default();
 
     let _first = pool
@@ -16,8 +16,8 @@ fn adapter_client_pool_reuses_channel_for_same_endpoint() {
     assert!(pool.contains_endpoint("http://127.0.0.1:50051"));
 }
 
-#[test]
-fn adapter_client_pool_keeps_endpoints_separate() {
+#[tokio::test]
+async fn adapter_client_pool_keeps_endpoints_separate() {
     let pool = AdapterClientPool::default();
 
     let _first = pool
@@ -32,8 +32,8 @@ fn adapter_client_pool_keeps_endpoints_separate() {
     assert!(pool.contains_endpoint("http://127.0.0.1:50052"));
 }
 
-#[test]
-fn adapter_client_pool_rejects_invalid_endpoint_without_caching() {
+#[tokio::test]
+async fn adapter_client_pool_rejects_invalid_endpoint_without_caching() {
     let pool = AdapterClientPool::default();
 
     let err = pool
@@ -44,8 +44,8 @@ fn adapter_client_pool_rejects_invalid_endpoint_without_caching() {
     assert_eq!(pool.cached_endpoint_count(), 0);
 }
 
-#[test]
-fn adapter_client_pool_can_invalidate_endpoint() {
+#[tokio::test]
+async fn adapter_client_pool_can_invalidate_endpoint() {
     let pool = AdapterClientPool::default();
 
     let _client = pool
