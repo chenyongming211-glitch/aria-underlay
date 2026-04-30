@@ -6,6 +6,7 @@ use crate::api::response::{ApplyStatus, DeviceApplyResult};
 use crate::model::DeviceId;
 use crate::state::drift::DriftReport;
 use crate::tx::{TransactionStrategy, TxPhase};
+use crate::worker::gc::JournalGcReport;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnderlayEventKind {
@@ -91,6 +92,40 @@ impl UnderlayEvent {
             } else {
                 "clean".into()
             }),
+            error_code: None,
+            error_message: None,
+            fields,
+        }
+    }
+
+    pub fn journal_gc_completed(
+        request_id: impl Into<String>,
+        trace_id: impl Into<String>,
+        report: &JournalGcReport,
+    ) -> Self {
+        let mut fields = BTreeMap::new();
+        fields.insert(
+            "journals_deleted".into(),
+            report.journals_deleted.to_string(),
+        );
+        fields.insert(
+            "journals_retained".into(),
+            report.journals_retained.to_string(),
+        );
+        fields.insert(
+            "artifacts_deleted".into(),
+            report.artifacts_deleted.to_string(),
+        );
+
+        Self {
+            kind: UnderlayEventKind::UnderlayJournalGcCompleted,
+            request_id: request_id.into(),
+            trace_id: trace_id.into(),
+            tx_id: None,
+            device_id: None,
+            phase: None,
+            strategy: None,
+            result: Some("completed".into()),
             error_code: None,
             error_message: None,
             fields,

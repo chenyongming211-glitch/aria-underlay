@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use crate::telemetry::{EventSink, UnderlayEvent};
 use crate::tx::{TxJournalRecord, TxPhase};
 use crate::utils::time::now_unix_secs;
 use crate::{UnderlayError, UnderlayResult};
@@ -40,6 +42,51 @@ pub struct JournalGcReport {
     pub journals_deleted: usize,
     pub journals_retained: usize,
     pub artifacts_deleted: usize,
+}
+
+#[derive(Debug)]
+pub struct JournalGcWorker {
+    gc: JournalGc,
+    policy: RetentionPolicy,
+    event_sink: Arc<dyn EventSink>,
+    request_id: String,
+    trace_id: String,
+}
+
+impl JournalGcWorker {
+    pub fn new(
+        gc: JournalGc,
+        policy: RetentionPolicy,
+        event_sink: Arc<dyn EventSink>,
+    ) -> Self {
+        Self {
+            gc,
+            policy,
+            event_sink,
+            request_id: "journal-gc".into(),
+            trace_id: "journal-gc".into(),
+        }
+    }
+
+    pub fn with_request_context(
+        mut self,
+        request_id: impl Into<String>,
+        trace_id: impl Into<String>,
+    ) -> Self {
+        self.request_id = request_id.into();
+        self.trace_id = trace_id.into();
+        self
+    }
+
+    pub async fn run_once_and_emit(&self) -> UnderlayResult<JournalGcReport> {
+        let report = self.gc.run_once(self.policy.clone()).await?;
+        self.event_sink.emit(UnderlayEvent::journal_gc_completed(
+            self.request_id.clone(),
+            self.trace_id.clone(),
+            &report,
+        ));
+        Ok(report)
+    }
 }
 
 impl JournalGc {

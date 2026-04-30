@@ -1,14 +1,43 @@
 use std::fs;
+use std::sync::Arc;
 
 use aria_underlay::model::DeviceId;
+use aria_underlay::telemetry::{InMemoryEventSink, UnderlayEvent, UnderlayEventKind};
 use aria_underlay::tx::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase};
-use aria_underlay::worker::gc::{JournalGc, RetentionPolicy};
+use aria_underlay::worker::gc::{JournalGc, JournalGcReport, JournalGcWorker, RetentionPolicy};
 
 #[test]
 fn retention_policy_defaults_are_conservative() {
     let policy = RetentionPolicy::default();
     assert_eq!(policy.failed_journal_retention_days, 90);
     assert_eq!(policy.max_artifacts_per_device, 50);
+}
+
+#[test]
+fn journal_gc_completed_event_includes_cleanup_counts() {
+    let report = JournalGcReport {
+        journals_deleted: 2,
+        journals_retained: 3,
+        artifacts_deleted: 4,
+    };
+
+    let event = UnderlayEvent::journal_gc_completed("req-gc", "trace-gc", &report);
+
+    assert_eq!(event.kind, UnderlayEventKind::UnderlayJournalGcCompleted);
+    assert_eq!(event.request_id, "req-gc");
+    assert_eq!(event.trace_id, "trace-gc");
+    assert_eq!(
+        event.fields.get("journals_deleted").map(String::as_str),
+        Some("2")
+    );
+    assert_eq!(
+        event.fields.get("journals_retained").map(String::as_str),
+        Some("3")
+    );
+    assert_eq!(
+        event.fields.get("artifacts_deleted").map(String::as_str),
+        Some("4")
+    );
 }
 
 #[tokio::test]
@@ -107,6 +136,45 @@ async fn gc_prunes_terminal_artifacts_per_device_without_touching_unknown_tx() {
     assert!(artifact_root.join("leaf-a/tx-new").exists());
     assert!(!artifact_root.join("leaf-a/tx-old").exists());
     assert!(artifact_root.join("leaf-a/tx-unknown").exists());
+    fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn gc_worker_emits_completion_event_after_successful_run() {
+    let temp = temp_test_dir("worker-event");
+    let journal_root = temp.join("journal");
+    let store = JsonFileTxJournalStore::new(&journal_root);
+    store
+        .put(&journal_record("tx-old", TxPhase::Committed, 100))
+        .expect("write committed");
+    let sink = Arc::new(InMemoryEventSink::default());
+
+    let report = JournalGcWorker::new(
+        JournalGc::new(&journal_root).with_now_unix_secs(100 + 31 * 24 * 60 * 60),
+        RetentionPolicy {
+            committed_journal_retention_days: 30,
+            rolled_back_journal_retention_days: 30,
+            failed_journal_retention_days: 90,
+            rollback_artifact_retention_days: 30,
+            max_artifacts_per_device: 50,
+        },
+        sink.clone(),
+    )
+    .with_request_context("req-gc", "trace-gc")
+    .run_once_and_emit()
+    .await
+    .expect("worker gc should run");
+
+    assert_eq!(report.journals_deleted, 1);
+    let events = sink.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, UnderlayEventKind::UnderlayJournalGcCompleted);
+    assert_eq!(events[0].request_id, "req-gc");
+    assert_eq!(events[0].trace_id, "trace-gc");
+    assert_eq!(
+        events[0].fields.get("journals_deleted").map(String::as_str),
+        Some("1")
+    );
     fs::remove_dir_all(temp).ok();
 }
 
