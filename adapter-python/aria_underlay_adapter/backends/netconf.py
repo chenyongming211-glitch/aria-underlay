@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Iterable, Protocol
+from xml.sax.saxutils import escape
 
 from aria_underlay_adapter.backends.base import BackendCapability
 from aria_underlay_adapter.errors import AdapterError
@@ -76,12 +77,23 @@ class NcclientNetconfBackend:
         )
 
     def get_current_state(self, scope=None) -> dict:
+        if _scope_is_empty(scope):
+            return {"vlans": [], "interfaces": []}
+
+        try:
+            with self._connect() as session:
+                _read_running_config(session, scope)
+        except AdapterError:
+            raise
+        except Exception as exc:
+            raise _adapter_error_from_ncclient_exception(exc) from exc
+
         raise AdapterError(
             code="NETCONF_STATE_PARSE_NOT_IMPLEMENTED",
             message="real NETCONF running state parsing is not implemented yet",
             normalized_error="state parser missing",
             raw_error_summary=(
-                "scoped get-config parser/filter is not implemented yet; "
+                "scoped get-config completed, but running state parser is not implemented yet; "
                 f"scope={_scope_summary(scope)}"
             ),
             retryable=False,
@@ -343,12 +355,23 @@ class NcclientNetconfBackend:
         )
 
     def verify_running(self, desired_state, scope=None) -> None:
+        if _scope_is_empty(scope):
+            return
+
+        try:
+            with self._connect() as session:
+                _read_running_config(session, scope)
+        except AdapterError:
+            raise
+        except Exception as exc:
+            raise _adapter_error_from_ncclient_exception(exc) from exc
+
         raise AdapterError(
             code="NETCONF_VERIFY_NOT_IMPLEMENTED",
             message="real NETCONF running verification is not implemented yet",
             normalized_error="verification operation missing",
             raw_error_summary=(
-                "scoped running verification lands after state parser; "
+                "scoped running get-config completed, but verification lands after state parser; "
                 f"scope={_scope_summary(scope)}"
             ),
             retryable=False,
@@ -431,6 +454,84 @@ def _adapter_operation_error(
         raw_error_summary=raw,
         retryable=retryable,
     )
+
+
+def build_state_filter(scope=None):
+    if scope is None or getattr(scope, "full", False):
+        return None
+
+    vlan_ids = _normalized_scope_vlan_ids(scope)
+    interface_names = _normalized_scope_interface_names(scope)
+    if not vlan_ids and not interface_names:
+        return None
+
+    parts = ['<filter type="subtree">']
+    if vlan_ids:
+        parts.append("<vlans>")
+        for vlan_id in vlan_ids:
+            parts.append(f"<vlan><vlan-id>{vlan_id}</vlan-id></vlan>")
+        parts.append("</vlans>")
+    if interface_names:
+        parts.append("<interfaces>")
+        for name in interface_names:
+            parts.append(f"<interface><name>{escape(name)}</name></interface>")
+        parts.append("</interfaces>")
+    parts.append("</filter>")
+    return "".join(parts)
+
+
+def _read_running_config(session, scope=None):
+    filter_xml = build_state_filter(scope)
+    kwargs = {"source": "running"}
+    if filter_xml is not None:
+        kwargs["filter"] = ("subtree", filter_xml)
+
+    try:
+        return session.get_config(**kwargs)
+    except Exception as exc:
+        raise _adapter_operation_error(
+            code="NETCONF_GET_CONFIG_FAILED",
+            message="NETCONF get-config running failed",
+            exc=exc,
+            retryable=True,
+        ) from exc
+
+
+def _scope_is_empty(scope) -> bool:
+    return (
+        scope is not None
+        and not getattr(scope, "full", False)
+        and not list(getattr(scope, "vlan_ids", []))
+        and not list(getattr(scope, "interface_names", []))
+    )
+
+
+def _normalized_scope_vlan_ids(scope) -> list[int]:
+    vlan_ids = sorted({int(vlan_id) for vlan_id in getattr(scope, "vlan_ids", [])})
+    invalid = [vlan_id for vlan_id in vlan_ids if vlan_id < 1 or vlan_id > 4094]
+    if invalid:
+        raise AdapterError(
+            code="INVALID_STATE_SCOPE",
+            message="state scope contains invalid VLAN IDs",
+            normalized_error="invalid state scope",
+            raw_error_summary=f"invalid_vlan_ids={invalid}",
+            retryable=False,
+        )
+    return vlan_ids
+
+
+def _normalized_scope_interface_names(scope) -> list[str]:
+    names = sorted({str(name) for name in getattr(scope, "interface_names", [])})
+    invalid = [name for name in names if not name.strip()]
+    if invalid:
+        raise AdapterError(
+            code="INVALID_STATE_SCOPE",
+            message="state scope contains empty interface names",
+            normalized_error="invalid state scope",
+            raw_error_summary="empty interface name in StateScope.interface_names",
+            retryable=False,
+        )
+    return names
 
 
 def _scope_summary(scope) -> str:

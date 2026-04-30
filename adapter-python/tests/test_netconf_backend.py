@@ -11,6 +11,7 @@ from aria_underlay_adapter.backends.netconf import (
     WRITABLE_RUNNING,
     NcclientNetconfBackend,
     NetconfBackend,
+    build_state_filter,
     capability_from_raw,
 )
 from aria_underlay_adapter.drivers.netconf_backed import NetconfBackedDriver
@@ -302,6 +303,139 @@ def test_rollback_candidate_cancels_confirmed_commit_strategy():
     assert session.calls == [("cancel_commit", {"persist_id": "tx-1"})]
 
 
+def test_build_state_filter_returns_none_for_full_scope():
+    scope = _Scope(full=True, vlan_ids=[100], interface_names=["GE1/0/1"])
+
+    assert build_state_filter(scope) is None
+
+
+def test_build_state_filter_returns_none_for_empty_scope():
+    scope = _Scope(full=False, vlan_ids=[], interface_names=[])
+
+    assert build_state_filter(scope) is None
+
+
+def test_build_state_filter_deduplicates_sorts_and_escapes_scope_values():
+    scope = _Scope(
+        full=False,
+        vlan_ids=[200, 100, 100],
+        interface_names=["GE1/0/2", "GE1/0/1&backup", "GE1/0/2"],
+    )
+
+    assert build_state_filter(scope) == (
+        '<filter type="subtree">'
+        "<vlans>"
+        "<vlan><vlan-id>100</vlan-id></vlan>"
+        "<vlan><vlan-id>200</vlan-id></vlan>"
+        "</vlans>"
+        "<interfaces>"
+        "<interface><name>GE1/0/1&amp;backup</name></interface>"
+        "<interface><name>GE1/0/2</name></interface>"
+        "</interfaces>"
+        "</filter>"
+    )
+
+
+def test_build_state_filter_rejects_invalid_vlan_scope():
+    scope = _Scope(full=False, vlan_ids=[0, 4095], interface_names=[])
+
+    try:
+        build_state_filter(scope)
+    except AdapterError as error:
+        assert error.code == "INVALID_STATE_SCOPE"
+        assert error.retryable is False
+    else:
+        raise AssertionError("invalid state scope should fail closed")
+
+
+def test_get_current_state_empty_scope_returns_empty_state_without_device_read():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    state = backend.get_current_state(scope=_Scope(full=False, vlan_ids=[], interface_names=[]))
+
+    assert state == {"vlans": [], "interfaces": []}
+    assert session.calls == []
+
+
+def test_get_current_state_reads_running_with_scoped_filter_then_fails_parser_closed():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    try:
+        backend.get_current_state(scope=_Scope(full=False, vlan_ids=[100], interface_names=[]))
+    except AdapterError as error:
+        assert error.code == "NETCONF_STATE_PARSE_NOT_IMPLEMENTED"
+        assert error.retryable is False
+    else:
+        raise AssertionError("real state parser should remain fail-closed")
+
+    assert session.calls == [
+        (
+            "get_config",
+            {
+                "source": "running",
+                "filter": (
+                    "subtree",
+                    '<filter type="subtree"><vlans><vlan><vlan-id>100</vlan-id></vlan></vlans></filter>',
+                ),
+            },
+        )
+    ]
+
+
+def test_get_current_state_full_scope_reads_running_without_filter():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    try:
+        backend.get_current_state(scope=_Scope(full=True, vlan_ids=[], interface_names=[]))
+    except AdapterError as error:
+        assert error.code == "NETCONF_STATE_PARSE_NOT_IMPLEMENTED"
+    else:
+        raise AssertionError("real state parser should remain fail-closed")
+
+    assert session.calls == [("get_config", {"source": "running"})]
+
+
+def test_verify_running_empty_scope_is_noop_without_device_read():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    backend.verify_running(desired_state=object(), scope=_Scope(False, [], []))
+
+    assert session.calls == []
+
+
+def test_verify_running_reads_running_with_scope_then_fails_parser_closed():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    try:
+        backend.verify_running(
+            desired_state=object(),
+            scope=_Scope(False, [], ["GE1/0/1"]),
+        )
+    except AdapterError as error:
+        assert error.code == "NETCONF_VERIFY_NOT_IMPLEMENTED"
+        assert error.retryable is False
+    else:
+        raise AssertionError("real verification should remain fail-closed")
+
+    assert session.calls == [
+        (
+            "get_config",
+            {
+                "source": "running",
+                "filter": (
+                    "subtree",
+                    '<filter type="subtree"><interfaces><interface><name>GE1/0/1</name></interface></interfaces></filter>',
+                ),
+            },
+        )
+    ]
+
+
 class _BackendWithSession(NcclientNetconfBackend):
     def __init__(self, session, config_renderer=None):
         super().__init__(host="127.0.0.1", config_renderer=config_renderer)
@@ -349,6 +483,10 @@ class _RecordingSession:
     def cancel_commit(self, **kwargs):
         self.calls.append(("cancel_commit", kwargs))
 
+    def get_config(self, **kwargs):
+        self.calls.append(("get_config", kwargs))
+        return "<data/>"
+
 
 class _StaticRenderer:
     production_ready = True
@@ -391,3 +529,10 @@ def _desired_state():
         ]
 
     return _Desired()
+
+
+class _Scope:
+    def __init__(self, full, vlan_ids, interface_names):
+        self.full = full
+        self.vlan_ids = vlan_ids
+        self.interface_names = interface_names
