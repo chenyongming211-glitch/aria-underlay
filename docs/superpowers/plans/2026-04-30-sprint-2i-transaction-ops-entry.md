@@ -83,7 +83,7 @@ git diff --check
 
 Result: `python3 -m pytest adapter-python/tests -q` passed with `188 passed`; `git diff --check` exited cleanly.
 
-- [ ] **Step 2: Rust checks**
+- [x] **Step 2: Rust checks**
 
 Run locally if available:
 
@@ -95,7 +95,9 @@ cargo check --examples
 
 If local Rust is unavailable, push and use GitHub Actions as the Rust verification gate.
 
-- [ ] **Step 3: Commit and push**
+Result: local Rust was unavailable. GitHub Actions run `25167543318` passed Rust `cargo check --all-targets`, Rust `cargo test`, Python adapter tests, and fake-adapter integration jobs.
+
+- [x] **Step 3: Commit and push**
 
 Commit message:
 
@@ -104,3 +106,5 @@ feat: add transaction ops entry
 ```
 
 Watch GitHub Actions until the pushed commit is green.
+
+Result: committed and pushed `7377be2 feat: add transaction ops entry`; CI run `25167543318` completed successfully.
