@@ -69,7 +69,8 @@ def _parse_interfaces(root) -> list[dict]:
 
 
 def _parse_port_mode(mode_node) -> dict:
-    kind = _required_text(mode_node, "kind", "port-mode/kind")
+    raw_kind = _required_text(mode_node, "kind", "port-mode/kind")
+    kind = raw_kind.lower()
     if kind == "access":
         return {
             "kind": "access",
@@ -95,7 +96,7 @@ def _parse_port_mode(mode_node) -> dict:
             "native_vlan": native_vlan,
             "allowed_vlans": allowed_vlans,
         }
-    raise _parse_error(f"unknown port mode {kind}")
+    raise _parse_error(f"unknown port mode {raw_kind}")
 
 
 def _filter_vlans(vlans: list[dict], scope) -> list[dict]:

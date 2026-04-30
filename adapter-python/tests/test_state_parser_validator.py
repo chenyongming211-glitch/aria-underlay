@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from aria_underlay_adapter.state_parsers import validator
 
 
@@ -129,6 +131,20 @@ def test_validator_outputs_scoped_summary_json(capsys):
         "interface_names": ["GE1/0/1"],
         "vlan_ids": [100],
     }
+
+
+def test_validator_help_documents_default_full_scope(capsys):
+    with pytest.raises(SystemExit) as exc:
+        validator.main(["--help"])
+
+    captured = capsys.readouterr()
+    help_text = " ".join(captured.out.split())
+
+    assert exc.value.code == 0
+    assert (
+        "If no scope option is provided, the validator parses full observed state."
+        in help_text
+    )
 
 
 def test_validator_manifest_outputs_batch_summary_for_successful_samples(

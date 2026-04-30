@@ -253,7 +253,10 @@ def _to_json(payload: dict, *, pretty: bool = False) -> str:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="aria-underlay-state-parse",
-        description="Validate NETCONF running-state XML with a fixture-verified parser.",
+        description=(
+            "Validate NETCONF running-state XML with a fixture-verified parser. "
+            "If no scope option is provided, the validator parses full observed state."
+        ),
     )
     parser.add_argument(
         "--manifest",

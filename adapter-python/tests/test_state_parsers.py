@@ -69,6 +69,39 @@ def test_h3c_parser_reads_fixture_vlan_and_interfaces():
     }
 
 
+def test_huawei_parser_normalizes_port_mode_kind_case():
+    state = HuaweiStateParser().parse_running(
+        """
+        <data>
+          <interfaces>
+            <interface>
+              <name>GE1/0/1</name>
+              <port-mode>
+                <kind>ACCESS</kind>
+                <access-vlan>100</access-vlan>
+              </port-mode>
+            </interface>
+            <interface>
+              <name>GE1/0/2</name>
+              <port-mode>
+                <kind>Trunk</kind>
+                <native-vlan>100</native-vlan>
+                <allowed-vlans>
+                  <vlan-id>100</vlan-id>
+                  <vlan-id>200</vlan-id>
+                </allowed-vlans>
+              </port-mode>
+            </interface>
+          </interfaces>
+        </data>
+        """
+    )
+
+    assert state["interfaces"][0]["mode"]["kind"] == "access"
+    assert state["interfaces"][1]["mode"]["kind"] == "trunk"
+    assert state["interfaces"][1]["mode"]["allowed_vlans"] == [100, 200]
+
+
 @pytest.mark.parametrize(
     ("xml", "summary"),
     [
