@@ -9,6 +9,9 @@ use crate::api::response::{
     ApplyIntentResponse, DeviceOnboardingResponse, DriftAuditResponse, DryRunResponse,
     RefreshStateResponse,
 };
+use crate::api::transactions::{
+    ListInDoubtTransactionsRequest, ListInDoubtTransactionsResponse,
+};
 use crate::device::{
     InitializeUnderlaySiteRequest, InitializeUnderlaySiteResponse, RegisterDeviceRequest,
     RegisterDeviceResponse,
@@ -50,6 +53,11 @@ pub trait UnderlayService: Send + Sync {
     async fn get_device_state(&self, device_id: DeviceId) -> UnderlayResult<DeviceShadowState>;
 
     async fn recover_pending_transactions(&self) -> UnderlayResult<RecoveryReport>;
+
+    async fn list_in_doubt_transactions(
+        &self,
+        request: ListInDoubtTransactionsRequest,
+    ) -> UnderlayResult<ListInDoubtTransactionsResponse>;
 
     async fn run_drift_audit(
         &self,

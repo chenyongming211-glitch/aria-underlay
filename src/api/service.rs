@@ -14,6 +14,10 @@ use crate::api::response::{
     ApplyIntentResponse, ApplyStatus, DeviceApplyResult, DeviceOnboardingResponse,
     DriftAuditResponse, DryRunResponse, RefreshStateResponse,
 };
+use crate::api::transactions::{
+    InDoubtTransactionSummary, ListInDoubtTransactionsRequest,
+    ListInDoubtTransactionsResponse,
+};
 use crate::api::underlay_service::UnderlayService;
 use crate::device::{
     DeviceInfo, DeviceInventory, DeviceLifecycleState, DeviceOnboardingService,
@@ -1019,6 +1023,29 @@ impl UnderlayService for AriaUnderlayService {
         })
     }
 
+    async fn list_in_doubt_transactions(
+        &self,
+        request: ListInDoubtTransactionsRequest,
+    ) -> UnderlayResult<ListInDoubtTransactionsResponse> {
+        let mut transactions: Vec<_> = self
+            .journal
+            .list_recoverable()?
+            .into_iter()
+            .filter(|record| record.phase == TxPhase::InDoubt)
+            .filter(|record| {
+                request
+                    .device_id
+                    .as_ref()
+                    .map(|device_id| record.devices.contains(device_id))
+                    .unwrap_or(true)
+            })
+            .map(in_doubt_summary_from_record)
+            .collect();
+        transactions.sort_by(|left, right| left.tx_id.cmp(&right.tx_id));
+
+        Ok(ListInDoubtTransactionsResponse { transactions })
+    }
+
     async fn run_drift_audit(
         &self,
         request: DriftAuditRequest,
@@ -1153,6 +1180,22 @@ impl UnderlayService for AriaUnderlayService {
             resolved: true,
             warnings: Vec::new(),
         })
+    }
+}
+
+fn in_doubt_summary_from_record(record: TxJournalRecord) -> InDoubtTransactionSummary {
+    InDoubtTransactionSummary {
+        tx_id: record.tx_id,
+        request_id: record.request_id,
+        trace_id: record.trace_id,
+        phase: record.phase,
+        devices: record.devices,
+        strategy: record.strategy,
+        error_code: record.error_code,
+        error_message: record.error_message,
+        error_history: record.error_history,
+        created_at_unix_secs: record.created_at_unix_secs,
+        updated_at_unix_secs: record.updated_at_unix_secs,
     }
 }
 

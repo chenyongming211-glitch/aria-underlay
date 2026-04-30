@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use aria_underlay::api::force_resolve::ForceResolveTransactionRequest;
+use aria_underlay::api::transactions::ListInDoubtTransactionsRequest;
 use aria_underlay::api::{AriaUnderlayService, UnderlayService};
 use aria_underlay::device::{DeviceInfo, DeviceInventory, DeviceLifecycleState, HostKeyPolicy};
 use aria_underlay::model::{DeviceId, DeviceRole, Vendor};
@@ -268,6 +269,37 @@ async fn force_resolve_transaction_marks_in_doubt_record_terminal() {
             .is_empty(),
         "force-resolved transaction must no longer block new transactions"
     );
+}
+
+#[tokio::test]
+async fn list_in_doubt_transactions_returns_only_in_doubt_records() {
+    let journal = Arc::new(InMemoryTxJournalStore::default());
+    journal
+        .put(
+            &journal_record("tx-in-doubt", TxPhase::InDoubt, "leaf-a")
+                .with_error("COMMIT_UNKNOWN", "commit result could not be confirmed"),
+        )
+        .expect("in-doubt journal record should be stored");
+    journal
+        .put(&journal_record("tx-prepared", TxPhase::Prepared, "leaf-b"))
+        .expect("prepared journal record should be stored");
+    journal
+        .put(&journal_record("tx-force-resolved", TxPhase::ForceResolved, "leaf-c"))
+        .expect("force-resolved journal record should be stored");
+    let service = AriaUnderlayService::new_with_journal(DeviceInventory::default(), journal);
+
+    let response = service
+        .list_in_doubt_transactions(ListInDoubtTransactionsRequest { device_id: None })
+        .await
+        .expect("in-doubt listing should succeed");
+
+    assert_eq!(response.transactions.len(), 1);
+    let summary = &response.transactions[0];
+    assert_eq!(summary.tx_id, "tx-in-doubt");
+    assert_eq!(summary.phase, TxPhase::InDoubt);
+    assert_eq!(summary.devices, vec![DeviceId("leaf-a".into())]);
+    assert_eq!(summary.error_code.as_deref(), Some("COMMIT_UNKNOWN"));
+    assert_eq!(summary.error_history.len(), 1);
 }
 
 #[tokio::test]
