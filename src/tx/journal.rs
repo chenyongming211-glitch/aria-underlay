@@ -4,7 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::engine::diff::ChangeSet;
 use crate::model::DeviceId;
+use crate::planner::device_plan::DeviceDesiredState;
 use crate::tx::context::TxContext;
 use crate::tx::strategy::TransactionStrategy;
 use crate::utils::time::now_unix_secs;
@@ -60,6 +62,10 @@ pub struct TxJournalRecord {
     pub trace_id: String,
     pub phase: TxPhase,
     pub devices: Vec<DeviceId>,
+    #[serde(default)]
+    pub desired_states: Vec<DeviceDesiredState>,
+    #[serde(default)]
+    pub change_sets: Vec<ChangeSet>,
     pub strategy: Option<TransactionStrategy>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
@@ -80,6 +86,8 @@ impl TxJournalRecord {
             trace_id: context.trace_id.clone(),
             phase: TxPhase::Started,
             devices,
+            desired_states: Vec::new(),
+            change_sets: Vec::new(),
             strategy: None,
             error_code: None,
             error_message: None,
@@ -98,6 +106,18 @@ impl TxJournalRecord {
 
     pub fn with_strategy(mut self, strategy: TransactionStrategy) -> Self {
         self.strategy = Some(strategy);
+        self.updated_at_unix_secs = now_unix_secs();
+        self
+    }
+
+    pub fn with_desired_states(mut self, desired_states: Vec<DeviceDesiredState>) -> Self {
+        self.desired_states = desired_states;
+        self.updated_at_unix_secs = now_unix_secs();
+        self
+    }
+
+    pub fn with_change_sets(mut self, change_sets: Vec<ChangeSet>) -> Self {
+        self.change_sets = change_sets;
         self.updated_at_unix_secs = now_unix_secs();
         self
     }

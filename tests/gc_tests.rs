@@ -185,6 +185,8 @@ fn journal_record(tx_id: &str, phase: TxPhase, updated_at_unix_secs: u64) -> TxJ
         trace_id: format!("trace-{tx_id}"),
         phase,
         devices: vec![DeviceId("leaf-a".into())],
+        desired_states: Vec::new(),
+        change_sets: Vec::new(),
         strategy: None,
         error_code: None,
         error_message: None,

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -5,11 +6,13 @@ use aria_underlay::api::force_resolve::ForceResolveTransactionRequest;
 use aria_underlay::api::transactions::ListInDoubtTransactionsRequest;
 use aria_underlay::api::{AriaUnderlayService, UnderlayService};
 use aria_underlay::device::{DeviceInfo, DeviceInventory, DeviceLifecycleState, HostKeyPolicy};
-use aria_underlay::model::{DeviceId, DeviceRole, Vendor};
+use aria_underlay::engine::diff::{ChangeOp, ChangeSet};
+use aria_underlay::model::{DeviceId, DeviceRole, Vendor, VlanConfig};
+use aria_underlay::planner::device_plan::DeviceDesiredState;
 use aria_underlay::proto::adapter;
 use aria_underlay::tx::{
     InMemoryTxJournalStore, JsonFileTxJournalStore, TxContext, TxJournalRecord, TxJournalStore,
-    TxPhase,
+    TransactionStrategy, TxPhase,
 };
 use aria_underlay::UnderlayError;
 use aria_underlay::tx::recovery::{
@@ -18,7 +21,7 @@ use aria_underlay::tx::recovery::{
 
 mod common;
 
-use common::{adapter_result, start_test_adapter, TestAdapter};
+use common::{adapter_result, failed_result, start_test_adapter, TestAdapter};
 
 #[test]
 fn recovery_report_defaults_to_zero() {
@@ -201,6 +204,55 @@ async fn recover_pending_transactions_records_adapter_in_doubt_result() {
         .expect("journal get should succeed")
         .expect("journal record should exist");
     assert_eq!(record.phase, TxPhase::InDoubt);
+}
+
+#[tokio::test]
+async fn recover_pending_transactions_confirms_final_confirming_by_verifying_desired_state() {
+    let endpoint = start_test_adapter(TestAdapter {
+        final_confirm_result: failed_result("UNKNOWN_PERSIST_ID"),
+        verify_result: adapter_result(adapter::AdapterOperationStatus::NoChange),
+        recover_result: failed_result("CANCEL_COMMIT_UNKNOWN"),
+        ..Default::default()
+    })
+    .await;
+    let desired = desired_vlan_state("leaf-a", 200, "tenant-200");
+    let change_set = create_vlan_change_set("leaf-a", 200, "tenant-200");
+    let journal = Arc::new(InMemoryTxJournalStore::default());
+    journal
+        .put(
+            &TxJournalRecord::started(
+                &TxContext {
+                    tx_id: "tx-final-confirmed".into(),
+                    request_id: "req-final-confirmed".into(),
+                    trace_id: "trace-final-confirmed".into(),
+                },
+                vec![DeviceId("leaf-a".into())],
+            )
+            .with_desired_states(vec![desired])
+            .with_change_sets(vec![change_set])
+            .with_strategy(TransactionStrategy::ConfirmedCommit)
+            .with_phase(TxPhase::FinalConfirming),
+        )
+        .expect("final-confirming journal record should be stored");
+
+    let service = AriaUnderlayService::new_with_journal(
+        inventory_with_recovery_endpoint("leaf-a", endpoint),
+        journal.clone(),
+    );
+    let report = service
+        .recover_pending_transactions()
+        .await
+        .expect("final-confirming recovery should complete");
+
+    assert_eq!(report.recovered, 1);
+    assert_eq!(report.in_doubt, 0);
+    assert_eq!(report.pending, 0);
+
+    let record = journal
+        .get("tx-final-confirmed")
+        .expect("journal get should succeed")
+        .expect("journal record should exist");
+    assert_eq!(record.phase, TxPhase::Committed);
 }
 
 #[tokio::test]
@@ -551,6 +603,32 @@ fn force_resolve_request(tx_id: &str) -> ForceResolveTransactionRequest {
         operator: "netops-a".into(),
         reason: "validated device state out of band".into(),
         break_glass_enabled: true,
+    }
+}
+
+fn desired_vlan_state(device_id: &str, vlan_id: u16, name: &str) -> DeviceDesiredState {
+    DeviceDesiredState {
+        device_id: DeviceId(device_id.into()),
+        vlans: BTreeMap::from([(
+            vlan_id,
+            VlanConfig {
+                vlan_id,
+                name: Some(name.into()),
+                description: None,
+            },
+        )]),
+        interfaces: BTreeMap::new(),
+    }
+}
+
+fn create_vlan_change_set(device_id: &str, vlan_id: u16, name: &str) -> ChangeSet {
+    ChangeSet {
+        device_id: DeviceId(device_id.into()),
+        ops: vec![ChangeOp::CreateVlan(VlanConfig {
+            vlan_id,
+            name: Some(name.into()),
+            description: None,
+        })],
     }
 }
 
