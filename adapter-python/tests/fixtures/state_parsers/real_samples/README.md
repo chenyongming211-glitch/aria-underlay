@@ -96,6 +96,31 @@ aria-underlay-state-parse \
   --pretty
 ```
 
+Batch validation manifest:
+
+```json
+{
+  "samples": [
+    {
+      "name": "huawei-vrp8-lab",
+      "vendor": "huawei",
+      "xml": "huawei/vrp8/sample.redacted.xml",
+      "scope": {
+        "vlans": [100],
+        "interfaces": ["GE1/0/1"]
+      }
+    }
+  ]
+}
+```
+
+```bash
+aria-underlay-state-parse --manifest samples.json --pretty
+```
+
+Keep manifest XML paths relative to the manifest file when possible so the
+redacted sample set remains portable inside this fixture tree.
+
 ## Production Readiness Rule
 
 A sample that passes validator checks is evidence, not approval. Keep parser profiles `production_ready=False` until the real sample set, tests, and parser profile have been reviewed together.

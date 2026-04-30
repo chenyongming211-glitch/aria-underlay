@@ -61,6 +61,37 @@ aria-underlay-state-parse \
   --pretty
 ```
 
+Validate a batch of redacted samples with a manifest:
+
+```json
+{
+  "samples": [
+    {
+      "name": "huawei-vrp8-lab",
+      "vendor": "huawei",
+      "xml": "huawei/vrp8/sample.redacted.xml",
+      "scope": {
+        "vlans": [100],
+        "interfaces": ["GE1/0/1"]
+      }
+    },
+    {
+      "name": "h3c-comware7-lab",
+      "vendor": "h3c",
+      "xml": "h3c/comware7/sample.redacted.xml"
+    }
+  ]
+}
+```
+
+```bash
+aria-underlay-state-parse --manifest samples.json --pretty
+```
+
+Manifest XML paths can be absolute or relative to the manifest file. The
+command exits `0` only when every sample passes, and exits `1` if any sample
+fails while still printing a full batch report.
+
 The command uses fixture-verified parsers only for offline sample qualification.
 It does not change production driver behavior, and fixture verification is not
 the same as `production_ready=True`.
