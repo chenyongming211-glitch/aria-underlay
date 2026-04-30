@@ -1,11 +1,11 @@
 # Bug Inventory — 2026-04-26
 
-Comprehensive bug report from full codebase review (~10,500 lines, ~73% sprint completion). 6 bugs fixed, 37 remaining.
+Comprehensive bug report from full codebase review (~10,500 lines, ~73% sprint completion). 9 bugs fixed, 34 remaining.
 
 ## Rust — High Severity (4)
 
 - **GC no-op** — `src/worker/gc.rs:28`: `JournalGc::run_once` is empty `{}`. Journal records and artifacts accumulate unboundedly (memory/disk leak). RetentionPolicy defined but never used.
-- **Weak intent validation** — `src/intent/validation.rs:4-9`: `validate_switch_pair_intent` only checks `!intent.switches.is_empty()`. Bootstrap path has strict pair-shape validation (exactly 1 LeafA + 1 LeafB) but intent path does not.
+- ~~**Weak intent validation**~~ — ✅ FIXED: `validate_switch_pair_intent` and `validate_underlay_domain_intent` now reject empty IDs, duplicate switches/endpoints/members/VLANs/interfaces, invalid VLAN ranges, undeclared VLAN references, empty endpoint credential refs, and topology/management endpoint shape mismatches.
 - ~~**Journal write silently ignored**~~ — ✅ FIXED (`d71a4d4`): `let _ = self.journal.put(...)` replaced with proper `if let Err(...)` that includes the journal failure in the returned error message. Now at line 407 (not 378).
 - ~~**Shadow write downgraded to warning**~~ — ✅ FIXED (`d71a4d4`): Shadow store write failure now returns early with `SuccessWithWarning` + explicit error_code instead of bare warning in a Success result. Now at line 382.
 
@@ -29,7 +29,7 @@ Comprehensive bug report from full codebase review (~10,500 lines, ~73% sprint c
 - `src/adapter_client/mapper.rs:221-223` — `RecoveryAction::Noop` maps to `Unspecified` (intent loss, currently unreachable but misleading)
 - `src/tx/endpoint_lock.rs:82-88` — `lock_for` takes `DeviceId` by value inconsistently (one caller clones, one doesn't)
 - `src/engine/normalize.rs:40-46` — Whitespace-only interface names produce empty string
-- `src/device/bootstrap.rs:176-207` — Bootstrap validates pair shape but domain planner does not (architectural inconsistency)
+- ~~`src/device/bootstrap.rs:176-207` — Bootstrap validates pair shape but domain planner does not (architectural inconsistency)~~ ✅ FIXED: domain planner now calls shared `validate_underlay_domain_intent` before planning endpoint desired state.
 - `src/adapter_client/mapper.rs:47-50,267-275` — Unknown backend enum values silently dropped via `filter_map`
 - `src/tx/endpoint_lock.rs:17` — `_guards` field underscore implies unused but RAII is essential
 - `src/adapter_client/mapper.rs:39` — `vendor_hint.unwrap_or(Unknown)` loses distinction between "no hint" and "known unknown"
@@ -65,4 +65,4 @@ Comprehensive bug report from full codebase review (~10,500 lines, ~73% sprint c
 
 ## Status
 
-7 bugs fixed (d71a4d4 + 3c5c7d3 + current P0 mock verify fix). 2 of 4 high Rust bugs fixed. 3 of 3 high Python bugs fixed. 36 remaining.
+9 bugs fixed (d71a4d4 + 3c5c7d3 + P0 mock verify fix + current P0 intent validation fix). 3 of 4 high Rust bugs fixed. 3 of 3 high Python bugs fixed. 34 remaining.

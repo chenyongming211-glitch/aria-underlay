@@ -1,5 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
+use crate::intent::validation::validate_underlay_domain_intent;
 use crate::intent::UnderlayDomainIntent;
 use crate::model::{DeviceId, InterfaceConfig, VlanConfig};
 use crate::planner::device_plan::DeviceDesiredState;
@@ -8,7 +9,7 @@ use crate::{UnderlayError, UnderlayResult};
 pub fn plan_underlay_domain(
     intent: &UnderlayDomainIntent,
 ) -> UnderlayResult<Vec<DeviceDesiredState>> {
-    validate_domain_shape(intent)?;
+    validate_underlay_domain_intent(intent)?;
 
     let member_to_endpoint = intent
         .members
@@ -74,34 +75,4 @@ pub fn plan_underlay_domain(
     }
 
     Ok(states.into_values().collect())
-}
-
-fn validate_domain_shape(intent: &UnderlayDomainIntent) -> UnderlayResult<()> {
-    if intent.endpoints.is_empty() {
-        return Err(UnderlayError::InvalidIntent(
-            "underlay domain has no management endpoints".into(),
-        ));
-    }
-    if intent.members.is_empty() {
-        return Err(UnderlayError::InvalidIntent(
-            "underlay domain has no switch members".into(),
-        ));
-    }
-
-    let endpoint_ids = intent
-        .endpoints
-        .iter()
-        .map(|endpoint| endpoint.endpoint_id.as_str())
-        .collect::<BTreeSet<_>>();
-
-    for member in &intent.members {
-        if !endpoint_ids.contains(member.management_endpoint_id.as_str()) {
-            return Err(UnderlayError::InvalidIntent(format!(
-                "switch member {} references unknown management endpoint {}",
-                member.member_id, member.management_endpoint_id
-            )));
-        }
-    }
-
-    Ok(())
 }
