@@ -43,6 +43,24 @@ aria-underlay-state-parse \
   --interface GE1/0/1
 ```
 
+Print a compact field summary while checking captured samples:
+
+```bash
+aria-underlay-state-parse \
+  --vendor huawei \
+  --xml sample-running.xml \
+  --summary
+```
+
+Pretty-print successful JSON output for manual inspection:
+
+```bash
+aria-underlay-state-parse \
+  --vendor huawei \
+  --xml sample-running.xml \
+  --pretty
+```
+
 The command uses fixture-verified parsers only for offline sample qualification.
 It does not change production driver behavior, and fixture verification is not
 the same as `production_ready=True`.
