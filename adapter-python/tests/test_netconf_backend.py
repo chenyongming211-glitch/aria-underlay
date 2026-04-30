@@ -109,6 +109,36 @@ def test_netconf_driver_prepare_rejects_skeleton_renderer_before_device_lock():
     assert session.calls == []
 
 
+def test_netconf_driver_get_state_rejects_skeleton_parser_before_device_read():
+    session = _RecordingSession()
+    driver = NetconfBackedDriver(_BackendWithSession(session))
+
+    response = driver.get_current_state(
+        pb2.GetCurrentStateRequest(
+            device=pb2.DeviceRef(vendor_hint=pb2.VENDOR_HUAWEI),
+            scope=pb2.StateScope(full=True),
+        )
+    )
+
+    assert response.errors[0].code == "STATE_PARSER_NOT_PRODUCTION_READY"
+    assert session.calls == []
+
+
+def test_netconf_driver_get_state_requires_registered_parser_before_device_read():
+    session = _RecordingSession()
+    driver = NetconfBackedDriver(_BackendWithSession(session))
+
+    response = driver.get_current_state(
+        pb2.GetCurrentStateRequest(
+            device=pb2.DeviceRef(vendor_hint=pb2.VENDOR_UNKNOWN),
+            scope=pb2.StateScope(full=True),
+        )
+    )
+
+    assert response.errors[0].code == "STATE_PARSER_VENDOR_UNSUPPORTED"
+    assert session.calls == []
+
+
 def test_prepare_candidate_lock_failure_does_not_discard_or_unlock():
     session = _RecordingSession(fail_lock=True)
     backend = _BackendWithSession(session)

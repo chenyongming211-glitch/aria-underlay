@@ -5,6 +5,7 @@ from dataclasses import replace
 from aria_underlay_adapter.backends.base import NetconfBackend
 from aria_underlay_adapter.errors import AdapterError
 from aria_underlay_adapter.renderers.registry import renderer_for_vendor
+from aria_underlay_adapter.state_parsers.registry import state_parser_for_vendor
 
 try:
     from aria_underlay_adapter.proto import aria_underlay_adapter_pb2 as pb2
@@ -44,7 +45,8 @@ class NetconfBackedDriver:
 
     def get_current_state(self, request):
         try:
-            state = self._backend.get_current_state(scope=_request_scope(request))
+            backend = self._backend_for_state_read(request.device)
+            state = backend.get_current_state(scope=_request_scope(request))
         except AdapterError as error:
             return pb2.GetCurrentStateResponse(errors=[error.to_proto(pb2)])
 
@@ -104,6 +106,15 @@ class NetconfBackedDriver:
 
         renderer = renderer_for_vendor(request.device.vendor_hint)
         return replace(self._backend, config_renderer=renderer)
+
+    def _backend_for_state_read(self, device):
+        if not hasattr(self._backend, "state_parser"):
+            return self._backend
+        if getattr(self._backend, "state_parser", None) is not None:
+            return self._backend
+
+        parser = state_parser_for_vendor(device.vendor_hint)
+        return replace(self._backend, state_parser=parser)
 
     def commit(self, tx_id, device, strategy=None, confirm_timeout_secs=120):
         try:
@@ -172,7 +183,8 @@ class NetconfBackedDriver:
 
     def verify(self, tx_id, device, desired_state, scope=None):
         try:
-            self._backend.verify_running(desired_state, scope=_message_or_none(scope))
+            backend = self._backend_for_state_read(device)
+            backend.verify_running(desired_state, scope=_message_or_none(scope))
         except AdapterError as error:
             return pb2.VerifyResponse(
                 result=pb2.AdapterResult(
