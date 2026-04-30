@@ -417,7 +417,7 @@ def test_verify_running_reads_running_with_scope_then_fails_parser_closed():
             scope=_Scope(False, [], ["GE1/0/1"]),
         )
     except AdapterError as error:
-        assert error.code == "NETCONF_VERIFY_NOT_IMPLEMENTED"
+        assert error.code == "NETCONF_STATE_PARSE_NOT_IMPLEMENTED"
         assert error.retryable is False
     else:
         raise AssertionError("real verification should remain fail-closed")
