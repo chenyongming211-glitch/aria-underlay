@@ -56,6 +56,56 @@ fn file_journal_round_trips_record() {
 }
 
 #[test]
+fn journal_record_preserves_error_history() {
+    let context = TxContext {
+        tx_id: "tx-errors".into(),
+        request_id: "req-errors".into(),
+        trace_id: "trace-errors".into(),
+    };
+
+    let record = TxJournalRecord::started(&context, vec![DeviceId("leaf-a".into())])
+        .with_phase(TxPhase::Committing)
+        .with_error("COMMIT_FAILED", "commit failed")
+        .with_phase(TxPhase::InDoubt)
+        .with_error("ROLLBACK_FAILED", "rollback failed");
+
+    assert_eq!(record.error_code.as_deref(), Some("ROLLBACK_FAILED"));
+    assert_eq!(record.error_history.len(), 2);
+    assert_eq!(record.error_history[0].phase, TxPhase::Committing);
+    assert_eq!(record.error_history[0].code, "COMMIT_FAILED");
+    assert_eq!(record.error_history[1].phase, TxPhase::InDoubt);
+    assert_eq!(record.error_history[1].code, "ROLLBACK_FAILED");
+}
+
+#[test]
+fn file_journal_round_trips_error_history() {
+    let root = temp_journal_dir("error-history");
+    let store = JsonFileTxJournalStore::new(&root);
+    let context = TxContext {
+        tx_id: "tx-error-history".into(),
+        request_id: "req-error-history".into(),
+        trace_id: "trace-error-history".into(),
+    };
+    let record = TxJournalRecord::started(&context, vec![DeviceId("leaf-a".into())])
+        .with_phase(TxPhase::Committing)
+        .with_error("COMMIT_FAILED", "commit failed")
+        .with_phase(TxPhase::InDoubt)
+        .with_error("ROLLBACK_FAILED", "rollback failed");
+
+    store.put(&record).expect("journal put should succeed");
+    let loaded = store
+        .get("tx-error-history")
+        .expect("journal get should succeed")
+        .expect("record should exist");
+
+    assert_eq!(loaded.error_history.len(), 2);
+    assert_eq!(loaded.error_history[0].code, "COMMIT_FAILED");
+    assert_eq!(loaded.error_history[1].code, "ROLLBACK_FAILED");
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn file_journal_lists_only_recoverable_records() {
     let root = temp_journal_dir("recoverable");
     let store = JsonFileTxJournalStore::new(&root);

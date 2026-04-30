@@ -515,12 +515,14 @@ def _normalize_mode(mode) -> dict:
             "native_vlan": mode.get("native_vlan"),
             "allowed_vlans": sorted(set(mode.get("allowed_vlans", []))),
         }
-    return {
-        "kind": "access",
-        "access_vlan": mode.get("access_vlan"),
-        "native_vlan": None,
-        "allowed_vlans": [],
-    }
+    if mode["kind"] == "access":
+        return {
+            "kind": "access",
+            "access_vlan": mode.get("access_vlan"),
+            "native_vlan": None,
+            "allowed_vlans": [],
+        }
+    raise _verify_mismatch(f"unknown port mode kind during verification: {mode['kind']!r}")
 
 
 def _verify_mismatch(message: str) -> AdapterError:

@@ -36,6 +36,14 @@ impl TxPhase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TxJournalErrorEvent {
+    pub phase: TxPhase,
+    pub code: String,
+    pub message: String,
+    pub created_at_unix_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TxJournalRecord {
     pub tx_id: String,
     pub request_id: String,
@@ -45,6 +53,8 @@ pub struct TxJournalRecord {
     pub strategy: Option<TransactionStrategy>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
+    #[serde(default)]
+    pub error_history: Vec<TxJournalErrorEvent>,
     pub created_at_unix_secs: u64,
     pub updated_at_unix_secs: u64,
 }
@@ -61,6 +71,7 @@ impl TxJournalRecord {
             strategy: None,
             error_code: None,
             error_message: None,
+            error_history: Vec::new(),
             created_at_unix_secs: now,
             updated_at_unix_secs: now,
         }
@@ -79,9 +90,18 @@ impl TxJournalRecord {
     }
 
     pub fn with_error(mut self, code: impl Into<String>, message: impl Into<String>) -> Self {
-        self.error_code = Some(code.into());
-        self.error_message = Some(message.into());
-        self.updated_at_unix_secs = now_unix_secs();
+        let code = code.into();
+        let message = message.into();
+        let now = now_unix_secs();
+        self.error_code = Some(code.clone());
+        self.error_message = Some(message.clone());
+        self.error_history.push(TxJournalErrorEvent {
+            phase: self.phase.clone(),
+            code,
+            message,
+            created_at_unix_secs: now,
+        });
+        self.updated_at_unix_secs = now;
         self
     }
 }

@@ -365,31 +365,59 @@ impl AriaUnderlayService {
             .await
         {
             Ok(strategy) => {
-                journal_record = journal_record
-                    .with_strategy(strategy)
-                    .with_phase(TxPhase::Committed);
-                if let Err(err) = self.journal.put(&journal_record) {
-                    return device_error_result(
-                        &desired.device_id,
-                        true,
-                        Some(tx_context.tx_id),
-                        Some(strategy),
-                        err,
-                    );
-                }
                 let mut warnings = degraded_strategy_warnings(strategy);
                 let shadow_state = DeviceShadowState::from_desired(desired, 0);
                 if let Err(err) = self.shadow_store.put(shadow_state) {
                     let (code, message) = journal_error_fields(&err);
+                    let error_message =
+                        format!("shadow state stale after successful apply: {message}");
+                    journal_record = journal_record
+                        .with_strategy(strategy)
+                        .with_phase(TxPhase::InDoubt)
+                        .with_error(code.clone(), error_message.clone());
+                    if let Err(journal_err) = self.journal.put(&journal_record) {
+                        let (_, journal_msg) = journal_error_fields(&journal_err);
+                        return DeviceApplyResult {
+                            device_id: desired.device_id.clone(),
+                            changed: true,
+                            status: ApplyStatus::InDoubt,
+                            tx_id: Some(tx_context.tx_id),
+                            strategy: Some(strategy),
+                            error_code: Some(code),
+                            error_message: Some(format!(
+                                "{error_message}; journal write also failed: {journal_msg}"
+                            )),
+                            warnings,
+                        };
+                    }
                     warnings.push(format!("shadow state update failed: {message}"));
                     return DeviceApplyResult {
                         device_id: desired.device_id.clone(),
                         changed: true,
-                        status: ApplyStatus::SuccessWithWarning,
+                        status: ApplyStatus::InDoubt,
                         tx_id: Some(tx_context.tx_id),
                         strategy: Some(strategy),
                         error_code: Some(code),
-                        error_message: Some(format!("shadow state stale after successful apply: {message}")),
+                        error_message: Some(error_message),
+                        warnings,
+                    };
+                }
+                journal_record = journal_record
+                    .with_strategy(strategy)
+                    .with_phase(TxPhase::Committed);
+                if let Err(err) = self.journal.put(&journal_record) {
+                    let (code, message) = journal_error_fields(&err);
+                    return DeviceApplyResult {
+                        device_id: desired.device_id.clone(),
+                        changed: true,
+                        status: ApplyStatus::InDoubt,
+                        tx_id: Some(tx_context.tx_id),
+                        strategy: Some(strategy),
+                        error_code: Some(code),
+                        error_message: Some(format!(
+                            "adapter committed and shadow was updated, \
+                             but terminal journal write failed: {message}"
+                        )),
                         warnings,
                     };
                 }
@@ -772,7 +800,6 @@ impl AriaUnderlayService {
             });
         }
 
-        let _endpoint_guard = self.endpoint_locks.acquire_many(&record.devices).await?;
         let tx_context = TxContext {
             tx_id: record.tx_id.clone(),
             request_id: record.request_id.clone(),
@@ -921,13 +948,20 @@ impl UnderlayService for AriaUnderlayService {
 
     async fn recover_pending_transactions(&self) -> UnderlayResult<RecoveryReport> {
         let recoverable = self.journal.list_recoverable()?;
-        let decisions = recoverable
-            .iter()
-            .map(classify_recovery)
-            .collect::<Vec<_>>();
+        let mut decisions = Vec::with_capacity(recoverable.len());
         let mut recovered = 0;
 
-        for (record, decision) in recoverable.iter().zip(decisions.iter()) {
+        for candidate in recoverable {
+            let _endpoint_guard = self.endpoint_locks.acquire_many(&candidate.devices).await?;
+            let Some(record) = self.journal.get(&candidate.tx_id)? else {
+                continue;
+            };
+            let decision = classify_recovery(&record);
+            decisions.push(decision.clone());
+            if !record.phase.requires_recovery() {
+                continue;
+            }
+
             match decision.action {
                 RecoveryAction::Noop => {}
                 RecoveryAction::ManualIntervention => {
@@ -940,7 +974,7 @@ impl UnderlayService for AriaUnderlayService {
                     self.journal
                         .put(&record.clone().with_phase(TxPhase::Recovering))?;
 
-                    match self.recover_record(record, decision.action).await {
+                    match self.recover_record(&record, decision.action).await {
                         Ok(phase) => {
                             let terminal =
                                 matches!(phase, TxPhase::Committed | TxPhase::RolledBack);
@@ -1069,7 +1103,9 @@ fn device_results_from_plan(plan: &DryRunPlan) -> Vec<DeviceApplyResult> {
 }
 
 fn aggregate_apply_status(device_results: &[DeviceApplyResult]) -> ApplyStatus {
-    if device_results
+    if device_results.is_empty() {
+        ApplyStatus::Failed
+    } else if device_results
         .iter()
         .all(|result| result.status == ApplyStatus::NoOpSuccess)
     {
@@ -1096,23 +1132,13 @@ fn aggregate_apply_status(device_results: &[DeviceApplyResult]) -> ApplyStatus {
         } else {
             ApplyStatus::Success
         }
-    } else if device_results.len() == 1 {
-        device_results[0].status.clone()
-    } else if device_results
-        .iter()
-        .any(|result| {
-            matches!(
-                result.status,
-                ApplyStatus::Success | ApplyStatus::SuccessWithWarning | ApplyStatus::NoOpSuccess
-            )
-        })
-    {
-        ApplyStatus::SuccessWithWarning
     } else if device_results
         .iter()
         .all(|result| result.status == ApplyStatus::RolledBack)
     {
         ApplyStatus::RolledBack
+    } else if device_results.len() == 1 {
+        device_results[0].status.clone()
     } else {
         ApplyStatus::Failed
     }
@@ -1200,6 +1226,33 @@ mod tests {
             error_message: None,
             warnings: Vec::new(),
         }
+    }
+
+    #[test]
+    fn aggregate_empty_results_are_failed() {
+        let status = aggregate_apply_status(&[]);
+
+        assert_eq!(status, ApplyStatus::Failed);
+    }
+
+    #[test]
+    fn aggregate_partial_failure_is_failed() {
+        let status = aggregate_apply_status(&[
+            result(ApplyStatus::Success),
+            result(ApplyStatus::Failed),
+        ]);
+
+        assert_eq!(status, ApplyStatus::Failed);
+    }
+
+    #[test]
+    fn aggregate_partial_rollback_is_failed() {
+        let status = aggregate_apply_status(&[
+            result(ApplyStatus::Success),
+            result(ApplyStatus::RolledBack),
+        ]);
+
+        assert_eq!(status, ApplyStatus::Failed);
     }
 
     #[test]

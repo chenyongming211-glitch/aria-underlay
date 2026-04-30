@@ -188,6 +188,7 @@ fn journal_record(tx_id: &str, phase: TxPhase, updated_at_unix_secs: u64) -> TxJ
         strategy: None,
         error_code: None,
         error_message: None,
+        error_history: Vec::new(),
         created_at_unix_secs: updated_at_unix_secs,
         updated_at_unix_secs,
     }

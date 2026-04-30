@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use aria_underlay::api::{AriaUnderlayService, UnderlayService};
 use aria_underlay::device::{DeviceInfo, DeviceInventory, DeviceLifecycleState, HostKeyPolicy};
@@ -198,6 +199,34 @@ async fn recover_pending_transactions_records_adapter_in_doubt_result() {
     assert_eq!(record.phase, TxPhase::InDoubt);
 }
 
+#[tokio::test]
+async fn recover_pending_transactions_reloads_candidate_before_recovery() {
+    let stale_record = journal_record("tx-stale", TxPhase::Prepared, "leaf-a");
+    let committed_record = stale_record.clone().with_phase(TxPhase::Committed);
+    let journal = Arc::new(StaleListJournalStore::new(
+        vec![stale_record],
+        committed_record,
+    ));
+    let service = AriaUnderlayService::new_with_journal(
+        inventory_with_recovery_endpoint("leaf-a", "http://127.0.0.1:59999".into()),
+        journal.clone(),
+    );
+
+    let report = service
+        .recover_pending_transactions()
+        .await
+        .expect("stale recovery scan should be revalidated under lock");
+
+    assert_eq!(report.recovered, 0);
+    assert_eq!(report.in_doubt, 0);
+    assert_eq!(report.pending, 0);
+    let record = journal
+        .get("tx-stale")
+        .expect("journal get should succeed")
+        .expect("journal record should still exist");
+    assert_eq!(record.phase, TxPhase::Committed);
+}
+
 #[test]
 fn recovery_classification_is_phase_aware() {
     let base = TxJournalRecord::started(
@@ -225,6 +254,62 @@ fn recovery_classification_is_phase_aware() {
         classify_recovery(&base.with_phase(TxPhase::Committed)).action,
         RecoveryAction::Noop
     );
+}
+
+#[derive(Debug)]
+struct StaleListJournalStore {
+    stale_records: Mutex<Vec<TxJournalRecord>>,
+    current_record: Mutex<TxJournalRecord>,
+}
+
+impl StaleListJournalStore {
+    fn new(stale_records: Vec<TxJournalRecord>, current_record: TxJournalRecord) -> Self {
+        Self {
+            stale_records: Mutex::new(stale_records),
+            current_record: Mutex::new(current_record),
+        }
+    }
+}
+
+impl TxJournalStore for StaleListJournalStore {
+    fn put(&self, record: &TxJournalRecord) -> aria_underlay::UnderlayResult<()> {
+        *self.current_record.lock().map_err(|_| {
+            aria_underlay::UnderlayError::Internal("journal mutex poisoned".into())
+        })? = record.clone();
+        Ok(())
+    }
+
+    fn get(&self, tx_id: &str) -> aria_underlay::UnderlayResult<Option<TxJournalRecord>> {
+        let record = self
+            .current_record
+            .lock()
+            .map_err(|_| {
+                aria_underlay::UnderlayError::Internal("journal mutex poisoned".into())
+            })?;
+        Ok((record.tx_id == tx_id).then(|| record.clone()))
+    }
+
+    fn list_recoverable(&self) -> aria_underlay::UnderlayResult<Vec<TxJournalRecord>> {
+        let mut stale = self
+            .stale_records
+            .lock()
+            .map_err(|_| {
+                aria_underlay::UnderlayError::Internal("journal mutex poisoned".into())
+            })?;
+        if stale.is_empty() {
+            let current = self.current_record.lock().map_err(|_| {
+                aria_underlay::UnderlayError::Internal("journal mutex poisoned".into())
+            })?;
+            Ok(current
+                .phase
+                .requires_recovery()
+                .then(|| current.clone())
+                .into_iter()
+                .collect())
+        } else {
+            Ok(std::mem::take(&mut *stale))
+        }
+    }
 }
 
 #[test]

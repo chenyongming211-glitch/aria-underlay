@@ -13,6 +13,7 @@ from aria_underlay_adapter.backends.netconf import (
     WRITABLE_RUNNING,
     NcclientNetconfBackend,
     NetconfBackend,
+    _adapter_error_from_ncclient_exception,
     build_state_filter,
     capability_from_raw,
 )
@@ -392,6 +393,32 @@ def test_prepare_candidate_discards_and_unlocks_when_renderer_returns_empty_conf
     ]
 
 
+def test_prepare_candidate_preserves_original_error_when_discard_fails():
+    session = _RecordingSession(fail_discard=True)
+    backend = _BackendWithSession(session)
+
+    try:
+        backend.prepare_candidate(desired_state=object())
+    except AdapterError as error:
+        assert error.code == "NETCONF_RENDERER_NOT_CONFIGURED"
+        assert "discard-changes also failed" in error.raw_error_summary
+        assert "discard failed" in error.raw_error_summary
+    else:
+        raise AssertionError("original prepare error should be preserved")
+
+    assert session.calls == [
+        ("lock", "candidate"),
+        ("discard_changes",),
+        ("unlock", "candidate"),
+    ]
+
+
+def test_ncclient_authorization_error_is_not_authentication_failure():
+    error = _adapter_error_from_ncclient_exception(RuntimeError("authorization denied"))
+
+    assert error.code == "NETCONF_CONNECT_FAILED"
+
+
 def test_commit_candidate_commits_for_candidate_strategy():
     session = _RecordingSession()
     backend = _BackendWithSession(session)
@@ -754,10 +781,17 @@ class _BackendWithSession(NcclientNetconfBackend):
 
 
 class _RecordingSession:
-    def __init__(self, fail_lock=False, fail_commit=False, reply="<data/>"):
+    def __init__(
+        self,
+        fail_lock=False,
+        fail_commit=False,
+        fail_discard=False,
+        reply="<data/>",
+    ):
         self.calls = []
         self.fail_lock = fail_lock
         self.fail_commit = fail_commit
+        self.fail_discard = fail_discard
         self.reply = reply
         self.server_capabilities = [BASE_10, CANDIDATE]
 
@@ -774,6 +808,8 @@ class _RecordingSession:
 
     def discard_changes(self):
         self.calls.append(("discard_changes",))
+        if self.fail_discard:
+            raise RuntimeError("discard failed")
 
     def edit_config(self, **kwargs):
         self.calls.append(("edit_config", kwargs))

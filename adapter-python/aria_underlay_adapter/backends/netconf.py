@@ -120,12 +120,13 @@ class NcclientNetconfBackend:
                 try:
                     self._edit_candidate(session, desired_state)
                     self._validate_candidate(session)
-                except AdapterError:
-                    self._discard_candidate(session)
-                    raise
+                except AdapterError as exc:
+                    self._discard_candidate_preserving_error(session, exc)
+                    raise exc
                 except Exception as exc:
-                    self._discard_candidate(session)
-                    raise _adapter_error_from_ncclient_exception(exc) from exc
+                    adapter_error = _adapter_error_from_ncclient_exception(exc)
+                    self._discard_candidate_preserving_error(session, adapter_error)
+                    raise adapter_error from exc
                 finally:
                     self._unlock_candidate(session)
         except AdapterError:
@@ -165,6 +166,20 @@ class NcclientNetconfBackend:
                 exc=exc,
                 retryable=True,
             ) from exc
+
+    def _discard_candidate_preserving_error(
+        self,
+        session,
+        original_error: AdapterError,
+    ) -> None:
+        try:
+            self._discard_candidate(session)
+        except AdapterError as discard_error:
+            original_raw = original_error.raw_error_summary or original_error.message
+            discard_raw = discard_error.raw_error_summary or discard_error.message
+            original_error.raw_error_summary = (
+                f"{original_raw}; discard-changes also failed: {discard_raw}"
+            )
 
     def _edit_candidate(self, session, desired_state) -> None:
         if self.config_renderer is None:
@@ -416,7 +431,20 @@ def _adapter_error_from_ncclient_exception(exc: Exception) -> AdapterError:
     message = str(exc) or name
     lowered = message.lower()
 
-    if "auth" in lowered or "authentication" in lowered or name == "AuthenticationError":
+    authentication_error_classes = {
+        "AuthenticationError",
+        "AuthenticationException",
+        "SSHAuthenticationError",
+    }
+    authentication_phrases = (
+        "authentication failed",
+        "invalid username",
+        "invalid password",
+        "bad username or password",
+    )
+    if name in authentication_error_classes or any(
+        phrase in lowered for phrase in authentication_phrases
+    ):
         return AdapterError(
             code="AUTH_FAILED",
             message="NETCONF authentication failed",

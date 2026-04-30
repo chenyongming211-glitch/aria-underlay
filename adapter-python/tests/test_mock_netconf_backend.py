@@ -1,7 +1,7 @@
 import pytest
 from types import SimpleNamespace
 
-from aria_underlay_adapter.backends.mock_netconf import MockNetconfBackend
+from aria_underlay_adapter.backends.mock_netconf import MockNetconfBackend, _normalize_mode
 from aria_underlay_adapter.errors import AdapterError
 
 
@@ -254,6 +254,14 @@ def test_verify_running_empty_scope_is_noop():
         desired_state=_desired_state(vlan_name="wrong", interface_description="wrong"),
         scope=scope,
     )
+
+
+def test_mock_normalize_mode_rejects_unknown_kind():
+    with pytest.raises(AdapterError) as exc:
+        _normalize_mode({"kind": "hybrid", "access_vlan": 100})
+
+    assert exc.value.code == "VERIFY_MISMATCH"
+    assert "unknown port mode kind" in exc.value.message
 
 
 def _desired_state(vlan_name="prod", interface_description="server uplink"):

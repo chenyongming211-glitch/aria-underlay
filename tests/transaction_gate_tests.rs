@@ -11,9 +11,11 @@ use aria_underlay::intent::{
 };
 use aria_underlay::model::{AdminState, DeviceId, DeviceRole, PortMode, Vendor};
 use aria_underlay::state::drift::DriftPolicy;
+use aria_underlay::state::{DeviceShadowState, ShadowStateStore};
 use aria_underlay::tx::{
     InMemoryTxJournalStore, TxContext, TxJournalRecord, TxJournalStore, TxPhase,
 };
+use aria_underlay::{UnderlayError, UnderlayResult};
 
 mod common;
 
@@ -125,6 +127,47 @@ async fn verify_failure_rolls_back_and_records_rolled_back_phase() {
         TxPhase::RolledBack,
     )
     .await;
+}
+
+#[tokio::test]
+async fn successful_device_apply_marks_transaction_in_doubt_when_shadow_update_fails() {
+    let endpoint = start_fake_adapter(AdapterFailurePoint::None).await;
+    let inventory = inventory_with_endpoint_at(
+        "stack-mgmt",
+        DeviceLifecycleState::Ready,
+        endpoint,
+    );
+    let journal = Arc::new(InMemoryTxJournalStore::default());
+    let service = AriaUnderlayService::new_with_shadow_store(
+        inventory,
+        journal.clone(),
+        Default::default(),
+        Default::default(),
+        Arc::new(aria_underlay::device::InMemorySecretStore::default()),
+        Arc::new(FailingShadowStore),
+    );
+
+    let response = service
+        .apply_domain_intent(apply_request_with_vlan(200, DriftPolicy::ReportOnly))
+        .await
+        .expect("shadow failure after adapter success should be returned as per-device result");
+
+    assert_eq!(response.status, ApplyStatus::InDoubt);
+    assert_eq!(response.device_results[0].status, ApplyStatus::InDoubt);
+    assert_eq!(
+        response.device_results[0].error_code.as_deref(),
+        Some("INTERNAL")
+    );
+    let tx_id = response.device_results[0]
+        .tx_id
+        .as_deref()
+        .expect("changed transaction should include tx_id");
+    let record = journal
+        .get(tx_id)
+        .expect("journal get should succeed")
+        .expect("journal record should exist");
+    assert_eq!(record.phase, TxPhase::InDoubt);
+    assert_eq!(record.error_code.as_deref(), Some("INTERNAL"));
 }
 
 async fn assert_adapter_failure_records_terminal_phase(
@@ -247,6 +290,7 @@ async fn start_fake_adapter(failure_point: AdapterFailurePoint) -> String {
         ..Default::default()
     };
     match failure_point {
+        AdapterFailurePoint::None => {}
         AdapterFailurePoint::Prepare => {
             adapter.prepare_result = failed_result("PREPARE_FAILED");
         }
@@ -262,7 +306,29 @@ async fn start_fake_adapter(failure_point: AdapterFailurePoint) -> String {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AdapterFailurePoint {
+    None,
     Prepare,
     Commit,
     Verify,
+}
+
+#[derive(Debug)]
+struct FailingShadowStore;
+
+impl ShadowStateStore for FailingShadowStore {
+    fn get(&self, _device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
+        Ok(None)
+    }
+
+    fn put(&self, _state: DeviceShadowState) -> UnderlayResult<DeviceShadowState> {
+        Err(UnderlayError::Internal("shadow store unavailable".into()))
+    }
+
+    fn remove(&self, _device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
+        Ok(None)
+    }
+
+    fn list(&self) -> UnderlayResult<Vec<DeviceShadowState>> {
+        Ok(Vec::new())
+    }
 }
