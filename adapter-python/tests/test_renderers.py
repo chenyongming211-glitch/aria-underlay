@@ -1,11 +1,13 @@
 from dataclasses import dataclass
 from types import SimpleNamespace
+from xml.etree import ElementTree
 
 import pytest
 
 from aria_underlay_adapter.errors import AdapterError
 from aria_underlay_adapter.renderers.h3c import H3cRenderer
 from aria_underlay_adapter.renderers.huawei import HuaweiRenderer
+from aria_underlay_adapter.renderers.xml import NETCONF_BASE_NAMESPACE
 from aria_underlay_adapter.renderers.xml import XmlElement, render_xml
 
 
@@ -39,6 +41,11 @@ def test_xml_renderer_escapes_text():
 @pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])
 def test_vendor_renderer_skeletons_are_not_production_ready(renderer):
     assert renderer.production_ready is False
+    assert renderer.profile.production_ready is False
+    assert renderer.profile.vendor in {"huawei", "h3c"}
+    assert renderer.profile.profile_name.endswith("-skeleton")
+    assert renderer.VLAN_NAMESPACE.endswith(":skeleton")
+    assert renderer.IFACE_NAMESPACE.endswith(":skeleton")
 
 
 @pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])
@@ -57,8 +64,10 @@ def test_vendor_renderer_builds_vlan_create_xml(renderer):
 @pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])
 def test_vendor_renderer_builds_vlan_delete_xml(renderer):
     xml = render_xml(renderer.render_vlan_delete(100))
+    root = ElementTree.fromstring(xml)
 
     assert 'operation="delete"' in xml
+    assert root.attrib[f"{{{NETCONF_BASE_NAMESPACE}}}operation"] == "delete"
     assert "<ns0:id>100</ns0:id>" in xml
 
 
@@ -130,5 +139,58 @@ def test_vendor_renderer_rejects_unknown_port_mode(renderer):
                 admin_state="up",
                 description=None,
                 mode={"kind": "routed"},
+            )
+        )
+
+
+@pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])
+def test_vendor_renderer_rejects_invalid_vlan_id(renderer):
+    with pytest.raises(ValueError, match="range 1..4094"):
+        renderer.render_vlan_create(_Vlan(vlan_id=4095))
+
+
+@pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])
+def test_vendor_renderer_rejects_empty_interface_name(renderer):
+    with pytest.raises(ValueError, match="name is required"):
+        renderer.render_interface_update(
+            _Interface(
+                name=" ",
+                admin_state="up",
+                description=None,
+                mode={"kind": "access", "access_vlan": 100},
+            )
+        )
+
+
+@pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])
+def test_vendor_renderer_rejects_duplicate_trunk_allowed_vlans(renderer):
+    with pytest.raises(ValueError, match="duplicate allowed_vlans"):
+        renderer.render_interface_update(
+            _Interface(
+                name="GE1/0/1",
+                admin_state="up",
+                description=None,
+                mode={
+                    "kind": "trunk",
+                    "native_vlan": None,
+                    "allowed_vlans": [100, 100],
+                },
+            )
+        )
+
+
+@pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])
+def test_vendor_renderer_rejects_empty_trunk(renderer):
+    with pytest.raises(ValueError, match="requires native_vlan or allowed_vlans"):
+        renderer.render_interface_update(
+            _Interface(
+                name="GE1/0/1",
+                admin_state="up",
+                description=None,
+                mode={
+                    "kind": "trunk",
+                    "native_vlan": None,
+                    "allowed_vlans": [],
+                },
             )
         )

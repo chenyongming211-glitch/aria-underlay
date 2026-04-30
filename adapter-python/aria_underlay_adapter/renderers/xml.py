@@ -5,6 +5,7 @@ from typing import Union
 from xml.etree import ElementTree
 
 
+NETCONF_BASE_NAMESPACE = "urn:ietf:params:xml:ns:netconf:base:1.0"
 XmlChild = Union["XmlElement", str]
 
 
@@ -38,3 +39,7 @@ def _qualified_name(name: str, namespace: str | None) -> str:
     if namespace is None:
         return name
     return f"{{{namespace}}}{name}"
+
+
+def qualified_attr(name: str, namespace: str | None) -> str:
+    return _qualified_name(name, namespace)
