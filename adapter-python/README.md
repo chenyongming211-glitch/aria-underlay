@@ -33,7 +33,8 @@ Not production-ready yet:
 - Huawei/H3C state parsers are fixture-verified only. They need real-device
   running XML samples before production use.
 - Cisco/Ruijie renderers and state parsers are not implemented.
-- NAPALM and Netmiko backends are not implemented.
+- NAPALM and Netmiko backends are not implemented, and this package no longer
+  ships empty placeholder modules for them.
 
 Generate Python protobuf stubs after dependencies are installed:
 

@@ -1,3 +1,0 @@
-class StateReader:
-    pass
-
