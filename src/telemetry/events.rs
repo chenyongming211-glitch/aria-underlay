@@ -120,6 +120,19 @@ impl UnderlayEvent {
             "artifacts_deleted".into(),
             report.artifacts_deleted.to_string(),
         );
+        fields.insert("deleted_total".into(), report.deleted_total().to_string());
+        if !report.journal_deleted_tx_ids.is_empty() {
+            fields.insert(
+                "journal_deleted_tx_ids".into(),
+                report.journal_deleted_tx_ids.join(","),
+            );
+        }
+        if !report.artifact_deleted_refs.is_empty() {
+            fields.insert(
+                "artifact_deleted_refs".into(),
+                report.artifact_deleted_refs.join(","),
+            );
+        }
 
         Self {
             kind: UnderlayEventKind::UnderlayJournalGcCompleted,

@@ -257,6 +257,8 @@ fn metrics_record_operator_events() {
             journals_deleted: 1,
             journals_retained: 2,
             artifacts_deleted: 1,
+            journal_deleted_tx_ids: vec!["tx-old".into()],
+            artifact_deleted_refs: vec!["leaf-a/tx-old".into()],
         },
     );
     let force = UnderlayEvent::transaction_force_resolved(
@@ -316,6 +318,7 @@ fn operation_summary_store_keeps_queryable_operator_view() {
             journals_deleted: 0,
             journals_retained: 3,
             artifacts_deleted: 0,
+            ..Default::default()
         },
     );
     let force = UnderlayEvent::transaction_force_resolved(

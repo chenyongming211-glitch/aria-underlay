@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::MissedTickBehavior;
 
 use crate::telemetry::{EventSink, UnderlayEvent};
 use crate::tx::{TxJournalRecord, TxPhase};
@@ -42,6 +45,40 @@ pub struct JournalGcReport {
     pub journals_deleted: usize,
     pub journals_retained: usize,
     pub artifacts_deleted: usize,
+    pub journal_deleted_tx_ids: Vec<String>,
+    pub artifact_deleted_refs: Vec<String>,
+}
+
+impl JournalGcReport {
+    pub fn deleted_total(&self) -> usize {
+        self.journals_deleted + self.artifacts_deleted
+    }
+
+    fn sort_details(&mut self) {
+        self.journal_deleted_tx_ids.sort();
+        self.artifact_deleted_refs.sort();
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JournalGcSchedule {
+    pub interval_secs: u64,
+    pub run_immediately: bool,
+}
+
+impl Default for JournalGcSchedule {
+    fn default() -> Self {
+        Self {
+            interval_secs: 60 * 60,
+            run_immediately: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JournalGcSchedulerReport {
+    pub runs: usize,
+    pub last_report: Option<JournalGcReport>,
 }
 
 #[derive(Debug)]
@@ -86,6 +123,42 @@ impl JournalGcWorker {
             &report,
         ));
         Ok(report)
+    }
+
+    pub async fn run_periodic_until_shutdown<F>(
+        &self,
+        schedule: JournalGcSchedule,
+        shutdown: F,
+    ) -> UnderlayResult<JournalGcSchedulerReport>
+    where
+        F: Future<Output = ()>,
+    {
+        if schedule.interval_secs == 0 {
+            return Err(UnderlayError::InvalidIntent(
+                "journal GC schedule interval_secs must be greater than zero".into(),
+            ));
+        }
+
+        let mut summary = JournalGcSchedulerReport::default();
+        if schedule.run_immediately {
+            summary.last_report = Some(self.run_once_and_emit().await?);
+            summary.runs += 1;
+        }
+
+        let mut interval = tokio::time::interval(Duration::from_secs(schedule.interval_secs));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        interval.tick().await;
+
+        tokio::pin!(shutdown);
+        loop {
+            tokio::select! {
+                _ = &mut shutdown => return Ok(summary),
+                _ = interval.tick() => {
+                    summary.last_report = Some(self.run_once_and_emit().await?);
+                    summary.runs += 1;
+                }
+            }
+        }
     }
 }
 
@@ -148,41 +221,50 @@ impl JournalGc {
             if journal_due {
                 fs::remove_file(&path).map_err(gc_io_error)?;
                 report.journals_deleted += 1;
+                report.journal_deleted_tx_ids.push(record.tx_id.clone());
             } else {
                 report.journals_retained += 1;
             }
 
             if artifact_due {
-                report.artifacts_deleted += self.delete_artifacts_for_tx(&record.tx_id)?;
+                let deleted_refs = self.delete_artifacts_for_tx(&record.tx_id)?;
+                report.artifacts_deleted += deleted_refs.len();
+                report.artifact_deleted_refs.extend(deleted_refs);
             }
         }
 
-        report.artifacts_deleted += self.prune_artifacts_per_device(
+        let pruned_refs = self.prune_artifacts_per_device(
             &terminal_records,
             policy.max_artifacts_per_device as usize,
         )?;
+        report.artifacts_deleted += pruned_refs.len();
+        report.artifact_deleted_refs.extend(pruned_refs);
+        report.sort_details();
         Ok(report)
     }
 
-    fn delete_artifacts_for_tx(&self, tx_id: &str) -> UnderlayResult<usize> {
+    fn delete_artifacts_for_tx(&self, tx_id: &str) -> UnderlayResult<Vec<String>> {
         let Some(artifact_root) = &self.artifact_root else {
-            return Ok(0);
+            return Ok(Vec::new());
         };
         if !artifact_root.exists() {
-            return Ok(0);
+            return Ok(Vec::new());
         }
 
-        let mut deleted = 0;
+        let mut deleted = Vec::new();
         for entry in fs::read_dir(artifact_root).map_err(gc_io_error)? {
             let device_dir = entry.map_err(gc_io_error)?.path();
             if !device_dir.is_dir() {
                 continue;
             }
+            let Some(device_id) = device_dir.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
 
             let tx_dir = device_dir.join(tx_id);
             if tx_dir.is_dir() {
                 fs::remove_dir_all(&tx_dir).map_err(gc_io_error)?;
-                deleted += 1;
+                deleted.push(format!("{device_id}/{tx_id}"));
             }
         }
         Ok(deleted)
@@ -192,12 +274,12 @@ impl JournalGc {
         &self,
         terminal_records: &[TxJournalRecord],
         max_artifacts_per_device: usize,
-    ) -> UnderlayResult<usize> {
+    ) -> UnderlayResult<Vec<String>> {
         let Some(artifact_root) = &self.artifact_root else {
-            return Ok(0);
+            return Ok(Vec::new());
         };
         if max_artifacts_per_device == 0 || !artifact_root.exists() {
-            return Ok(0);
+            return Ok(Vec::new());
         }
 
         let terminal_by_tx = terminal_records
@@ -206,12 +288,15 @@ impl JournalGc {
             .map(|record| (record.tx_id.as_str(), record.updated_at_unix_secs))
             .collect::<BTreeMap<_, _>>();
 
-        let mut deleted = 0;
+        let mut deleted = Vec::new();
         for entry in fs::read_dir(artifact_root).map_err(gc_io_error)? {
             let device_dir = entry.map_err(gc_io_error)?.path();
             if !device_dir.is_dir() {
                 continue;
             }
+            let Some(device_id) = device_dir.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
 
             let mut terminal_artifacts = Vec::new();
             for tx_entry in fs::read_dir(&device_dir).map_err(gc_io_error)? {
@@ -243,7 +328,7 @@ impl JournalGc {
                 }
                 if tx_dir.exists() {
                     fs::remove_dir_all(&tx_dir).map_err(gc_io_error)?;
-                    deleted += 1;
+                    deleted.push(format!("{device_id}/{tx_id}"));
                 }
             }
         }

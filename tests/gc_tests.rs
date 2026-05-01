@@ -4,7 +4,9 @@ use std::sync::Arc;
 use aria_underlay::model::DeviceId;
 use aria_underlay::telemetry::{InMemoryEventSink, UnderlayEvent, UnderlayEventKind};
 use aria_underlay::tx::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase};
-use aria_underlay::worker::gc::{JournalGc, JournalGcReport, JournalGcWorker, RetentionPolicy};
+use aria_underlay::worker::gc::{
+    JournalGc, JournalGcReport, JournalGcSchedule, JournalGcWorker, RetentionPolicy,
+};
 
 #[test]
 fn retention_policy_defaults_are_conservative() {
@@ -19,6 +21,8 @@ fn journal_gc_completed_event_includes_cleanup_counts() {
         journals_deleted: 2,
         journals_retained: 3,
         artifacts_deleted: 4,
+        journal_deleted_tx_ids: vec!["tx-old".into()],
+        artifact_deleted_refs: vec!["leaf-a/tx-old".into()],
     };
 
     let event = UnderlayEvent::journal_gc_completed("req-gc", "trace-gc", &report);
@@ -37,6 +41,24 @@ fn journal_gc_completed_event_includes_cleanup_counts() {
     assert_eq!(
         event.fields.get("artifacts_deleted").map(String::as_str),
         Some("4")
+    );
+    assert_eq!(
+        event.fields.get("deleted_total").map(String::as_str),
+        Some("6")
+    );
+    assert_eq!(
+        event
+            .fields
+            .get("journal_deleted_tx_ids")
+            .map(String::as_str),
+        Some("tx-old")
+    );
+    assert_eq!(
+        event
+            .fields
+            .get("artifact_deleted_refs")
+            .map(String::as_str),
+        Some("leaf-a/tx-old")
     );
 }
 
@@ -63,6 +85,7 @@ async fn gc_deletes_old_terminal_journal_but_keeps_in_doubt() {
         .expect("gc should run");
 
     assert_eq!(report.journals_deleted, 1);
+    assert_eq!(report.journal_deleted_tx_ids, vec!["tx-old-committed".to_string()]);
     assert!(store.get("tx-old-committed").expect("read committed").is_none());
     assert!(store.get("tx-old-in-doubt").expect("read in doubt").is_some());
     fs::remove_dir_all(temp).ok();
@@ -97,6 +120,10 @@ async fn gc_deletes_artifacts_only_for_old_terminal_transactions() {
         .expect("gc should run");
 
     assert_eq!(report.artifacts_deleted, 1);
+    assert_eq!(
+        report.artifact_deleted_refs,
+        vec!["leaf-a/tx-terminal".to_string()]
+    );
     assert!(!artifact_root.join("leaf-a/tx-terminal").exists());
     assert!(artifact_root.join("leaf-a/tx-in-doubt").exists());
     assert!(store.get("tx-terminal").expect("read terminal").is_some());
@@ -133,6 +160,10 @@ async fn gc_prunes_terminal_artifacts_per_device_without_touching_unknown_tx() {
         .expect("gc should run");
 
     assert_eq!(report.artifacts_deleted, 1);
+    assert_eq!(
+        report.artifact_deleted_refs,
+        vec!["leaf-a/tx-old".to_string()]
+    );
     assert!(artifact_root.join("leaf-a/tx-new").exists());
     assert!(!artifact_root.join("leaf-a/tx-old").exists());
     assert!(artifact_root.join("leaf-a/tx-unknown").exists());
@@ -174,6 +205,82 @@ async fn gc_worker_emits_completion_event_after_successful_run() {
     assert_eq!(
         events[0].fields.get("journals_deleted").map(String::as_str),
         Some("1")
+    );
+    fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn gc_worker_periodic_runner_runs_immediate_cycle_and_stops_on_shutdown() {
+    let temp = temp_test_dir("worker-periodic");
+    let journal_root = temp.join("journal");
+    let store = JsonFileTxJournalStore::new(&journal_root);
+    store
+        .put(&journal_record("tx-old", TxPhase::Committed, 100))
+        .expect("write committed");
+    let sink = Arc::new(InMemoryEventSink::default());
+    let worker = JournalGcWorker::new(
+        JournalGc::new(&journal_root).with_now_unix_secs(100 + 31 * 24 * 60 * 60),
+        RetentionPolicy {
+            committed_journal_retention_days: 30,
+            rolled_back_journal_retention_days: 30,
+            failed_journal_retention_days: 90,
+            rollback_artifact_retention_days: 30,
+            max_artifacts_per_device: 50,
+        },
+        sink.clone(),
+    );
+
+    let summary = worker
+        .run_periodic_until_shutdown(
+            JournalGcSchedule {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+            async {},
+        )
+        .await
+        .expect("periodic worker should stop cleanly on shutdown");
+
+    assert_eq!(summary.runs, 1);
+    assert_eq!(
+        summary
+            .last_report
+            .as_ref()
+            .expect("periodic worker should retain last report")
+            .journal_deleted_tx_ids,
+        vec!["tx-old".to_string()]
+    );
+    let events = sink.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, UnderlayEventKind::UnderlayJournalGcCompleted);
+    fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn gc_worker_rejects_zero_second_periodic_interval() {
+    let temp = temp_test_dir("worker-invalid-interval");
+    let sink = Arc::new(InMemoryEventSink::default());
+    let worker = JournalGcWorker::new(
+        JournalGc::new(temp.join("journal")),
+        RetentionPolicy::default(),
+        sink,
+    );
+
+    let err = worker
+        .run_periodic_until_shutdown(
+            JournalGcSchedule {
+                interval_secs: 0,
+                run_immediately: false,
+            },
+            async {},
+        )
+        .await
+        .expect_err("zero interval should fail closed");
+    let message = format!("{err}");
+
+    assert!(
+        message.contains("interval_secs"),
+        "unexpected interval validation error: {message}"
     );
     fs::remove_dir_all(temp).ok();
 }
