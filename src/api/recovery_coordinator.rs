@@ -1,6 +1,7 @@
 use std::sync::Arc;
+use std::time::Duration;
 
-use crate::adapter_client::mapper::AdapterOperationStatus;
+use crate::adapter_client::mapper::{AdapterOperationStatus, AdapterOutcome};
 use crate::adapter_client::{tx_request_context, AdapterClientPool};
 use crate::api::apply::journal_error_fields;
 use crate::api::recovery_ops::{
@@ -16,6 +17,9 @@ use crate::tx::{
     EndpointLockTable, TransactionStrategy, TxContext, TxJournalRecord, TxJournalStore, TxPhase,
 };
 use crate::{UnderlayError, UnderlayResult};
+
+const RECOVERY_TRANSPORT_RETRY_ATTEMPTS: usize = 3;
+const RECOVERY_TRANSPORT_RETRY_DELAY: Duration = Duration::from_millis(25);
 
 #[derive(Clone)]
 pub(crate) struct RecoveryCoordinator {
@@ -161,10 +165,14 @@ impl RecoveryCoordinator {
 
         for device_id in &record.devices {
             let managed = self.inventory.get(device_id)?;
-            let mut client = self.adapter_pool.client(&managed.info.adapter_endpoint)?;
             let rpc_context = tx_request_context(&managed.info, &tx_context);
-            let outcome = client
-                .recover_with_context(&managed.info, &rpc_context, record.strategy, action)
+            let outcome = self
+                .recover_with_transport_retry(
+                    &managed.info,
+                    &rpc_context,
+                    record.strategy,
+                    action,
+                )
                 .await?;
             let phase = recover_phase_from_adapter_status(action, outcome.status);
             merged_phase = Some(merge_recovery_phase(merged_phase, phase));
@@ -249,8 +257,8 @@ impl RecoveryCoordinator {
                     )
                 };
 
-            match client
-                .recover_with_context(
+            match self
+                .recover_with_transport_retry(
                     &managed.info,
                     &rpc_context,
                     record.strategy,
@@ -289,6 +297,38 @@ impl RecoveryCoordinator {
         }
 
         Ok(merged_phase.unwrap_or(TxPhase::InDoubt))
+    }
+
+    async fn recover_with_transport_retry(
+        &self,
+        device: &crate::device::DeviceInfo,
+        rpc_context: &crate::proto::adapter::RequestContext,
+        strategy: Option<TransactionStrategy>,
+        action: RecoveryAction,
+    ) -> UnderlayResult<AdapterOutcome> {
+        let mut last_transport_error = None;
+
+        for attempt in 0..RECOVERY_TRANSPORT_RETRY_ATTEMPTS {
+            let mut client = self.adapter_pool.client(&device.adapter_endpoint)?;
+            match client
+                .recover_with_context(device, rpc_context, strategy, action)
+                .await
+            {
+                Ok(outcome) => return Ok(outcome),
+                Err(UnderlayError::AdapterTransport(message))
+                    if attempt + 1 < RECOVERY_TRANSPORT_RETRY_ATTEMPTS =>
+                {
+                    self.adapter_pool.invalidate(&device.adapter_endpoint);
+                    last_transport_error = Some(message);
+                    tokio::time::sleep(RECOVERY_TRANSPORT_RETRY_DELAY).await;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        Err(UnderlayError::AdapterTransport(
+            last_transport_error.unwrap_or_else(|| "adapter recover transport failed".into()),
+        ))
     }
 
     fn persist_recovered_shadow(&self, record: &TxJournalRecord) -> UnderlayResult<()> {

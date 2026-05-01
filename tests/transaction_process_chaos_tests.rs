@@ -1,4 +1,5 @@
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -483,6 +484,226 @@ async fn multi_device_committing_recovery_marks_record_in_doubt_on_mixed_adapter
     std::fs::remove_dir_all(temp).ok();
 }
 
+#[tokio::test]
+async fn process_restart_recovers_verifying_tx_when_adapter_reports_committed() {
+    let temp = temp_store_dir("verifying-recover");
+    let journal_root = temp.join("journal");
+    let shadow_root = temp.join("shadow");
+    let endpoint = reserve_local_endpoint();
+
+    let output = run_crashing_child(
+        &journal_root,
+        &shadow_root,
+        &endpoint,
+        CrashPhase::Verifying,
+    );
+    assert_child_crashed(output, CrashPhase::Verifying);
+
+    let journal = Arc::new(JsonFileTxJournalStore::new(&journal_root));
+    let pending_before = journal
+        .list_recoverable()
+        .expect("journal scan after verifying crash should succeed");
+    assert_eq!(pending_before.len(), 1);
+    assert_eq!(pending_before[0].phase, TxPhase::Verifying);
+    let tx_id = pending_before[0].tx_id.clone();
+
+    let shadow = Arc::new(JsonFileShadowStateStore::new(&shadow_root));
+    assert!(
+        shadow
+            .get(&DeviceId("stack-mgmt".into()))
+            .expect("shadow read after verifying crash should succeed")
+            .is_none(),
+        "verifying crash must happen before desired shadow persistence"
+    );
+
+    start_test_adapter_at(
+        TestAdapter {
+            current_state: Some(observed_access_state("stack-mgmt", 200)),
+            recover_result: adapter_result(adapter::AdapterOperationStatus::Committed),
+            ..Default::default()
+        },
+        parse_endpoint_addr(&endpoint),
+    )
+    .await;
+
+    let service = AriaUnderlayService::new_with_shadow_store(
+        inventory_with_endpoint_at(
+            "stack-mgmt",
+            DeviceLifecycleState::Ready,
+            endpoint.clone(),
+        ),
+        journal.clone(),
+        Default::default(),
+        Default::default(),
+        Arc::new(aria_underlay::device::InMemorySecretStore::default()),
+        shadow.clone(),
+    );
+
+    let report = service
+        .recover_pending_transactions()
+        .await
+        .expect("verifying recovery should roll forward when adapter proves commit");
+
+    assert_eq!(report.recovered, 1);
+    assert_eq!(report.pending, 0);
+    assert_eq!(report.in_doubt, 0);
+
+    let record = journal
+        .get(&tx_id)
+        .expect("journal read after verifying recovery should succeed")
+        .expect("journal record should remain readable");
+    assert_eq!(record.phase, TxPhase::Committed);
+
+    let recovered_shadow = shadow
+        .get(&DeviceId("stack-mgmt".into()))
+        .expect("shadow read after verifying recovery should succeed")
+        .expect("verifying recovery must persist desired shadow before terminal journal");
+    assert!(recovered_shadow.vlans.contains_key(&200));
+    assert_eq!(
+        recovered_shadow.interfaces["GE1/0/1"].mode,
+        PortMode::Access { vlan_id: 200 }
+    );
+
+    std::fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn process_restart_recovers_rolling_back_tx_to_rolled_back_without_shadow() {
+    let temp = temp_store_dir("rolling-back-recover");
+    let journal_root = temp.join("journal");
+    let shadow_root = temp.join("shadow");
+    let endpoint = reserve_local_endpoint();
+
+    let output = run_crashing_child(
+        &journal_root,
+        &shadow_root,
+        &endpoint,
+        CrashPhase::RollingBack,
+    );
+    assert_child_crashed(output, CrashPhase::RollingBack);
+
+    let journal = Arc::new(JsonFileTxJournalStore::new(&journal_root));
+    let pending_before = journal
+        .list_recoverable()
+        .expect("journal scan after rolling-back crash should succeed");
+    assert_eq!(pending_before.len(), 1);
+    assert_eq!(pending_before[0].phase, TxPhase::RollingBack);
+    let tx_id = pending_before[0].tx_id.clone();
+
+    let shadow = Arc::new(JsonFileShadowStateStore::new(&shadow_root));
+    start_test_adapter_at(
+        TestAdapter {
+            current_state: Some(observed_access_state("stack-mgmt", 100)),
+            recover_result: adapter_result(adapter::AdapterOperationStatus::RolledBack),
+            ..Default::default()
+        },
+        parse_endpoint_addr(&endpoint),
+    )
+    .await;
+
+    let service = AriaUnderlayService::new_with_shadow_store(
+        inventory_with_endpoint_at(
+            "stack-mgmt",
+            DeviceLifecycleState::Ready,
+            endpoint.clone(),
+        ),
+        journal.clone(),
+        Default::default(),
+        Default::default(),
+        Arc::new(aria_underlay::device::InMemorySecretStore::default()),
+        shadow.clone(),
+    );
+
+    let report = service
+        .recover_pending_transactions()
+        .await
+        .expect("rolling-back recovery should complete as rolled back");
+
+    assert_eq!(report.recovered, 1);
+    assert_eq!(report.pending, 0);
+    assert_eq!(report.in_doubt, 0);
+
+    let record = journal
+        .get(&tx_id)
+        .expect("journal read after rolling-back recovery should succeed")
+        .expect("journal record should remain readable");
+    assert_eq!(record.phase, TxPhase::RolledBack);
+    assert!(
+        shadow
+            .get(&DeviceId("stack-mgmt".into()))
+            .expect("shadow read after rolling-back recovery should succeed")
+            .is_none(),
+        "rolling-back recovery must not persist desired shadow"
+    );
+
+    std::fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn recovery_retries_transient_recover_transport_before_marking_tx_in_doubt() {
+    let temp = temp_store_dir("recover-retry");
+    let journal_root = temp.join("journal");
+    let shadow_root = temp.join("shadow");
+    let endpoint = reserve_local_endpoint();
+
+    start_transient_recover_adapter_at(parse_endpoint_addr(&endpoint), 1).await;
+
+    let journal = Arc::new(JsonFileTxJournalStore::new(&journal_root));
+    let desired_states = plan_underlay_domain(&domain_intent(200))
+        .expect("domain intent should plan");
+    let context = TxContext {
+        tx_id: "tx-transient-recover".into(),
+        request_id: "req-transient-recover".into(),
+        trace_id: "trace-transient-recover".into(),
+    };
+    journal
+        .put(
+            &TxJournalRecord::started(&context, vec![DeviceId("stack-mgmt".into())])
+                .with_desired_states(desired_states)
+                .with_strategy(TransactionStrategy::ConfirmedCommit)
+                .with_phase(TxPhase::Verifying),
+        )
+        .expect("verifying journal record should be stored");
+
+    let shadow = Arc::new(JsonFileShadowStateStore::new(&shadow_root));
+    let service = AriaUnderlayService::new_with_shadow_store(
+        inventory_with_endpoint_at(
+            "stack-mgmt",
+            DeviceLifecycleState::Ready,
+            endpoint.clone(),
+        ),
+        journal.clone(),
+        Default::default(),
+        Default::default(),
+        Arc::new(aria_underlay::device::InMemorySecretStore::default()),
+        shadow.clone(),
+    );
+
+    let report = service
+        .recover_pending_transactions()
+        .await
+        .expect("transient recover transport should be retried before giving up");
+
+    assert_eq!(report.recovered, 1);
+    assert_eq!(report.pending, 0);
+    assert_eq!(report.in_doubt, 0);
+
+    let record = journal
+        .get("tx-transient-recover")
+        .expect("journal read after transient recovery should succeed")
+        .expect("journal record should remain readable");
+    assert_eq!(record.phase, TxPhase::Committed);
+    assert!(
+        shadow
+            .get(&DeviceId("stack-mgmt".into()))
+            .expect("shadow read after transient recovery should succeed")
+            .is_some(),
+        "successful retry must persist recovered desired shadow"
+    );
+
+    std::fs::remove_dir_all(temp).ok();
+}
+
 #[test]
 fn process_chaos_child_crashes_during_requested_phase() {
     let Ok(child_mode) = std::env::var(CHILD_MODE_ENV) else {
@@ -566,6 +787,23 @@ async fn start_phase_crash_adapter_at(
     format!("http://{addr}")
 }
 
+async fn start_transient_recover_adapter_at(
+    addr: std::net::SocketAddr,
+    transient_failures: usize,
+) -> String {
+    tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(UnderlayAdapterServer::new(TransientRecoverAdapter {
+                remaining_failures: Arc::new(AtomicUsize::new(transient_failures)),
+            }))
+            .serve(addr)
+            .await
+            .expect("transient recover adapter server should run");
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    format!("http://{addr}")
+}
+
 fn reserve_local_endpoint() -> String {
     let listener =
         std::net::TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
@@ -586,7 +824,9 @@ fn parse_endpoint_addr(endpoint: &str) -> std::net::SocketAddr {
 enum CrashPhase {
     Preparing,
     Committing,
+    Verifying,
     FinalConfirming,
+    RollingBack,
 }
 
 impl CrashPhase {
@@ -594,7 +834,9 @@ impl CrashPhase {
         match self {
             Self::Preparing => "preparing",
             Self::Committing => "committing",
+            Self::Verifying => "verifying",
             Self::FinalConfirming => "final-confirming",
+            Self::RollingBack => "rolling-back",
         }
     }
 
@@ -602,7 +844,9 @@ impl CrashPhase {
         match value {
             "preparing" => Some(Self::Preparing),
             "committing" => Some(Self::Committing),
+            "verifying" => Some(Self::Verifying),
             "final-confirming" => Some(Self::FinalConfirming),
+            "rolling-back" => Some(Self::RollingBack),
             _ => None,
         }
     }
@@ -849,6 +1093,121 @@ impl UnderlayAdapter for PhaseCrashAdapter {
         &self,
         _request: Request<adapter::RollbackRequest>,
     ) -> Result<Response<adapter::RollbackResponse>, Status> {
+        if self.crash_phase == CrashPhase::RollingBack {
+            std::process::exit(CHILD_CRASH_EXIT_CODE);
+        }
+        Ok(Response::new(adapter::RollbackResponse {
+            result: Some(adapter_result(adapter::AdapterOperationStatus::RolledBack)),
+        }))
+    }
+
+    async fn verify(
+        &self,
+        _request: Request<adapter::VerifyRequest>,
+    ) -> Result<Response<adapter::VerifyResponse>, Status> {
+        if self.crash_phase == CrashPhase::Verifying {
+            std::process::exit(CHILD_CRASH_EXIT_CODE);
+        }
+        if self.crash_phase == CrashPhase::RollingBack {
+            return Ok(Response::new(adapter::VerifyResponse {
+                result: Some(adapter_result(adapter::AdapterOperationStatus::Failed)),
+            }));
+        }
+        Ok(Response::new(adapter::VerifyResponse {
+            result: Some(adapter_result(adapter::AdapterOperationStatus::Committed)),
+        }))
+    }
+
+    async fn recover(
+        &self,
+        _request: Request<adapter::RecoverRequest>,
+    ) -> Result<Response<adapter::RecoverResponse>, Status> {
+        Ok(Response::new(adapter::RecoverResponse {
+            result: Some(adapter_result(adapter::AdapterOperationStatus::Committed)),
+        }))
+    }
+
+    async fn force_unlock(
+        &self,
+        _request: Request<adapter::ForceUnlockRequest>,
+    ) -> Result<Response<adapter::ForceUnlockResponse>, Status> {
+        Ok(Response::new(adapter::ForceUnlockResponse {
+            result: Some(adapter_result(adapter::AdapterOperationStatus::Committed)),
+        }))
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TransientRecoverAdapter {
+    remaining_failures: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl UnderlayAdapter for TransientRecoverAdapter {
+    async fn get_capabilities(
+        &self,
+        _request: Request<adapter::GetCapabilitiesRequest>,
+    ) -> Result<Response<adapter::GetCapabilitiesResponse>, Status> {
+        Ok(Response::new(adapter::GetCapabilitiesResponse {
+            capability: Some(confirmed_commit_capability()),
+            warnings: Vec::new(),
+            errors: Vec::new(),
+        }))
+    }
+
+    async fn get_current_state(
+        &self,
+        _request: Request<adapter::GetCurrentStateRequest>,
+    ) -> Result<Response<adapter::GetCurrentStateResponse>, Status> {
+        Ok(Response::new(adapter::GetCurrentStateResponse {
+            state: Some(observed_access_state("stack-mgmt", 100)),
+            warnings: Vec::new(),
+            errors: Vec::new(),
+        }))
+    }
+
+    async fn dry_run(
+        &self,
+        _request: Request<adapter::DryRunRequest>,
+    ) -> Result<Response<adapter::DryRunResponse>, Status> {
+        Ok(Response::new(adapter::DryRunResponse {
+            result: Some(adapter_result(adapter::AdapterOperationStatus::NoChange)),
+        }))
+    }
+
+    async fn prepare(
+        &self,
+        _request: Request<adapter::PrepareRequest>,
+    ) -> Result<Response<adapter::PrepareResponse>, Status> {
+        Ok(Response::new(adapter::PrepareResponse {
+            result: Some(adapter_result(adapter::AdapterOperationStatus::Prepared)),
+        }))
+    }
+
+    async fn commit(
+        &self,
+        _request: Request<adapter::CommitRequest>,
+    ) -> Result<Response<adapter::CommitResponse>, Status> {
+        Ok(Response::new(adapter::CommitResponse {
+            result: Some(adapter_result(
+                adapter::AdapterOperationStatus::ConfirmedCommitPending,
+            )),
+        }))
+    }
+
+    async fn final_confirm(
+        &self,
+        _request: Request<adapter::FinalConfirmRequest>,
+    ) -> Result<Response<adapter::FinalConfirmResponse>, Status> {
+        Ok(Response::new(adapter::FinalConfirmResponse {
+            result: Some(adapter_result(adapter::AdapterOperationStatus::Committed)),
+        }))
+    }
+
+    async fn rollback(
+        &self,
+        _request: Request<adapter::RollbackRequest>,
+    ) -> Result<Response<adapter::RollbackResponse>, Status> {
         Ok(Response::new(adapter::RollbackResponse {
             result: Some(adapter_result(adapter::AdapterOperationStatus::RolledBack)),
         }))
@@ -867,6 +1226,12 @@ impl UnderlayAdapter for PhaseCrashAdapter {
         &self,
         _request: Request<adapter::RecoverRequest>,
     ) -> Result<Response<adapter::RecoverResponse>, Status> {
+        let remaining = self.remaining_failures.load(Ordering::SeqCst);
+        if remaining > 0 {
+            self.remaining_failures.fetch_sub(1, Ordering::SeqCst);
+            return Err(Status::unavailable("transient recover transport"));
+        }
+
         Ok(Response::new(adapter::RecoverResponse {
             result: Some(adapter_result(adapter::AdapterOperationStatus::Committed)),
         }))
