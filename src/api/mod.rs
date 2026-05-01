@@ -1,5 +1,8 @@
+mod apply;
+mod drift_ops;
 pub mod force_unlock;
 pub mod force_resolve;
+mod recovery_ops;
 pub mod request;
 pub mod response;
 pub mod service;

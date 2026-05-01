@@ -3,6 +3,12 @@ use std::sync::Arc;
 
 use crate::adapter_client::mapper::AdapterOperationStatus;
 use crate::adapter_client::{tx_request_context, AdapterClient, AdapterClientPool};
+use crate::api::apply::{
+    aggregate_apply_status, apply_status_for_failed_phase, commit_status_matches_strategy,
+    degraded_strategy_warnings, device_error_result, device_results_from_plan,
+    failed_apply_phase, journal_error_fields,
+};
+use crate::api::drift_ops::drift_policy_error;
 use crate::api::force_resolve::{
     ForceResolveTransactionRequest, ForceResolveTransactionResponse,
 };
@@ -15,10 +21,15 @@ use crate::api::response::{
     DriftAuditResponse, DryRunResponse, RefreshStateResponse,
 };
 use crate::api::transactions::{
-    InDoubtTransactionSummary, ListInDoubtTransactionsRequest,
-    ListInDoubtTransactionsResponse,
+    ListInDoubtTransactionsRequest, ListInDoubtTransactionsResponse,
 };
 use crate::api::underlay_service::UnderlayService;
+use crate::api::recovery_ops::{
+    change_set_for_record, desired_state_for_record, error_summary,
+    final_confirm_recovery_in_doubt_error, in_doubt_summary_from_record,
+    merge_recovery_phase, recover_phase_from_adapter_status,
+    validate_force_resolve_request,
+};
 use crate::device::{
     DeviceInfo, DeviceInventory, DeviceLifecycleState, DeviceOnboardingService,
     DeviceRegistrationService, InMemorySecretStore, InitializeUnderlaySiteRequest,
@@ -798,25 +809,7 @@ impl AriaUnderlayService {
         }
 
         let device_list = drifted_devices.join(",");
-        match policy {
-            DriftPolicy::BlockNewTransaction => Err(UnderlayError::AdapterOperation {
-                code: "DRIFT_BLOCKED".into(),
-                message: format!(
-                    "device has unresolved out-of-band drift: {device_list}"
-                ),
-                retryable: false,
-                errors: Vec::new(),
-            }),
-            DriftPolicy::AutoReconcile => Err(UnderlayError::AdapterOperation {
-                code: "DRIFT_AUTORECONCILE_UNIMPLEMENTED".into(),
-                message: format!(
-                    "auto reconcile is not implemented for drifted device(s): {device_list}"
-                ),
-                retryable: false,
-                errors: Vec::new(),
-            }),
-            DriftPolicy::ReportOnly => Ok(()),
-        }
+        drift_policy_error(policy, &device_list)
     }
 
     async fn recover_record(
@@ -974,48 +967,6 @@ impl AriaUnderlayService {
         }
 
         Ok(merged_phase.unwrap_or(TxPhase::InDoubt))
-    }
-}
-
-fn recover_phase_from_adapter_status(
-    action: RecoveryAction,
-    status: AdapterOperationStatus,
-) -> TxPhase {
-    match (action, status) {
-        (_, AdapterOperationStatus::RolledBack) => TxPhase::RolledBack,
-        (RecoveryAction::AdapterRecover, AdapterOperationStatus::Committed) => TxPhase::Committed,
-        (RecoveryAction::DiscardPreparedChanges, AdapterOperationStatus::NoChange) => {
-            TxPhase::RolledBack
-        }
-        _ => TxPhase::InDoubt,
-    }
-}
-
-fn commit_status_matches_strategy(
-    status: AdapterOperationStatus,
-    strategy: TransactionStrategy,
-) -> bool {
-    match strategy {
-        TransactionStrategy::ConfirmedCommit => {
-            status == AdapterOperationStatus::ConfirmedCommitPending
-        }
-        _ => status == AdapterOperationStatus::Committed,
-    }
-}
-
-fn merge_recovery_phase(current: Option<TxPhase>, next: TxPhase) -> TxPhase {
-    match (current, next) {
-        (None, phase) => phase,
-        (Some(left), right) if left == right => left,
-        (Some(TxPhase::InDoubt), _) | (_, TxPhase::InDoubt) => TxPhase::InDoubt,
-        _ => TxPhase::InDoubt,
-    }
-}
-
-fn failed_apply_phase(current: &TxPhase) -> TxPhase {
-    match current {
-        TxPhase::RolledBack | TxPhase::InDoubt => current.clone(),
-        _ => TxPhase::Failed,
     }
 }
 
@@ -1341,322 +1292,11 @@ impl UnderlayService for AriaUnderlayService {
     }
 }
 
-fn in_doubt_summary_from_record(record: TxJournalRecord) -> InDoubtTransactionSummary {
-    InDoubtTransactionSummary {
-        tx_id: record.tx_id,
-        request_id: record.request_id,
-        trace_id: record.trace_id,
-        phase: record.phase,
-        devices: record.devices,
-        strategy: record.strategy,
-        error_code: record.error_code,
-        error_message: record.error_message,
-        error_history: record.error_history,
-        created_at_unix_secs: record.created_at_unix_secs,
-        updated_at_unix_secs: record.updated_at_unix_secs,
-    }
-}
-
-fn desired_state_for_record<'a>(
-    record: &'a TxJournalRecord,
-    device_id: &DeviceId,
-) -> Option<&'a DeviceDesiredState> {
-    record
-        .desired_states
-        .iter()
-        .find(|desired| &desired.device_id == device_id)
-}
-
-fn change_set_for_record<'a>(
-    record: &'a TxJournalRecord,
-    device_id: &DeviceId,
-) -> Option<&'a crate::engine::diff::ChangeSet> {
-    record
-        .change_sets
-        .iter()
-        .find(|change_set| &change_set.device_id == device_id)
-}
-
-fn error_summary(operation: &str, error: &UnderlayError) -> String {
-    let (code, message) = journal_error_fields(error);
-    format!("{operation} failed with {code}: {message}")
-}
-
-fn final_confirm_recovery_in_doubt_error(
-    record: &TxJournalRecord,
-    device_id: &DeviceId,
-    final_confirm_summary: String,
-    verify_summary: String,
-    recover_summary: String,
-) -> UnderlayError {
-    UnderlayError::AdapterOperation {
-        code: "FINAL_CONFIRM_RECOVERY_IN_DOUBT".into(),
-        message: format!(
-            "could not prove final-confirming transaction {} for device {}: {}; {}; {}",
-            record.tx_id, device_id.0, final_confirm_summary, verify_summary, recover_summary
-        ),
-        retryable: true,
-        errors: Vec::new(),
-    }
-}
-
-fn device_results_from_plan(plan: &DryRunPlan) -> Vec<DeviceApplyResult> {
-    plan.change_sets
-        .iter()
-        .map(|change_set| DeviceApplyResult {
-            device_id: change_set.device_id.clone(),
-            changed: !change_set.is_empty(),
-            status: if change_set.is_empty() {
-                ApplyStatus::NoOpSuccess
-            } else {
-                ApplyStatus::Success
-            },
-            tx_id: None,
-            strategy: None,
-            error_code: None,
-            error_message: None,
-            warnings: Vec::new(),
-        })
-        .collect()
-}
-
-fn validate_force_resolve_request(request: &ForceResolveTransactionRequest) -> UnderlayResult<()> {
-    if request.tx_id.trim().is_empty() {
-        return Err(UnderlayError::InvalidIntent(
-            "force resolve requires tx_id".into(),
-        ));
-    }
-    if request.operator.trim().is_empty() {
-        return Err(UnderlayError::InvalidIntent(
-            "force resolve requires operator".into(),
-        ));
-    }
-    if request.reason.trim().is_empty() {
-        return Err(UnderlayError::InvalidIntent(
-            "force resolve requires reason".into(),
-        ));
-    }
-    if !request.break_glass_enabled {
-        return Err(UnderlayError::AdapterOperation {
-            code: "FORCE_RESOLVE_BREAK_GLASS_REQUIRED".into(),
-            message: "break-glass must be enabled to force resolve an in-doubt transaction"
-                .into(),
-            retryable: false,
-            errors: Vec::new(),
-        });
-    }
-
-    Ok(())
-}
-
-fn aggregate_apply_status(device_results: &[DeviceApplyResult]) -> ApplyStatus {
-    if device_results.is_empty() {
-        ApplyStatus::Failed
-    } else if device_results
-        .iter()
-        .all(|result| result.status == ApplyStatus::NoOpSuccess)
-    {
-        ApplyStatus::NoOpSuccess
-    } else if device_results
-        .iter()
-        .any(|result| result.status == ApplyStatus::InDoubt)
-    {
-        ApplyStatus::InDoubt
-    } else if device_results
-        .iter()
-        .all(|result| {
-            matches!(
-                result.status,
-                ApplyStatus::Success | ApplyStatus::SuccessWithWarning | ApplyStatus::NoOpSuccess
-            )
-        })
-    {
-        if device_results
-            .iter()
-            .any(|result| result.status == ApplyStatus::SuccessWithWarning)
-        {
-            ApplyStatus::SuccessWithWarning
-        } else {
-            ApplyStatus::Success
-        }
-    } else if device_results
-        .iter()
-        .all(|result| result.status == ApplyStatus::RolledBack)
-    {
-        ApplyStatus::RolledBack
-    } else if device_results.len() == 1 {
-        device_results[0].status.clone()
-    } else {
-        ApplyStatus::Failed
-    }
-}
-
-fn device_error_result(
-    device_id: &DeviceId,
-    changed: bool,
-    tx_id: Option<String>,
-    strategy: Option<TransactionStrategy>,
-    error: UnderlayError,
-) -> DeviceApplyResult {
-    let (code, message) = journal_error_fields(&error);
-    DeviceApplyResult {
-        device_id: device_id.clone(),
-        changed,
-        status: if code == "TX_IN_DOUBT" {
-            ApplyStatus::InDoubt
-        } else {
-            ApplyStatus::Failed
-        },
-        tx_id,
-        strategy,
-        error_code: Some(code),
-        error_message: Some(message),
-        warnings: Vec::new(),
-    }
-}
-
-fn apply_status_for_failed_phase(phase: &TxPhase) -> ApplyStatus {
-    match phase {
-        TxPhase::RolledBack => ApplyStatus::RolledBack,
-        TxPhase::InDoubt => ApplyStatus::InDoubt,
-        _ => ApplyStatus::Failed,
-    }
-}
-
-fn degraded_strategy_warnings(strategy: TransactionStrategy) -> Vec<String> {
-    if strategy.is_degraded() {
-        vec![format!(
-            "degraded transaction strategy {:?}; atomicity is weaker than confirmed commit",
-            strategy
-        )]
-    } else {
-        Vec::new()
-    }
-}
-
-fn journal_error_fields(error: &UnderlayError) -> (String, String) {
-    match error {
-        UnderlayError::AdapterOperation {
-            code,
-            message,
-            errors,
-            ..
-        } => (code.clone(), adapter_error_message(message, errors)),
-        UnderlayError::AdapterTransport(message) => {
-            ("ADAPTER_TRANSPORT".into(), message.clone())
-        }
-        UnderlayError::InvalidIntent(message) => ("INVALID_INTENT".into(), message.clone()),
-        UnderlayError::InvalidDeviceState(message) => {
-            ("INVALID_DEVICE_STATE".into(), message.clone())
-        }
-        UnderlayError::UnsupportedTransactionStrategy => (
-            "UNSUPPORTED_TRANSACTION_STRATEGY".into(),
-            "unsupported transaction strategy".into(),
-        ),
-        UnderlayError::DeviceAlreadyExists(device_id) => {
-            ("DEVICE_ALREADY_EXISTS".into(), device_id.clone())
-        }
-        UnderlayError::DeviceNotFound(device_id) => ("DEVICE_NOT_FOUND".into(), device_id.clone()),
-        UnderlayError::Internal(message) => ("INTERNAL".into(), message.clone()),
-    }
-}
-
-fn adapter_error_message(
-    message: &str,
-    errors: &[crate::AdapterErrorDetail],
-) -> String {
-    if errors.is_empty() {
-        return message.to_string();
-    }
-
-    let additional = errors
-        .iter()
-        .take(8)
-        .map(|error| format!("{}: {}", error.code, error.message))
-        .collect::<Vec<_>>()
-        .join("; ");
-    let truncated = errors.len().saturating_sub(8);
-    if truncated == 0 {
-        format!("{message}; additional adapter errors: {additional}")
-    } else {
-        format!("{message}; additional adapter errors: {additional}; {truncated} more")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::device::HostKeyPolicy;
     use crate::model::{DeviceRole, Vendor};
-
-    fn result(status: ApplyStatus) -> DeviceApplyResult {
-        DeviceApplyResult {
-            device_id: DeviceId("leaf-a".into()),
-            changed: status != ApplyStatus::NoOpSuccess,
-            status,
-            tx_id: None,
-            strategy: None,
-            error_code: None,
-            error_message: None,
-            warnings: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn aggregate_empty_results_are_failed() {
-        let status = aggregate_apply_status(&[]);
-
-        assert_eq!(status, ApplyStatus::Failed);
-    }
-
-    #[test]
-    fn aggregate_partial_failure_is_failed() {
-        let status = aggregate_apply_status(&[
-            result(ApplyStatus::Success),
-            result(ApplyStatus::Failed),
-        ]);
-
-        assert_eq!(status, ApplyStatus::Failed);
-    }
-
-    #[test]
-    fn aggregate_partial_rollback_is_failed() {
-        let status = aggregate_apply_status(&[
-            result(ApplyStatus::Success),
-            result(ApplyStatus::RolledBack),
-        ]);
-
-        assert_eq!(status, ApplyStatus::Failed);
-    }
-
-    #[test]
-    fn aggregate_success_with_warning_is_successful_but_warns() {
-        let status = aggregate_apply_status(&[
-            result(ApplyStatus::SuccessWithWarning),
-            result(ApplyStatus::Success),
-        ]);
-
-        assert_eq!(status, ApplyStatus::SuccessWithWarning);
-    }
-
-    #[test]
-    fn aggregate_all_degraded_successes_do_not_become_failed() {
-        let status = aggregate_apply_status(&[
-            result(ApplyStatus::SuccessWithWarning),
-            result(ApplyStatus::SuccessWithWarning),
-        ]);
-
-        assert_eq!(status, ApplyStatus::SuccessWithWarning);
-    }
-
-    #[test]
-    fn degraded_strategy_warning_only_for_degraded_strategies() {
-        assert!(degraded_strategy_warnings(TransactionStrategy::ConfirmedCommit).is_empty());
-        assert_eq!(
-            degraded_strategy_warnings(TransactionStrategy::RunningRollbackOnError).len(),
-            1
-        );
-    }
 
     #[test]
     fn report_only_drift_policy_does_not_block_drifted_device() {
@@ -1708,32 +1348,6 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
-    }
-
-    #[test]
-    fn journal_error_fields_preserves_additional_adapter_errors() {
-        let error = UnderlayError::AdapterOperation {
-            code: "FIRST".into(),
-            message: "first error".into(),
-            retryable: false,
-            errors: vec![
-                crate::AdapterErrorDetail {
-                    code: "SECOND".into(),
-                    message: "second error".into(),
-                },
-                crate::AdapterErrorDetail {
-                    code: "THIRD".into(),
-                    message: "third error".into(),
-                },
-            ],
-        };
-
-        let (code, message) = journal_error_fields(&error);
-
-        assert_eq!(code, "FIRST");
-        assert!(message.contains("first error"));
-        assert!(message.contains("SECOND: second error"));
-        assert!(message.contains("THIRD: third error"));
     }
 
     fn service_with_device_state(state: DeviceLifecycleState) -> AriaUnderlayService {
