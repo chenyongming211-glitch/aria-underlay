@@ -9,6 +9,7 @@ use crate::api::recovery_ops::{
     recover_phase_from_adapter_status,
 };
 use crate::device::DeviceInventory;
+use crate::telemetry::{EventSink, UnderlayEvent};
 use crate::tx::recovery::{classify_recovery, RecoveryAction, RecoveryReport};
 use crate::tx::{
     EndpointLockTable, TransactionStrategy, TxContext, TxJournalRecord, TxJournalStore, TxPhase,
@@ -20,6 +21,7 @@ pub(crate) struct RecoveryCoordinator {
     inventory: DeviceInventory,
     journal: Arc<dyn TxJournalStore>,
     endpoint_locks: EndpointLockTable,
+    event_sink: Arc<dyn EventSink>,
     adapter_pool: AdapterClientPool,
 }
 
@@ -28,12 +30,14 @@ impl RecoveryCoordinator {
         inventory: DeviceInventory,
         journal: Arc<dyn TxJournalStore>,
         endpoint_locks: EndpointLockTable,
+        event_sink: Arc<dyn EventSink>,
         adapter_pool: AdapterClientPool,
     ) -> Self {
         Self {
             inventory,
             journal,
             endpoint_locks,
+            event_sink,
             adapter_pool,
         }
     }
@@ -99,13 +103,19 @@ impl RecoveryCoordinator {
             .map(|record| record.tx_id.clone())
             .collect::<Vec<_>>();
 
-        Ok(RecoveryReport {
+        let report = RecoveryReport {
             recovered,
             in_doubt,
             pending: pending_records.len(),
             tx_ids,
             decisions,
-        })
+        };
+        self.event_sink.emit(UnderlayEvent::recovery_completed(
+            "recovery",
+            "recovery",
+            &report,
+        ));
+        Ok(report)
     }
 
     async fn recover_record(

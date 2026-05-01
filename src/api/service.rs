@@ -179,6 +179,7 @@ impl AriaUnderlayService {
             self.inventory.clone(),
             self.journal.clone(),
             self.endpoint_locks.clone(),
+            self.event_sink.clone(),
             self.adapter_pool.clone(),
         )
     }
@@ -359,6 +360,7 @@ impl UnderlayService for AriaUnderlayService {
         &self,
         request: DriftAuditRequest,
     ) -> UnderlayResult<DriftAuditResponse> {
+        let audited_device_count = request.device_ids.len();
         let mut drifted_devices = Vec::new();
 
         for device_id in request.device_ids {
@@ -389,6 +391,13 @@ impl UnderlayService for AriaUnderlayService {
                 }
             }
         }
+
+        self.event_sink.emit(UnderlayEvent::drift_audit_completed(
+            "drift-audit",
+            "drift-audit",
+            audited_device_count,
+            &drifted_devices,
+        ));
 
         Ok(DriftAuditResponse { drifted_devices })
     }

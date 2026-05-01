@@ -8,9 +8,12 @@ use aria_underlay::model::{DeviceId, DeviceRole, Vendor};
 use aria_underlay::proto::adapter;
 use aria_underlay::state::drift::{DriftFinding, DriftReport, DriftType};
 use aria_underlay::telemetry::{
-    AuditRecord, InMemoryEventSink, MetricName, Metrics, UnderlayEvent, UnderlayEventKind,
+    AuditRecord, InMemoryEventSink, InMemoryOperationSummaryStore, MetricName, Metrics,
+    UnderlayEvent, UnderlayEventKind,
 };
+use aria_underlay::tx::recovery::RecoveryReport;
 use aria_underlay::tx::{TransactionStrategy, TxPhase};
+use aria_underlay::worker::gc::JournalGcReport;
 
 mod common;
 
@@ -178,13 +181,36 @@ async fn service_emits_drift_event_to_configured_sink() {
 
     assert_eq!(response.drifted_devices, vec![DeviceId("leaf-a".into())]);
     let events = sink.events();
-    assert_eq!(events.len(), 1);
+    assert_eq!(events.len(), 2);
     assert_eq!(events[0].kind, UnderlayEventKind::UnderlayDriftDetected);
     assert_eq!(
         events[0].device_id.as_ref().map(|id| id.0.as_str()),
         Some("leaf-a")
     );
     assert_eq!(events[0].result.as_deref(), Some("drift_detected"));
+    assert_eq!(events[1].kind, UnderlayEventKind::UnderlayDriftAuditCompleted);
+    assert_eq!(events[1].result.as_deref(), Some("drift_detected"));
+    assert_eq!(
+        events[1].fields.get("drifted_device_count").map(String::as_str),
+        Some("1")
+    );
+}
+
+#[tokio::test]
+async fn service_emits_recovery_completion_event_to_configured_sink() {
+    let sink = Arc::new(InMemoryEventSink::default());
+    let service = AriaUnderlayService::new(DeviceInventory::default()).with_event_sink(sink.clone());
+
+    let report = service
+        .recover_pending_transactions()
+        .await
+        .expect("empty recovery scan should complete");
+
+    assert_eq!(report.pending, 0);
+    let events = sink.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, UnderlayEventKind::UnderlayRecoveryCompleted);
+    assert_eq!(events[0].result.as_deref(), Some("completed"));
 }
 
 #[test]
@@ -202,6 +228,122 @@ fn metrics_records_transaction_outcomes() {
     assert_eq!(metric_value(&samples, MetricName::TransactionFailedTotal), 1.0);
     assert_eq!(metric_value(&samples, MetricName::TransactionRollbackTotal), 1.0);
     assert_eq!(metric_value(&samples, MetricName::TransactionInDoubtTotal), 1.0);
+}
+
+#[test]
+fn metrics_record_operator_events() {
+    let mut metrics = Metrics::default();
+    let recovery = UnderlayEvent::recovery_completed(
+        "req-recovery",
+        "trace-recovery",
+        &RecoveryReport {
+            recovered: 0,
+            in_doubt: 1,
+            pending: 1,
+            tx_ids: vec!["tx-1".into()],
+            decisions: Vec::new(),
+        },
+    );
+    let drift = UnderlayEvent::drift_audit_completed(
+        "req-drift",
+        "trace-drift",
+        2,
+        &[DeviceId("leaf-a".into())],
+    );
+    let gc = UnderlayEvent::journal_gc_completed(
+        "req-gc",
+        "trace-gc",
+        &JournalGcReport {
+            journals_deleted: 1,
+            journals_retained: 2,
+            artifacts_deleted: 1,
+        },
+    );
+    let force = UnderlayEvent::transaction_force_resolved(
+        "req-force",
+        "trace-force",
+        "tx-force",
+        TxPhase::InDoubt,
+        &[DeviceId("leaf-a".into())],
+        "netops-a",
+        "validated out of band",
+    );
+
+    for event in [&recovery, &drift, &gc, &force] {
+        metrics.record_event(event);
+    }
+
+    let samples = metrics.samples();
+    assert_eq!(metric_value(&samples, MetricName::OperationRecoveryTotal), 1.0);
+    assert_eq!(
+        metric_value(&samples, MetricName::OperationRecoveryInDoubtTotal),
+        1.0
+    );
+    assert_eq!(metric_value(&samples, MetricName::OperationDriftAuditTotal), 1.0);
+    assert_eq!(
+        metric_value(&samples, MetricName::OperationDriftDetectedTotal),
+        1.0
+    );
+    assert_eq!(metric_value(&samples, MetricName::OperationJournalGcTotal), 1.0);
+    assert_eq!(
+        metric_value(&samples, MetricName::OperationJournalGcDeletedTotal),
+        1.0
+    );
+    assert_eq!(
+        metric_value(&samples, MetricName::OperationForceResolveTotal),
+        1.0
+    );
+}
+
+#[test]
+fn operation_summary_store_keeps_queryable_operator_view() {
+    let store = InMemoryOperationSummaryStore::default();
+    let recovery = UnderlayEvent::recovery_completed(
+        "req-recovery",
+        "trace-recovery",
+        &RecoveryReport {
+            recovered: 0,
+            in_doubt: 1,
+            pending: 1,
+            tx_ids: vec!["tx-1".into()],
+            decisions: Vec::new(),
+        },
+    );
+    let gc = UnderlayEvent::journal_gc_completed(
+        "req-gc",
+        "trace-gc",
+        &JournalGcReport {
+            journals_deleted: 0,
+            journals_retained: 3,
+            artifacts_deleted: 0,
+        },
+    );
+    let force = UnderlayEvent::transaction_force_resolved(
+        "req-force",
+        "trace-force",
+        "tx-force",
+        TxPhase::InDoubt,
+        &[DeviceId("leaf-a".into())],
+        "netops-a",
+        "validated out of band",
+    );
+
+    store.record_event(&recovery).expect("recovery summary should record");
+    store.record_event(&gc).expect("gc summary should record");
+    store.record_event(&force).expect("force summary should record");
+
+    let summaries = store.list().expect("summaries should be queryable");
+    assert_eq!(summaries.len(), 3);
+    assert_eq!(summaries[0].action, "recovery.completed");
+    assert_eq!(summaries[1].action, "journal.gc_completed");
+    assert_eq!(summaries[2].action, "transaction.force_resolved");
+
+    let attention = store
+        .list_attention_required()
+        .expect("attention summaries should be queryable");
+    assert_eq!(attention.len(), 1);
+    assert_eq!(attention[0].action, "recovery.completed");
+    assert_eq!(attention[0].result, "in_doubt");
 }
 
 fn metric_value(samples: &[aria_underlay::telemetry::MetricSample], name: MetricName) -> f64 {

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::response::{ApplyStatus, DeviceApplyResult};
 use crate::model::DeviceId;
 use crate::state::drift::DriftReport;
+use crate::tx::recovery::RecoveryReport;
 use crate::tx::{TransactionStrategy, TxPhase};
 use crate::worker::gc::JournalGcReport;
 
@@ -15,7 +16,9 @@ pub enum UnderlayEventKind {
     UnderlayDriftDetected,
     UnderlayDeviceLockTimeout,
     UnderlayForceUnlockRequested,
+    UnderlayDriftAuditCompleted,
     UnderlayJournalGcCompleted,
+    UnderlayRecoveryCompleted,
     UnderlayTransactionStarted,
     UnderlayTransactionPhaseChanged,
     UnderlayTransactionCompleted,
@@ -127,6 +130,80 @@ impl UnderlayEvent {
             phase: None,
             strategy: None,
             result: Some("completed".into()),
+            error_code: None,
+            error_message: None,
+            fields,
+        }
+    }
+
+    pub fn drift_audit_completed(
+        request_id: impl Into<String>,
+        trace_id: impl Into<String>,
+        audited_device_count: usize,
+        drifted_devices: &[DeviceId],
+    ) -> Self {
+        let mut fields = BTreeMap::new();
+        fields.insert("audited_device_count".into(), audited_device_count.to_string());
+        fields.insert("drifted_device_count".into(), drifted_devices.len().to_string());
+        if !drifted_devices.is_empty() {
+            fields.insert(
+                "drifted_devices".into(),
+                drifted_devices
+                    .iter()
+                    .map(|device_id| device_id.0.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+        }
+
+        Self {
+            kind: UnderlayEventKind::UnderlayDriftAuditCompleted,
+            request_id: request_id.into(),
+            trace_id: trace_id.into(),
+            tx_id: None,
+            device_id: None,
+            phase: None,
+            strategy: None,
+            result: Some(if drifted_devices.is_empty() {
+                "clean".into()
+            } else {
+                "drift_detected".into()
+            }),
+            error_code: None,
+            error_message: None,
+            fields,
+        }
+    }
+
+    pub fn recovery_completed(
+        request_id: impl Into<String>,
+        trace_id: impl Into<String>,
+        report: &RecoveryReport,
+    ) -> Self {
+        let mut fields = BTreeMap::new();
+        fields.insert("recovered".into(), report.recovered.to_string());
+        fields.insert("in_doubt".into(), report.in_doubt.to_string());
+        fields.insert("pending".into(), report.pending.to_string());
+        fields.insert("tx_count".into(), report.tx_ids.len().to_string());
+        if !report.tx_ids.is_empty() {
+            fields.insert("tx_ids".into(), report.tx_ids.join(","));
+        }
+
+        Self {
+            kind: UnderlayEventKind::UnderlayRecoveryCompleted,
+            request_id: request_id.into(),
+            trace_id: trace_id.into(),
+            tx_id: None,
+            device_id: None,
+            phase: None,
+            strategy: None,
+            result: Some(if report.in_doubt > 0 {
+                "in_doubt".into()
+            } else if report.pending > 0 {
+                "pending".into()
+            } else {
+                "completed".into()
+            }),
             error_code: None,
             error_message: None,
             fields,
