@@ -11,6 +11,7 @@ class AdapterConfig:
     fake_mode: bool
     fake_profile: str
     secret_file: str | None
+    tofu_known_hosts_file: str
 
     @classmethod
     def from_env(cls) -> "AdapterConfig":
@@ -23,4 +24,8 @@ class AdapterConfig:
             fake_mode=os.getenv("ARIA_UNDERLAY_ADAPTER_FAKE", "1") == "1",
             fake_profile=os.getenv("ARIA_UNDERLAY_FAKE_PROFILE", "confirmed"),
             secret_file=os.getenv("ARIA_UNDERLAY_SECRET_FILE"),
+            tofu_known_hosts_file=os.getenv(
+                "ARIA_UNDERLAY_TOFU_KNOWN_HOSTS_FILE",
+                "/tmp/aria-underlay-adapter/tofu_known_hosts",
+            ),
         )

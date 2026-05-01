@@ -727,6 +727,20 @@ Aria Underlay 的产品初始化流程必须包含交换机录入步骤。
 - 厂商提示，可选，例如 Huawei / H3C / Cisco / Ruijie。
 - host key 策略，例如 TOFU、known_hosts 或 pinned fingerprint。
 
+Host key 策略语义：
+
+- `TrustOnFirstUse`：首次连接允许 adapter 读取远端 host key，并且必须先把
+  `host:port` 对应 key 原子写入 adapter trust store，之后才允许把 session
+  交给上层流程。后续连接必须通过该 trust store 的 strict known-hosts 校验。
+  默认 trust store 路径为
+  `/tmp/aria-underlay-adapter/tofu_known_hosts`，可通过
+  `ARIA_UNDERLAY_TOFU_KNOWN_HOSTS_FILE` 覆盖。
+- `KnownHostsFile`：必须提供已有 known_hosts 文件路径，adapter 使用该文件做
+  strict host-key 校验；不会自动写入。
+- `PinnedKey`：Rust/Python 边界传递 pinned fingerprint，但 Python ncclient
+  后端当前不支持 fingerprint-only 精确 pinning，因此 session 打开时必须
+  fail-closed，返回 `HOST_KEY_PINNING_UNSUPPORTED`。
+
 产品初始化流程不得把用户名、密码、私钥等敏感信息直接写入普通 inventory 或资源模型。
 
 正确流程是：

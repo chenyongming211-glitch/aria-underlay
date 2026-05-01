@@ -7,6 +7,7 @@ def test_config_from_env_defaults(monkeypatch):
     monkeypatch.delenv("ARIA_UNDERLAY_ADAPTER_FAKE", raising=False)
     monkeypatch.delenv("ARIA_UNDERLAY_FAKE_PROFILE", raising=False)
     monkeypatch.delenv("ARIA_UNDERLAY_SECRET_FILE", raising=False)
+    monkeypatch.delenv("ARIA_UNDERLAY_TOFU_KNOWN_HOSTS_FILE", raising=False)
 
     config = AdapterConfig.from_env()
 
@@ -14,6 +15,7 @@ def test_config_from_env_defaults(monkeypatch):
     assert config.fake_mode is True
     assert config.fake_profile == "confirmed"
     assert config.secret_file is None
+    assert config.tofu_known_hosts_file == "/tmp/aria-underlay-adapter/tofu_known_hosts"
 
 
 def test_config_reads_fake_profile(monkeypatch):
@@ -30,3 +32,14 @@ def test_config_reads_secret_file(monkeypatch):
     config = AdapterConfig.from_env()
 
     assert config.secret_file == "/tmp/aria-underlay-secrets.json"
+
+
+def test_config_reads_tofu_known_hosts_file(monkeypatch):
+    monkeypatch.setenv(
+        "ARIA_UNDERLAY_TOFU_KNOWN_HOSTS_FILE",
+        "/var/lib/aria-underlay/tofu_known_hosts",
+    )
+
+    config = AdapterConfig.from_env()
+
+    assert config.tofu_known_hosts_file == "/var/lib/aria-underlay/tofu_known_hosts"

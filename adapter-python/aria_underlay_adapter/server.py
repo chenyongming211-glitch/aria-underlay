@@ -157,6 +157,7 @@ def serve() -> None:
             driver_factory=lambda device: _netconf_driver_from_device(
                 device,
                 secret_provider,
+                tofu_known_hosts_path=config.tofu_known_hosts_file,
             )
         )
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=8))
@@ -173,13 +174,17 @@ def serve() -> None:
 def _netconf_driver_from_device(
     device,
     secret_provider: LocalSecretProvider,
+    tofu_known_hosts_path: str | None = None,
 ) -> NetconfBackedDriver | AdapterErrorDriver:
     try:
         secret = secret_provider.resolve(device.secret_ref)
     except AdapterError as error:
         return AdapterErrorDriver(error)
     try:
-        host_key_kwargs = _host_key_policy_kwargs(device)
+        host_key_kwargs = _host_key_policy_kwargs(
+            device,
+            tofu_known_hosts_path=tofu_known_hosts_path,
+        )
     except AdapterError as error:
         return AdapterErrorDriver(error)
 
@@ -196,12 +201,16 @@ def _netconf_driver_from_device(
     )
 
 
-def _host_key_policy_kwargs(device):
+def _host_key_policy_kwargs(device, *, tofu_known_hosts_path: str | None = None):
     policy = getattr(device, "host_key_policy", pb2.HOST_KEY_POLICY_UNSPECIFIED)
 
     if policy == pb2.HOST_KEY_POLICY_TRUST_ON_FIRST_USE:
         return {
             "hostkey_verify": True,
+            "tofu_known_hosts_path": (
+                tofu_known_hosts_path
+                or "/tmp/aria-underlay-adapter/tofu_known_hosts"
+            ),
         }
 
     if policy == pb2.HOST_KEY_POLICY_KNOWN_HOSTS_FILE:

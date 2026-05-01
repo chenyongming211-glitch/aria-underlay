@@ -23,7 +23,7 @@ trusted as-is.
 | P1 | File-backed journal/shadow writes are not production-durable under concurrent writes or crash | Fixed in `3f15941`; GitHub Actions run `25176390555` passed | Rust journal/shadow persistence |
 | P1 | Product initialization/register accepts invalid connection inputs | Fixed in `8ca1aec`; GitHub Actions run `25175796255` passed | Rust bootstrap/registration validation |
 | P1 | Additional adapter error details dropped from journal diagnostics | Fixed in `e76e961`; GitHub Actions run `25176070652` passed | Rust error/journal mapping |
-| P2 | `TrustOnFirstUse` currently behaves as strict known-hosts verification, not TOFU | Confirmed fail-closed semantic gap | Python NETCONF backend + host-key trust store |
+| P2 | `TrustOnFirstUse` currently behaves as strict known-hosts verification, not TOFU | Fixed in current P2 TOFU package; CI validation pending | Python NETCONF backend + host-key trust store |
 | P2 | Rust `device/render.rs` renderer skeletons are dead code | Confirmed low-risk tech debt | Rust device module |
 | P2 | Python vendor driver stubs raise `NotImplementedError` on construction | Confirmed low-risk tech debt | Python driver registry |
 | P2 | `_admin_state_to_text` duplicated with inconsistent defaults | Confirmed low-risk fidelity gap | Python backend/renderer shared helper |
@@ -213,7 +213,7 @@ adapter error code stable.
 
 ---
 
-## LOW — TrustOnFirstUse Is Fail-Closed But Not Actual TOFU
+## RESOLVED LOW — TrustOnFirstUse Is Fail-Closed But Not Actual TOFU
 
 **Files:** `src/device/info.rs:6-9`, `src/adapter_client/mapper.rs:50-69`, `adapter-python/aria_underlay_adapter/server.py:199-205`, `adapter-python/aria_underlay_adapter/backends/netconf.py:67-108`
 
@@ -232,6 +232,13 @@ hosts set.
 `StrictKnownHostsDefault`, or implement real TOFU with a durable trust store:
 on unknown host, persist the first key atomically, verify subsequent keys
 against the stored key, and audit first-use acceptance.
+
+**Resolution 2026-05-01:** Fixed in the P2 TOFU package. Python adapter now has
+a configurable TOFU trust store (`ARIA_UNDERLAY_TOFU_KNOWN_HOSTS_FILE`, default
+`/tmp/aria-underlay-adapter/tofu_known_hosts`). First use persists the observed
+remote host key atomically before returning the session; later connects use
+strict known-hosts verification. Missing remote key, trust-store write failure,
+or conflicting existing key fails closed.
 
 ---
 

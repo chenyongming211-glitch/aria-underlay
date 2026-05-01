@@ -62,6 +62,24 @@ def test_real_server_driver_selection_does_not_block_capability_probe_for_render
     assert isinstance(driver, NetconfBackedDriver)
 
 
+def test_real_server_driver_selection_applies_tofu_policy(tmp_path):
+    trust_store = tmp_path / "tofu_known_hosts"
+    driver = _netconf_driver_from_device(
+        _device(
+            pb2.VENDOR_HUAWEI,
+            host_key_policy=pb2.HOST_KEY_POLICY_TRUST_ON_FIRST_USE,
+        ),
+        _SecretProvider(),
+        tofu_known_hosts_path=str(trust_store),
+    )
+
+    assert isinstance(driver, NetconfBackedDriver)
+    assert driver._backend.hostkey_verify is True
+    assert driver._backend.tofu_known_hosts_path == str(trust_store)
+    assert driver._backend.known_hosts_path is None
+    assert driver._backend.pinned_host_key_fingerprint is None
+
+
 def test_real_server_driver_selection_applies_known_hosts_policy():
     driver = _netconf_driver_from_device(
         _device(

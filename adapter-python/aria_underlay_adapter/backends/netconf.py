@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
+from pathlib import Path
 import tempfile
 from typing import Iterable, Protocol
 from xml.sax.saxutils import escape
@@ -46,6 +48,7 @@ class NcclientNetconfBackend:
     passphrase: str | None = None
     hostkey_verify: bool = False
     known_hosts_path: str | None = None
+    tofu_known_hosts_path: str | None = None
     pinned_host_key_fingerprint: str | None = None
     look_for_keys: bool = False
     timeout_secs: int = 30
@@ -102,21 +105,20 @@ class NcclientNetconfBackend:
             "timeout": self.timeout_secs,
         }
 
+        if self.tofu_known_hosts_path:
+            return self._connect_with_tofu(manager, connect_args)
+
         if self.known_hosts_path:
-            return self._connect_with_known_hosts_file(manager, connect_args)
+            return self._connect_with_known_hosts_file(
+                manager,
+                connect_args,
+                self.known_hosts_path,
+            )
 
         return manager.connect(**connect_args)
 
-    def _connect_with_known_hosts_file(self, manager, connect_args):
-        path = self.known_hosts_path or ""
-        if "\n" in path or "\r" in path:
-            raise AdapterError(
-                code="HOST_KEY_POLICY_INVALID",
-                message="known_hosts path contains invalid characters",
-                normalized_error="invalid known_hosts path",
-                raw_error_summary="known_hosts path must be a single-line filesystem path",
-                retryable=False,
-            )
+    def _connect_with_known_hosts_file(self, manager, connect_args, path):
+        _validate_known_hosts_path(path)
 
         with tempfile.NamedTemporaryFile("w", encoding="utf-8") as ssh_config:
             ssh_config.write("Host *\n")
@@ -125,6 +127,33 @@ class NcclientNetconfBackend:
             connect_args = dict(connect_args)
             connect_args["ssh_config"] = ssh_config.name
             return manager.connect(**connect_args)
+
+    def _connect_with_tofu(self, manager, connect_args):
+        path = self.tofu_known_hosts_path or ""
+        _validate_known_hosts_path(path)
+        store = _KnownHostsTrustStore(path)
+        if store.has_host(self.host, self.port):
+            return self._connect_with_known_hosts_file(manager, connect_args, path)
+
+        first_use_args = dict(connect_args)
+        first_use_args["hostkey_verify"] = False
+        session = manager.connect(**first_use_args)
+        try:
+            key_name, key_b64 = _remote_host_key(session)
+            store.trust(self.host, self.port, key_name, key_b64)
+        except AdapterError:
+            _close_session(session)
+            raise
+        except Exception as exc:
+            _close_session(session)
+            raise AdapterError(
+                code="HOST_KEY_TRUST_STORE_WRITE_FAILED",
+                message="failed to persist TOFU host key",
+                normalized_error="tofu trust store write failed",
+                raw_error_summary=str(exc),
+                retryable=False,
+            ) from exc
+        return session
 
     def get_current_state(self, scope=None) -> dict:
         if _scope_is_empty(scope):
@@ -462,6 +491,148 @@ class NcclientNetconfBackend:
         )
         _verify_vlans(desired_state, observed, scope)
         _verify_interfaces(desired_state, observed, scope)
+
+
+class _KnownHostsTrustStore:
+    def __init__(self, path: str):
+        self.path = Path(path)
+
+    def has_host(self, host: str, port: int) -> bool:
+        return self._find_line(host, port) is not None
+
+    def trust(self, host: str, port: int, key_name: str, key_b64: str) -> None:
+        host_pattern = _known_hosts_pattern(host, port)
+        trusted_line = f"{host_pattern} {key_name} {key_b64}"
+        existing = self._find_line(host, port)
+        if existing is not None:
+            if existing.strip() == trusted_line:
+                return
+            raise AdapterError(
+                code="HOST_KEY_CHANGED",
+                message="TOFU host key does not match existing trust store entry",
+                normalized_error="tofu host key changed",
+                raw_error_summary=f"host={host_pattern}",
+                retryable=False,
+            )
+
+        lines = self._read_lines()
+        lines.append(f"{trusted_line}\n")
+        payload = "".join(lines)
+        try:
+            _atomic_write_text(self.path, payload)
+        except OSError as exc:
+            raise AdapterError(
+                code="HOST_KEY_TRUST_STORE_WRITE_FAILED",
+                message="failed to persist TOFU host key",
+                normalized_error="tofu trust store write failed",
+                raw_error_summary=str(exc),
+                retryable=False,
+            ) from exc
+
+    def _find_line(self, host: str, port: int) -> str | None:
+        host_pattern = _known_hosts_pattern(host, port)
+        for line in self._read_lines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            fields = stripped.split()
+            if not fields:
+                continue
+            hosts = fields[0].split(",")
+            if host_pattern in hosts:
+                return stripped
+        return None
+
+    def _read_lines(self) -> list[str]:
+        if not self.path.exists():
+            return []
+        return self.path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+
+def _validate_known_hosts_path(path: str) -> None:
+    if not path or "\n" in path or "\r" in path:
+        raise AdapterError(
+            code="HOST_KEY_POLICY_INVALID",
+            message="known_hosts path contains invalid characters",
+            normalized_error="invalid known_hosts path",
+            raw_error_summary="known_hosts path must be a non-empty single-line filesystem path",
+            retryable=False,
+        )
+
+
+def _known_hosts_pattern(host: str, port: int) -> str:
+    if port == 22:
+        return host
+    return f"[{host}]:{port}"
+
+
+def _remote_host_key(session) -> tuple[str, str]:
+    for owner in (
+        getattr(session, "_session", None),
+        getattr(session, "session", None),
+        session,
+    ):
+        if owner is None:
+            continue
+        transport = getattr(owner, "_transport", None) or getattr(owner, "transport", None)
+        if transport is None or not hasattr(transport, "get_remote_server_key"):
+            continue
+        key = transport.get_remote_server_key()
+        if key is None:
+            continue
+        key_name = key.get_name()
+        key_b64 = key.get_base64()
+        if key_name and key_b64:
+            return key_name, key_b64
+
+    raise AdapterError(
+        code="HOST_KEY_UNAVAILABLE",
+        message="NETCONF session did not expose a remote host key for TOFU",
+        normalized_error="remote host key unavailable",
+        raw_error_summary="session transport has no remote server key",
+        retryable=False,
+    )
+
+
+def _close_session(session) -> None:
+    close = getattr(session, "close_session", None)
+    if callable(close):
+        close()
+        return
+    close = getattr(session, "close", None)
+    if callable(close):
+        close()
+
+
+def _atomic_write_text(path: Path, payload: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except Exception:
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
+        raise
 
 
 NetconfBackend = NcclientNetconfBackend

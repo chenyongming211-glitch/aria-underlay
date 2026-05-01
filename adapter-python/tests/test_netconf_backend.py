@@ -1,5 +1,9 @@
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+
+from aria_underlay_adapter.backends import netconf as netconf_module
 from aria_underlay_adapter.backends.netconf import (
     BASE_10,
     CANDIDATE,
@@ -71,6 +75,87 @@ def test_ncclient_backend_rejects_pinned_fingerprint_without_exact_pin_support()
         assert error.retryable is False
     else:
         raise AssertionError("pinned fingerprint policy must fail closed until exact pinning exists")
+
+
+def test_ncclient_backend_tofu_persists_first_seen_host_key(monkeypatch, tmp_path):
+    manager = _FakeManager([_FakeSession("ssh-ed25519", "AAAAC3NzaC1lZDI1NTE5AAAAfirst")])
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ncclient",
+        SimpleNamespace(manager=manager),
+    )
+    trust_store = tmp_path / "known_hosts"
+    backend = NcclientNetconfBackend(
+        host="192.0.2.10",
+        port=830,
+        hostkey_verify=True,
+        tofu_known_hosts_path=str(trust_store),
+    )
+
+    session = backend._connect()
+
+    assert session.closed is False
+    assert manager.calls[0]["hostkey_verify"] is False
+    assert trust_store.read_text(encoding="utf-8") == (
+        "[192.0.2.10]:830 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAfirst\n"
+    )
+
+
+def test_ncclient_backend_tofu_uses_strict_known_hosts_after_first_use(monkeypatch, tmp_path):
+    trust_store = tmp_path / "known_hosts"
+    trust_store.write_text(
+        "[192.0.2.10]:830 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAfirst\n",
+        encoding="utf-8",
+    )
+    manager = _FakeManager([_FakeSession("ssh-ed25519", "unused")])
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ncclient",
+        SimpleNamespace(manager=manager),
+    )
+    backend = NcclientNetconfBackend(
+        host="192.0.2.10",
+        port=830,
+        hostkey_verify=True,
+        tofu_known_hosts_path=str(trust_store),
+    )
+
+    backend._connect()
+
+    assert manager.calls[0]["hostkey_verify"] is True
+    assert manager.calls[0]["ssh_config_content"] == (
+        "Host *\n"
+        f"  UserKnownHostsFile {trust_store}\n"
+    )
+
+
+def test_ncclient_backend_tofu_fails_closed_when_trust_store_write_fails(
+    monkeypatch, tmp_path
+):
+    session = _FakeSession("ssh-ed25519", "AAAAC3NzaC1lZDI1NTE5AAAAfirst")
+    manager = _FakeManager([session])
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ncclient",
+        SimpleNamespace(manager=manager),
+    )
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(netconf_module, "_atomic_write_text", fail_write)
+    backend = NcclientNetconfBackend(
+        host="192.0.2.10",
+        port=830,
+        hostkey_verify=True,
+        tofu_known_hosts_path=str(tmp_path / "known_hosts"),
+    )
+
+    with pytest.raises(AdapterError) as exc_info:
+        backend._connect()
+
+    assert exc_info.value.code == "HOST_KEY_TRUST_STORE_WRITE_FAILED"
+    assert session.closed is True
 
 
 def test_prepare_candidate_locks_discards_and_unlocks_when_renderer_missing():
@@ -925,6 +1010,35 @@ class _BackendWithSession(NcclientNetconfBackend):
 
     def _connect(self):
         return self._session
+
+
+class _FakeManager:
+    def __init__(self, sessions):
+        self.sessions = list(sessions)
+        self.calls = []
+
+    def connect(self, **kwargs):
+        if "ssh_config" in kwargs:
+            kwargs = dict(kwargs)
+            kwargs["ssh_config_content"] = Path(kwargs["ssh_config"]).read_text(
+                encoding="utf-8"
+            )
+        self.calls.append(kwargs)
+        return self.sessions.pop(0)
+
+
+class _FakeSession:
+    def __init__(self, key_name, key_b64):
+        self.closed = False
+        key = SimpleNamespace(
+            get_name=lambda: key_name,
+            get_base64=lambda: key_b64,
+        )
+        transport = SimpleNamespace(get_remote_server_key=lambda: key)
+        self._session = SimpleNamespace(_transport=transport)
+
+    def close_session(self):
+        self.closed = True
 
 
 class _RecordingSession:
