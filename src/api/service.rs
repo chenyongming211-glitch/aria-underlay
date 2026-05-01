@@ -40,7 +40,7 @@ use crate::state::{
 };
 use crate::telemetry::{
     EventSink, InMemoryOperationSummaryStore, NoopEventSink, RecordingEventSink,
-    UnderlayEvent,
+    OperationSummaryStore, UnderlayEvent,
 };
 use crate::tx::recovery::RecoveryReport;
 use crate::tx::{
@@ -58,7 +58,7 @@ pub struct AriaUnderlayService {
     shadow_store: Arc<dyn ShadowStateStore>,
     observed_store: Arc<dyn ShadowStateStore>,
     event_sink: Arc<dyn EventSink>,
-    operation_summary_store: Arc<InMemoryOperationSummaryStore>,
+    operation_summary_store: Arc<dyn OperationSummaryStore>,
     adapter_pool: AdapterClientPool,
 }
 
@@ -170,7 +170,7 @@ impl AriaUnderlayService {
 
     pub fn with_operation_summary_store(
         mut self,
-        operation_summary_store: Arc<InMemoryOperationSummaryStore>,
+        operation_summary_store: Arc<dyn OperationSummaryStore>,
     ) -> Self {
         self.operation_summary_store = operation_summary_store;
         self

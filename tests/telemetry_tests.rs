@@ -1,3 +1,4 @@
+use std::fs;
 use std::sync::Arc;
 
 use aria_underlay::api::operations::ListOperationSummariesRequest;
@@ -9,8 +10,8 @@ use aria_underlay::model::{DeviceId, DeviceRole, Vendor};
 use aria_underlay::proto::adapter;
 use aria_underlay::state::drift::{DriftFinding, DriftReport, DriftType};
 use aria_underlay::telemetry::{
-    AuditRecord, InMemoryEventSink, InMemoryOperationSummaryStore, MetricName, Metrics,
-    UnderlayEvent, UnderlayEventKind,
+    AuditRecord, InMemoryEventSink, InMemoryOperationSummaryStore,
+    JsonFileOperationSummaryStore, MetricName, Metrics, UnderlayEvent, UnderlayEventKind,
 };
 use aria_underlay::tx::recovery::RecoveryReport;
 use aria_underlay::tx::{TransactionStrategy, TxPhase};
@@ -403,6 +404,122 @@ fn operation_summary_store_keeps_queryable_operator_view() {
     assert_eq!(attention[0].result, "in_doubt");
 }
 
+#[test]
+fn json_file_operation_summary_store_persists_operator_view_across_restarts() {
+    let path = temp_operation_summary_path("persist-restart");
+    let store = JsonFileOperationSummaryStore::new(&path);
+    let recovery = UnderlayEvent::recovery_completed(
+        "req-recovery",
+        "trace-recovery",
+        &RecoveryReport {
+            recovered: 0,
+            in_doubt: 1,
+            pending: 0,
+            tx_ids: vec!["tx-1".into()],
+            decisions: Vec::new(),
+        },
+    );
+    let gc = UnderlayEvent::journal_gc_completed(
+        "req-gc",
+        "trace-gc",
+        &JournalGcReport {
+            journals_deleted: 1,
+            journals_retained: 2,
+            artifacts_deleted: 0,
+            journal_deleted_tx_ids: vec!["tx-old".into()],
+            artifact_deleted_refs: Vec::new(),
+        },
+    );
+    let non_operator = UnderlayEvent::transaction_result(
+        "req-ok",
+        "trace-ok",
+        "tx-ok",
+        Some(DeviceId("leaf-a".into())),
+        TxPhase::Committed,
+        Some(TransactionStrategy::ConfirmedCommit),
+        "success",
+    );
+
+    store
+        .record_event(&recovery)
+        .expect("recovery summary should persist");
+    store.record_event(&gc).expect("gc summary should persist");
+    store
+        .record_event(&non_operator)
+        .expect("non-operator event should be ignored without error");
+
+    let restarted = JsonFileOperationSummaryStore::new(&path);
+    let summaries = restarted
+        .list()
+        .expect("restarted operation summary store should list records");
+    assert_eq!(summaries.len(), 2);
+    assert_eq!(summaries[0].action, "recovery.completed");
+    assert_eq!(summaries[0].result, "in_doubt");
+    assert_eq!(summaries[1].action, "journal.gc_completed");
+    assert_eq!(
+        summaries[1]
+            .fields
+            .get("journal_deleted_tx_ids")
+            .map(String::as_str),
+        Some("tx-old")
+    );
+
+    let attention = restarted
+        .list_attention_required()
+        .expect("attention summaries should be queryable after restart");
+    assert_eq!(attention.len(), 1);
+    assert_eq!(attention[0].action, "recovery.completed");
+
+    remove_operation_summary_path(&path);
+}
+
+#[test]
+fn json_file_operation_summary_store_fails_closed_on_corrupt_record() {
+    let path = temp_operation_summary_path("corrupt-record");
+    fs::create_dir_all(path.parent().expect("summary path should have parent"))
+        .expect("summary parent should be created");
+    fs::write(&path, "{not-json}\n").expect("corrupt summary record should be written");
+
+    let err = JsonFileOperationSummaryStore::new(&path)
+        .list()
+        .expect_err("corrupt operation summary record should fail closed");
+    let message = format!("{err}");
+
+    assert!(
+        message.contains("operation summary") && message.contains("line 1"),
+        "unexpected corrupt summary error: {message}"
+    );
+
+    remove_operation_summary_path(&path);
+}
+
+#[tokio::test]
+async fn service_can_record_operation_summaries_to_persistent_store() {
+    let adapter_endpoint = start_drift_adapter().await;
+    let inventory = telemetry_inventory(adapter_endpoint);
+    let path = temp_operation_summary_path("service-persistent-store");
+    let persistent_store = Arc::new(JsonFileOperationSummaryStore::new(&path));
+    let service = AriaUnderlayService::new(inventory)
+        .with_operation_summary_store(persistent_store.clone());
+
+    service
+        .run_drift_audit(DriftAuditRequest {
+            device_ids: vec![DeviceId("leaf-a".into())],
+        })
+        .await
+        .expect("drift audit should complete");
+
+    let restarted = JsonFileOperationSummaryStore::new(&path);
+    let summaries = restarted
+        .list()
+        .expect("persistent summaries should survive store recreation");
+    assert_eq!(summaries.len(), 2);
+    assert_eq!(summaries[0].action, "drift.detected");
+    assert_eq!(summaries[1].action, "drift.audit_completed");
+
+    remove_operation_summary_path(&path);
+}
+
 fn metric_value(samples: &[aria_underlay::telemetry::MetricSample], name: MetricName) -> f64 {
     samples
         .iter()
@@ -443,4 +560,19 @@ async fn start_drift_adapter() -> String {
         ..Default::default()
     })
     .await
+}
+
+fn temp_operation_summary_path(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir()
+        .join(format!(
+            "aria-underlay-operation-summary-{name}-{}",
+            uuid::Uuid::new_v4()
+        ))
+        .join("summaries.jsonl")
+}
+
+fn remove_operation_summary_path(path: &std::path::Path) {
+    if let Some(parent) = path.parent() {
+        fs::remove_dir_all(parent).ok();
+    }
 }
