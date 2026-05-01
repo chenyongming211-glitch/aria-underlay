@@ -9,6 +9,6 @@ pub use events::{UnderlayEvent, UnderlayEventKind};
 pub use metrics::{MetricName, MetricSample, Metrics};
 pub use ops::{
     InMemoryOperationSummaryStore, JsonFileOperationSummaryStore, OperationSummary,
-    OperationSummaryStore,
+    OperationSummaryCompactionReport, OperationSummaryRetentionPolicy, OperationSummaryStore,
 };
 pub use sink::{EventSink, InMemoryEventSink, NoopEventSink, RecordingEventSink};

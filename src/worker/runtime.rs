@@ -7,23 +7,31 @@ use crate::worker::drift_auditor::{
     DriftAuditSchedule, DriftAuditSchedulerReport, DriftAuditWorker,
 };
 use crate::worker::gc::{JournalGcSchedule, JournalGcSchedulerReport, JournalGcWorker};
+use crate::worker::operation_summary_compactor::{
+    OperationSummaryCompactionSchedule, OperationSummaryCompactionSchedulerReport,
+    OperationSummaryCompactionWorker,
+};
 use crate::{UnderlayError, UnderlayResult};
 
 #[derive(Debug, Default)]
 pub struct UnderlayWorkerRuntime {
     journal_gc: Option<(JournalGcWorker, JournalGcSchedule)>,
     drift_audit: Option<(DriftAuditWorker, DriftAuditSchedule)>,
+    operation_summary_compaction:
+        Option<(OperationSummaryCompactionWorker, OperationSummaryCompactionSchedule)>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UnderlayWorkerRuntimeReport {
     pub journal_gc: Option<JournalGcSchedulerReport>,
     pub drift_audit: Option<DriftAuditSchedulerReport>,
+    pub operation_summary_compaction: Option<OperationSummaryCompactionSchedulerReport>,
 }
 
 enum RuntimeWorkerOutcome {
     JournalGc(UnderlayResult<JournalGcSchedulerReport>),
     DriftAudit(UnderlayResult<DriftAuditSchedulerReport>),
+    OperationSummaryCompaction(UnderlayResult<OperationSummaryCompactionSchedulerReport>),
 }
 
 impl UnderlayWorkerRuntime {
@@ -46,6 +54,15 @@ impl UnderlayWorkerRuntime {
         schedule: DriftAuditSchedule,
     ) -> Self {
         self.drift_audit = Some((worker, schedule));
+        self
+    }
+
+    pub fn with_operation_summary_compaction(
+        mut self,
+        worker: OperationSummaryCompactionWorker,
+        schedule: OperationSummaryCompactionSchedule,
+    ) -> Self {
+        self.operation_summary_compaction = Some((worker, schedule));
         self
     }
 
@@ -77,6 +94,16 @@ impl UnderlayWorkerRuntime {
             let worker_shutdown = shutdown_rx.clone();
             tasks.spawn(async move {
                 RuntimeWorkerOutcome::DriftAudit(
+                    worker
+                        .run_periodic_until_shutdown(schedule, wait_for_shutdown(worker_shutdown))
+                        .await,
+                )
+            });
+        }
+        if let Some((worker, schedule)) = self.operation_summary_compaction {
+            let worker_shutdown = shutdown_rx.clone();
+            tasks.spawn(async move {
+                RuntimeWorkerOutcome::OperationSummaryCompaction(
                     worker
                         .run_periodic_until_shutdown(schedule, wait_for_shutdown(worker_shutdown))
                         .await,
@@ -133,6 +160,9 @@ impl UnderlayWorkerRuntime {
         if let Some((_, schedule)) = &self.drift_audit {
             validate_interval("drift audit", schedule.interval_secs)?;
         }
+        if let Some((_, schedule)) = &self.operation_summary_compaction {
+            validate_interval("operation summary compaction", schedule.interval_secs)?;
+        }
         Ok(())
     }
 }
@@ -167,6 +197,9 @@ fn record_worker_outcome(
         }
         RuntimeWorkerOutcome::DriftAudit(worker_report) => {
             report.drift_audit = Some(worker_report?);
+        }
+        RuntimeWorkerOutcome::OperationSummaryCompaction(worker_report) => {
+            report.operation_summary_compaction = Some(worker_report?);
         }
     }
     Ok(())

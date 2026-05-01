@@ -11,7 +11,8 @@ use aria_underlay::proto::adapter;
 use aria_underlay::state::drift::{DriftFinding, DriftReport, DriftType};
 use aria_underlay::telemetry::{
     AuditRecord, InMemoryEventSink, InMemoryOperationSummaryStore,
-    JsonFileOperationSummaryStore, MetricName, Metrics, UnderlayEvent, UnderlayEventKind,
+    JsonFileOperationSummaryStore, MetricName, Metrics, OperationSummary,
+    OperationSummaryRetentionPolicy, UnderlayEvent, UnderlayEventKind,
 };
 use aria_underlay::tx::recovery::RecoveryReport;
 use aria_underlay::tx::{TransactionStrategy, TxPhase};
@@ -493,6 +494,110 @@ fn json_file_operation_summary_store_fails_closed_on_corrupt_record() {
     remove_operation_summary_path(&path);
 }
 
+#[test]
+fn json_file_operation_summary_store_compacts_to_newest_records_and_rotates_archive() {
+    let path = temp_operation_summary_path("compact-records");
+    let store = JsonFileOperationSummaryStore::new(&path);
+    for index in 1..=3 {
+        store
+            .record_event(&recovery_event(index))
+            .expect("operation summary should persist before compaction");
+    }
+
+    let report = store
+        .compact(OperationSummaryRetentionPolicy {
+            max_records: Some(2),
+            max_bytes: None,
+            max_rotated_files: 2,
+        })
+        .expect("operation summaries should compact");
+
+    assert!(report.compacted);
+    assert_eq!(report.records_before, 3);
+    assert_eq!(report.records_after, 2);
+    assert_eq!(report.records_dropped, 1);
+    assert_eq!(report.rotated_files, 1);
+
+    let summaries = store.list().expect("compacted summaries should list");
+    assert_eq!(summary_request_ids(&summaries), vec!["req-2", "req-3"]);
+
+    let archive_payload =
+        fs::read_to_string(operation_summary_archive_path(&path, 1))
+            .expect("pre-compaction JSONL should be archived");
+    assert!(archive_payload.contains("req-1"));
+    assert!(archive_payload.contains("req-2"));
+    assert!(archive_payload.contains("req-3"));
+
+    remove_operation_summary_path(&path);
+}
+
+#[test]
+fn json_file_operation_summary_store_compacts_to_max_bytes_without_partial_lines() {
+    let path = temp_operation_summary_path("compact-bytes");
+    let store = JsonFileOperationSummaryStore::new(&path);
+    let events = (1..=4).map(padded_recovery_event).collect::<Vec<_>>();
+    for event in &events {
+        store
+            .record_event(event)
+            .expect("operation summary should persist before byte compaction");
+    }
+    let max_bytes = events[2..]
+        .iter()
+        .map(operation_summary_jsonl_len)
+        .sum::<usize>() as u64;
+
+    let report = store
+        .compact(OperationSummaryRetentionPolicy {
+            max_records: None,
+            max_bytes: Some(max_bytes),
+            max_rotated_files: 0,
+        })
+        .expect("operation summaries should compact by byte cap");
+
+    assert!(report.compacted);
+    assert!(report.bytes_after <= max_bytes);
+    assert_eq!(report.records_after, 2);
+    let payload = fs::read_to_string(&path).expect("compacted JSONL should be readable");
+    assert!(payload.lines().all(|line| !line.trim().is_empty()));
+
+    let summaries = store.list().expect("byte-compacted summaries should list");
+    assert_eq!(summary_request_ids(&summaries), vec!["req-3", "req-4"]);
+
+    remove_operation_summary_path(&path);
+}
+
+#[test]
+fn json_file_operation_summary_compaction_fails_closed_on_corrupt_record() {
+    let path = temp_operation_summary_path("compact-corrupt-record");
+    fs::create_dir_all(path.parent().expect("summary path should have parent"))
+        .expect("summary parent should be created");
+    fs::write(&path, "{not-json}\n").expect("corrupt summary record should be written");
+
+    let err = JsonFileOperationSummaryStore::new(&path)
+        .compact(OperationSummaryRetentionPolicy {
+            max_records: Some(1),
+            max_bytes: None,
+            max_rotated_files: 1,
+        })
+        .expect_err("corrupt operation summary compaction should fail closed");
+    let message = format!("{err}");
+
+    assert!(
+        message.contains("operation summary") && message.contains("line 1"),
+        "unexpected corrupt compaction error: {message}"
+    );
+    assert_eq!(
+        fs::read_to_string(&path).expect("corrupt active file should remain"),
+        "{not-json}\n"
+    );
+    assert!(
+        !operation_summary_archive_path(&path, 1).exists(),
+        "corrupt compaction should not rotate unreadable input"
+    );
+
+    remove_operation_summary_path(&path);
+}
+
 #[tokio::test]
 async fn service_can_record_operation_summaries_to_persistent_store() {
     let adapter_endpoint = start_drift_adapter().await;
@@ -575,4 +680,49 @@ fn remove_operation_summary_path(path: &std::path::Path) {
     if let Some(parent) = path.parent() {
         fs::remove_dir_all(parent).ok();
     }
+}
+
+fn recovery_event(index: usize) -> UnderlayEvent {
+    UnderlayEvent::recovery_completed(
+        format!("req-{index}"),
+        format!("trace-{index}"),
+        &RecoveryReport {
+            recovered: index,
+            in_doubt: 0,
+            pending: 0,
+            tx_ids: vec![format!("tx-{index}")],
+            decisions: Vec::new(),
+        },
+    )
+}
+
+fn padded_recovery_event(index: usize) -> UnderlayEvent {
+    let mut event = recovery_event(index);
+    event
+        .fields
+        .insert("padding".into(), format!("padding-{index}-{}", "x".repeat(64)));
+    event
+}
+
+fn summary_request_ids(summaries: &[OperationSummary]) -> Vec<&str> {
+    summaries
+        .iter()
+        .map(|summary| summary.request_id.as_str())
+        .collect()
+}
+
+fn operation_summary_jsonl_len(event: &UnderlayEvent) -> usize {
+    let summary = OperationSummary::from_event(event).expect("event should map to summary");
+    serde_json::to_vec(&summary)
+        .expect("summary should serialize")
+        .len()
+        + 1
+}
+
+fn operation_summary_archive_path(path: &std::path::Path, generation: usize) -> std::path::PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("summary path should have file name");
+    path.with_file_name(format!("{file_name}.{generation}"))
 }

@@ -10,12 +10,16 @@ use crate::state::{
     missing_shadow_state, DeviceShadowState, JsonFileShadowStateStore, ShadowStateStore,
 };
 use crate::telemetry::{
-    EventSink, JsonFileOperationSummaryStore, NoopEventSink, RecordingEventSink,
+    EventSink, JsonFileOperationSummaryStore, NoopEventSink, OperationSummaryRetentionPolicy,
+    RecordingEventSink,
 };
 use crate::worker::drift_auditor::{
     DriftAuditSchedule, DriftAuditWorker, DriftAuditor, DriftObservationSource,
 };
 use crate::worker::gc::{JournalGc, JournalGcSchedule, JournalGcWorker, RetentionPolicy};
+use crate::worker::operation_summary_compactor::{
+    OperationSummaryCompactionSchedule, OperationSummaryCompactionWorker,
+};
 use crate::worker::runtime::{UnderlayWorkerRuntime, UnderlayWorkerRuntimeReport};
 use crate::{UnderlayError, UnderlayResult};
 
@@ -32,6 +36,10 @@ pub struct UnderlayWorkerDaemonConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationSummaryDaemonConfig {
     pub path: PathBuf,
+    #[serde(default)]
+    pub retention: OperationSummaryRetentionPolicy,
+    #[serde(default)]
+    pub retention_schedule: WorkerScheduleConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,15 +99,24 @@ impl UnderlayWorkerDaemonConfig {
 
 impl UnderlayWorkerDaemon {
     pub fn from_config(config: UnderlayWorkerDaemonConfig) -> UnderlayResult<Self> {
-        let operation_summary_store = config
-            .operation_summary
-            .map(|config| Arc::new(JsonFileOperationSummaryStore::new(config.path)));
-        let event_sink: Arc<dyn EventSink> = match operation_summary_store {
+        let operation_summary_config = config.operation_summary;
+        let operation_summary_store = operation_summary_config
+            .as_ref()
+            .map(|config| Arc::new(JsonFileOperationSummaryStore::new(config.path.clone())));
+        let event_sink: Arc<dyn EventSink> = match operation_summary_store.clone() {
             Some(store) => Arc::new(RecordingEventSink::new(Arc::new(NoopEventSink), store)),
             None => Arc::new(NoopEventSink),
         };
 
         let mut runtime = UnderlayWorkerRuntime::new();
+        if let (Some(config), Some(store)) = (operation_summary_config, operation_summary_store) {
+            if config.retention.is_enabled() {
+                runtime = runtime.with_operation_summary_compaction(
+                    OperationSummaryCompactionWorker::new(store, config.retention),
+                    config.retention_schedule.into(),
+                );
+            }
+        }
         if let Some(config) = config.journal_gc {
             let mut gc = JournalGc::new(config.journal_root);
             if let Some(artifact_root) = config.artifact_root {
@@ -161,6 +178,15 @@ impl From<WorkerScheduleConfig> for JournalGcSchedule {
 }
 
 impl From<WorkerScheduleConfig> for DriftAuditSchedule {
+    fn from(config: WorkerScheduleConfig) -> Self {
+        Self {
+            interval_secs: config.interval_secs,
+            run_immediately: config.run_immediately,
+        }
+    }
+}
+
+impl From<WorkerScheduleConfig> for OperationSummaryCompactionSchedule {
     fn from(config: WorkerScheduleConfig) -> Self {
         Self {
             interval_secs: config.interval_secs,

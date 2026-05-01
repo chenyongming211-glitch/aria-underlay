@@ -3,7 +3,9 @@ use std::fs;
 
 use aria_underlay::model::{DeviceId, InterfaceConfig, VlanConfig};
 use aria_underlay::state::{DeviceShadowState, JsonFileShadowStateStore, ShadowStateStore};
-use aria_underlay::telemetry::JsonFileOperationSummaryStore;
+use aria_underlay::telemetry::{
+    JsonFileOperationSummaryStore, OperationSummaryRetentionPolicy, UnderlayEvent,
+};
 use aria_underlay::tx::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase};
 use aria_underlay::worker::daemon::{
     DriftAuditDaemonConfig, JournalGcDaemonConfig, OperationSummaryDaemonConfig,
@@ -32,6 +34,8 @@ async fn daemon_config_wires_gc_drift_and_persistent_operation_summaries() {
     let config = UnderlayWorkerDaemonConfig {
         operation_summary: Some(OperationSummaryDaemonConfig {
             path: operation_summary_path.clone(),
+            retention: OperationSummaryRetentionPolicy::default(),
+            retention_schedule: WorkerScheduleConfig::default(),
         }),
         journal_gc: Some(JournalGcDaemonConfig {
             journal_root: journal_root.clone(),
@@ -97,6 +101,57 @@ async fn daemon_config_wires_gc_drift_and_persistent_operation_summaries() {
             "journal.gc_completed"
         ]
     );
+
+    fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn daemon_config_wires_operation_summary_retention_worker() {
+    let temp = temp_test_dir("daemon-operation-summary-retention");
+    let operation_summary_path = temp.join("ops").join("summaries.jsonl");
+    let store = JsonFileOperationSummaryStore::new(&operation_summary_path);
+    for index in 1..=3 {
+        store
+            .record_event(&recovery_event(index))
+            .expect("operation summary should persist before daemon compaction");
+    }
+
+    let config = UnderlayWorkerDaemonConfig {
+        operation_summary: Some(OperationSummaryDaemonConfig {
+            path: operation_summary_path.clone(),
+            retention: OperationSummaryRetentionPolicy {
+                max_records: Some(1),
+                max_bytes: None,
+                max_rotated_files: 1,
+            },
+            retention_schedule: WorkerScheduleConfig {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+        }),
+        journal_gc: None,
+        drift_audit: None,
+    };
+
+    let report = UnderlayWorkerDaemon::from_config(config)
+        .expect("daemon config should build operation summary retention runtime")
+        .run_until_shutdown(async {})
+        .await
+        .expect("daemon retention worker should stop cleanly on shutdown");
+
+    assert_eq!(
+        report
+            .operation_summary_compaction
+            .as_ref()
+            .expect("operation summary compaction report should be present")
+            .runs,
+        1
+    );
+    let summaries = JsonFileOperationSummaryStore::new(&operation_summary_path)
+        .list()
+        .expect("compacted summaries should be readable");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].request_id, "req-3");
 
     fs::remove_dir_all(temp).ok();
 }
@@ -185,6 +240,20 @@ fn vlan(vlan_id: u16, name: &str) -> VlanConfig {
         name: Some(name.into()),
         description: None,
     }
+}
+
+fn recovery_event(index: usize) -> UnderlayEvent {
+    UnderlayEvent::recovery_completed(
+        format!("req-{index}"),
+        format!("trace-{index}"),
+        &aria_underlay::tx::recovery::RecoveryReport {
+            recovered: index,
+            in_doubt: 0,
+            pending: 0,
+            tx_ids: vec![format!("tx-{index}")],
+            decisions: Vec::new(),
+        },
+    )
 }
 
 fn temp_test_dir(name: &str) -> std::path::PathBuf {
