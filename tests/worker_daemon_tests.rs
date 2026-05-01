@@ -168,10 +168,10 @@ async fn daemon_config_wires_operation_alert_delivery_worker() {
     let checkpoint_path = temp.join("alerts").join("checkpoint.json");
     let summary_store = JsonFileOperationSummaryStore::new(&operation_summary_path);
     summary_store
-        .record_event(&recovery_event(1))
+        .record_event(&attention_recovery_event(1))
         .expect("attention-required operation summary should persist before alert delivery");
     summary_store
-        .record_event(&recovery_event(2))
+        .record_event(&attention_recovery_event(2))
         .expect("second attention-required operation summary should persist before alert delivery");
 
     let config = UnderlayWorkerDaemonConfig {
@@ -338,6 +338,20 @@ fn recovery_event(index: usize) -> UnderlayEvent {
             in_doubt: 0,
             pending: 0,
             tx_ids: vec![format!("tx-{index}")],
+            decisions: Vec::new(),
+        },
+    )
+}
+
+fn attention_recovery_event(index: usize) -> UnderlayEvent {
+    UnderlayEvent::recovery_completed(
+        format!("req-alert-{index}"),
+        format!("trace-alert-{index}"),
+        &aria_underlay::tx::recovery::RecoveryReport {
+            recovered: 0,
+            in_doubt: index,
+            pending: 0,
+            tx_ids: vec![format!("tx-alert-{index}")],
             decisions: Vec::new(),
         },
     )
