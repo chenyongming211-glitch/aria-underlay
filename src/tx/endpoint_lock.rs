@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
+use rand::Rng;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use crate::model::DeviceId;
@@ -64,16 +65,8 @@ impl EndpointLockTable {
             tokio::time::sleep(delay).await;
             delay = std::cmp::min(delay.saturating_mul(2), max_delay);
             if policy.jitter {
-                // Add up to 25% jitter to prevent thundering herd under contention.
-                let jitter_ns = (delay.as_nanos() / 4) as u64;
-                let jitter = std::time::Duration::from_nanos(
-                    (std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .subsec_nanos() as u64)
-                        % jitter_ns.max(1),
-                );
-                delay = delay.saturating_add(jitter);
+                let mut rng = rand::thread_rng();
+                delay = add_jitter(delay, &mut rng);
             }
         }
     }
@@ -104,4 +97,44 @@ fn ordered_device_ids(device_ids: &[DeviceId]) -> Vec<DeviceId> {
     ordered.sort();
     ordered.dedup();
     ordered
+}
+
+fn add_jitter<R: Rng + ?Sized>(delay: Duration, rng: &mut R) -> Duration {
+    // Add up to 25% jitter to prevent thundering herd under contention.
+    let jitter_ns = ((delay.as_nanos() / 4).min(u64::MAX as u128)) as u64;
+    if jitter_ns == 0 {
+        return delay;
+    }
+    delay.saturating_add(Duration::from_nanos(rng.gen_range(0..=jitter_ns)))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    use super::add_jitter;
+
+    #[test]
+    fn add_jitter_uses_rng_and_stays_within_twenty_five_percent_bound() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let base = Duration::from_millis(100);
+
+        for _ in 0..100 {
+            let jittered = add_jitter(base, &mut rng);
+
+            assert!(jittered >= base);
+            assert!(jittered <= Duration::from_millis(125));
+        }
+    }
+
+    #[test]
+    fn add_jitter_keeps_delay_when_bound_is_zero() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let base = Duration::from_nanos(3);
+
+        assert_eq!(add_jitter(base, &mut rng), base);
+    }
 }

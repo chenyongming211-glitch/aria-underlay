@@ -27,8 +27,8 @@ trusted as-is.
 | P2 | Rust `device/render.rs` renderer skeletons are dead code | Confirmed low-risk tech debt | Rust device module |
 | P2 | Python vendor driver stubs raise `NotImplementedError` on construction | Fixed in current P2 adapter hygiene package; CI validation pending | Python driver registry |
 | P2 | `_admin_state_to_text` duplicated with inconsistent defaults | Fixed in current P2 adapter hygiene package; CI validation pending | Python backend/renderer shared helper |
-| P2 | `SmallFabric` topology lacks explicit endpoint count semantics | Confirmed ambiguity | Intent validation + requirements docs |
-| P2 | endpoint lock jitter uses time-derived modulo instead of independent PRNG | Confirmed low-risk contention hardening | Rust endpoint lock |
+| P2 | `SmallFabric` topology lacks explicit endpoint count semantics | Fixed in current P2 Rust hardening package; CI validation pending | Intent validation + requirements docs |
+| P2 | endpoint lock jitter uses time-derived modulo instead of independent PRNG | Fixed in current P2 Rust hardening package; CI validation pending | Rust endpoint lock |
 | P2 | scope VLAN `int()` conversion has defensive error-message gap | Fixed in current P2 adapter hygiene package; CI validation pending | Python state scope helpers |
 
 ## Newly Confirmed 2026-04-30 Deep Review Findings
@@ -371,7 +371,7 @@ panics. CI validation pending for this package.
 
 ---
 
-## LOW — SmallFabric Topology Skips Endpoint Count Validation
+## RESOLVED LOW — SmallFabric Topology Skips Endpoint Count Validation
 
 **Files:** `src/intent/validation.rs:129-144`
 
@@ -379,15 +379,26 @@ panics. CI validation pending for this package.
 
 **Fix direction:** Add minimum endpoint count validation for SmallFabric, or document the intended range.
 
+**Resolution 2026-05-01:** Fixed in the P2 Rust hardening package.
+`SmallFabric` now has explicit endpoint semantics: at least two management
+endpoints and no hard-coded upper bound. Single-endpoint deployments should use
+`StackSingleManagementIp`. CI validation pending for this package.
+
 ---
 
-## LOW — Jitter Source Not Independently Random
+## RESOLVED LOW — Jitter Source Not Independently Random
 
 **Files:** `src/tx/endpoint_lock.rs:68-75`
 
 **Finding:** Jitter uses `SystemTime::now().subsec_nanos()` directly. Concurrent callers within the same sub-second window get correlated jitter values, slightly reducing thundering-herd protection. Exponential backoff still provides primary protection. Low practical impact.
 
 **Fix direction:** Use a proper PRNG (e.g., `rand::thread_rng()`) for independent jitter values.
+
+**Resolution 2026-05-01:** Fixed in the P2 Rust hardening package. Endpoint
+lock backoff now uses `rand::thread_rng()` through an `add_jitter` helper
+instead of deriving jitter from wall-clock nanoseconds. Unit coverage verifies
+the helper keeps jitter within the documented 25% bound. CI validation pending
+for this package.
 
 ---
 

@@ -101,7 +101,7 @@ pub enum UnderlayTopology {
 | --- | --- | --- |
 | `StackSingleManagementIp` | 1 | 堆叠/虚拟化集群，对外一个管理面 |
 | `MlagDualManagementIp` | 2 | 双 ToR / MLAG |
-| `SmallFabric` | 多个 | 少量交换机的小型管控域，不设硬编码数量上限 |
+| `SmallFabric` | 至少 2 个 | 少量交换机的小型管控域，不设硬编码数量上限 |
 
 ### 3.2 ManagementEndpoint
 

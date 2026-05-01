@@ -79,6 +79,17 @@ fn domain_rejects_mlag_with_one_management_endpoint() {
 }
 
 #[test]
+fn domain_rejects_small_fabric_with_one_management_endpoint() {
+    let intent = domain_intent(UnderlayTopology::SmallFabric);
+
+    let err = validate_underlay_domain_intent(&intent).unwrap_err();
+
+    assert!(format!("{err}").contains(
+        "small fabric topology requires at least two management endpoints"
+    ));
+}
+
+#[test]
 fn domain_rejects_trunk_with_duplicate_allowed_vlan() {
     let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
     intent.vlans.push(VlanIntent {

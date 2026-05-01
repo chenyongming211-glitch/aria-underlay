@@ -716,7 +716,8 @@ Aria Underlay 的产品初始化流程必须包含交换机录入步骤。
 
 客户在初始化产品或站点时，需要一次性录入第一阶段要接管的 underlay 管控域信息。当前实现仍保留两台交换机初始化入口用于 MLAG 双 ToR 兼容场景，但产品模型必须向 domain 初始化演进：
 
-- topology，例如堆叠单管理 IP、MLAG 双管理 IP、小规模多交换机。
+- topology，例如堆叠单管理 IP、MLAG 双管理 IP、小规模多交换机
+  (`SmallFabric` 至少两个 management endpoint，且不设硬编码上限)。
 - management endpoint 列表。
 - switch member 到 management endpoint 的映射关系。
 - 交换机管理 IP。
@@ -1014,6 +1015,7 @@ ExponentialBackoff
 - initial_delay_ms = 500。
 - max_delay_secs = 5。
 - jitter = true。
+- jitter 必须来自独立 PRNG，而不是 wall-clock timestamp 取模。
 
 锁获取失败必须产生：
 

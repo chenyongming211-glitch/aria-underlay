@@ -140,6 +140,12 @@ fn validate_topology_shape(intent: &UnderlayDomainIntent) -> UnderlayResult<()> 
                 intent.endpoints.len()
             )))
         }
+        UnderlayTopology::SmallFabric if intent.endpoints.len() < 2 => {
+            Err(UnderlayError::InvalidIntent(format!(
+                "small fabric topology requires at least two management endpoints, got {}",
+                intent.endpoints.len()
+            )))
+        }
         _ => Ok(()),
     }
 }

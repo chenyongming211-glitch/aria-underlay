@@ -99,8 +99,11 @@ fn small_fabric_has_no_hardcoded_endpoint_count_limit() {
 fn unknown_member_reference_fails_validation() {
     let intent = domain_intent(
         UnderlayTopology::SmallFabric,
-        vec![endpoint("sw-1")],
-        vec![member("sw-1-member", None, "sw-1")],
+        vec![endpoint("sw-1"), endpoint("sw-2")],
+        vec![
+            member("sw-1-member", None, "sw-1"),
+            member("sw-2-member", None, "sw-2"),
+        ],
         vec![access_interface("missing-member", "GE1/0/1")],
     );
 
