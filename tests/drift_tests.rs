@@ -7,8 +7,10 @@ use aria_underlay::model::{
 };
 use aria_underlay::state::drift::{detect_drift, DriftType};
 use aria_underlay::state::{DeviceShadowState, InMemoryShadowStateStore, ShadowStateStore};
+use aria_underlay::telemetry::{InMemoryEventSink, UnderlayEventKind};
 use aria_underlay::worker::drift_auditor::{
-    DriftAuditSnapshot, DriftAuditor, DriftObservationSource,
+    DriftAuditSchedule, DriftAuditSnapshot, DriftAuditWorker, DriftAuditor,
+    DriftObservationSource,
 };
 use aria_underlay::UnderlayResult;
 
@@ -95,6 +97,118 @@ async fn drift_auditor_can_compare_shadow_store_with_observed_source() {
     assert_eq!(reports.len(), 1);
     assert_eq!(reports[0].device_id.0, "leaf-a");
     assert_eq!(reports[0].findings[0].drift_type, DriftType::MissingVlan);
+}
+
+#[tokio::test]
+async fn drift_auditor_summary_counts_clean_and_drifted_devices() {
+    let clean = DriftAuditSnapshot {
+        expected: shadow_state("leaf-a", vec![vlan(100, "prod")], vec![]),
+        observed: shadow_state("leaf-a", vec![vlan(100, "prod")], vec![]),
+    };
+    let drifted = DriftAuditSnapshot {
+        expected: shadow_state("leaf-b", vec![vlan(100, "prod")], vec![]),
+        observed: shadow_state("leaf-b", vec![], vec![]),
+    };
+
+    let summary = DriftAuditor::new(vec![clean, drifted])
+        .run_once_with_summary()
+        .await
+        .expect("drift summary should succeed");
+
+    assert_eq!(summary.audited_devices, 2);
+    assert_eq!(summary.drifted_devices, vec![DeviceId("leaf-b".into())]);
+    assert_eq!(summary.reports.len(), 1);
+}
+
+#[tokio::test]
+async fn drift_audit_worker_emits_detected_and_completed_events() {
+    let sink = Arc::new(InMemoryEventSink::default());
+    let clean = DriftAuditSnapshot {
+        expected: shadow_state("leaf-a", vec![vlan(100, "prod")], vec![]),
+        observed: shadow_state("leaf-a", vec![vlan(100, "prod")], vec![]),
+    };
+    let drifted = DriftAuditSnapshot {
+        expected: shadow_state("leaf-b", vec![vlan(100, "prod")], vec![]),
+        observed: shadow_state("leaf-b", vec![], vec![]),
+    };
+    let worker = DriftAuditWorker::new(DriftAuditor::new(vec![clean, drifted]), sink.clone())
+        .with_request_context("req-drift", "trace-drift");
+
+    let summary = worker
+        .run_once_and_emit()
+        .await
+        .expect("drift worker should run once");
+
+    assert_eq!(summary.audited_devices, 2);
+    assert_eq!(summary.drifted_devices, vec![DeviceId("leaf-b".into())]);
+    let events = sink.events();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].kind, UnderlayEventKind::UnderlayDriftDetected);
+    assert_eq!(events[0].request_id, "req-drift");
+    assert_eq!(events[0].device_id, Some(DeviceId("leaf-b".into())));
+    assert_eq!(events[1].kind, UnderlayEventKind::UnderlayDriftAuditCompleted);
+    assert_eq!(
+        events[1].fields.get("audited_device_count").map(String::as_str),
+        Some("2")
+    );
+    assert_eq!(
+        events[1].fields.get("drifted_device_count").map(String::as_str),
+        Some("1")
+    );
+}
+
+#[tokio::test]
+async fn drift_audit_worker_periodic_runner_runs_immediate_cycle_and_stops_on_shutdown() {
+    let sink = Arc::new(InMemoryEventSink::default());
+    let drifted = DriftAuditSnapshot {
+        expected: shadow_state("leaf-a", vec![vlan(100, "prod")], vec![]),
+        observed: shadow_state("leaf-a", vec![], vec![]),
+    };
+    let worker = DriftAuditWorker::new(DriftAuditor::new(vec![drifted]), sink.clone());
+
+    let report = worker
+        .run_periodic_until_shutdown(
+            DriftAuditSchedule {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+            async {},
+        )
+        .await
+        .expect("periodic drift worker should stop cleanly on shutdown");
+
+    assert_eq!(report.runs, 1);
+    assert_eq!(
+        report
+            .last_summary
+            .expect("periodic worker should retain last summary")
+            .drifted_devices,
+        vec![DeviceId("leaf-a".into())]
+    );
+    assert_eq!(sink.events().len(), 2);
+}
+
+#[tokio::test]
+async fn drift_audit_worker_rejects_zero_second_periodic_interval() {
+    let sink = Arc::new(InMemoryEventSink::default());
+    let worker = DriftAuditWorker::new(DriftAuditor::default(), sink);
+
+    let err = worker
+        .run_periodic_until_shutdown(
+            DriftAuditSchedule {
+                interval_secs: 0,
+                run_immediately: false,
+            },
+            async {},
+        )
+        .await
+        .expect_err("zero interval should fail closed");
+    let message = format!("{err}");
+
+    assert!(
+        message.contains("interval_secs"),
+        "unexpected drift interval validation error: {message}"
+    );
 }
 
 #[derive(Debug)]

@@ -53,7 +53,7 @@ These older claims should not be re-opened unless new evidence appears:
 | Rust API architecture | `AriaUnderlayService` still needs a thinner facade over time | Apply, recovery, and admin-operation coordinators now own the main orchestration flows. The remaining architecture work is to keep future flows from leaking back into the facade and to split drift audit if it grows. | Keep new transaction/admin logic in the coordinator modules; consider a dedicated drift coordinator if the audit loop expands. |
 | Operations | Audit/metrics still need external sink integration | Force-resolve, drift audit, GC, recovery, and transaction InDoubt events now map into queryable operation summaries and metrics counters. The remaining work is integration with a persistent audit backend or UI/API query surface. | Wire `OperationSummary` output into the chosen production audit store and expose an operator query API when product requirements are fixed. |
 | GC | GC still needs external deployment integration | `run_once`, retention policy, periodic worker entrypoint, event emission, and deletion summaries now exist. Production still needs wiring into the actual daemon lifecycle, persistent audit sink, and any site-specific disk quota policy. | Mount `JournalGcWorker::run_periodic_until_shutdown` from the production process once daemon lifecycle/shutdown ownership is fixed. |
-| Drift | Drift auditor lacks a full background operational loop | Current one-shot audit works, but production needs cadence, alerting, and clear lifecycle/reporting semantics. | Add scheduler-facing summary and metrics; keep AutoReconcile fail-closed until explicitly designed. |
+| Drift | Drift auditor still needs daemon integration | One-shot audit, scheduler-facing summary, event emission, and periodic worker entrypoint now exist. Production still needs wiring into the actual daemon lifecycle and alert delivery path. | Mount `DriftAuditWorker::run_periodic_until_shutdown` from the production process once daemon lifecycle/shutdown ownership is fixed; keep AutoReconcile fail-closed until explicitly designed. |
 | Real NETCONF parser | Huawei/H3C state parsers are fixture-verified only | Fixture XML proves parser boundaries, not real device namespace and field behavior. | When hardware is available, collect running XML and promote only after validator + tests pass. |
 | Real NETCONF renderer | Huawei/H3C renderers are still skeletons | Snapshot rendering is useful, but real devices may reject the XML. | Keep production prepare fail-closed; add vendor profile tests and later real-device validation. |
 
@@ -73,8 +73,8 @@ These older claims should not be re-opened unless new evidence appears:
 
 The next no-real-switch sequence is:
 
-1. Add a drift background audit loop with operator-facing status.
-2. Expose operation summaries through the chosen API/CLI surface.
-3. Continue expanding transaction process chaos kill points.
+1. Expose operation summaries through the chosen API/CLI surface.
+2. Continue expanding transaction process chaos kill points.
+3. Add persistent audit sink integration when the product storage target is fixed.
 4. Revisit real-device parser/renderer only after hardware or captured XML is
    available.
