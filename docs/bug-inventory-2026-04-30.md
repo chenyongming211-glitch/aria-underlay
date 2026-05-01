@@ -24,12 +24,12 @@ trusted as-is.
 | P1 | Product initialization/register accepts invalid connection inputs | Fixed in `8ca1aec`; GitHub Actions run `25175796255` passed | Rust bootstrap/registration validation |
 | P1 | Additional adapter error details dropped from journal diagnostics | Fixed in `e76e961`; GitHub Actions run `25176070652` passed | Rust error/journal mapping |
 | P2 | `TrustOnFirstUse` currently behaves as strict known-hosts verification, not TOFU | Fixed in `817607d`; GitHub Actions run `25197588455` passed | Python NETCONF backend + host-key trust store |
-| P2 | Rust `device/render.rs` renderer skeletons are dead code | Fixed in current P2 renderer cleanup package; CI validation pending | Rust device module |
-| P2 | Python vendor driver stubs raise `NotImplementedError` on construction | Fixed in current P2 adapter hygiene package; CI validation pending | Python driver registry |
-| P2 | `_admin_state_to_text` duplicated with inconsistent defaults | Fixed in current P2 adapter hygiene package; CI validation pending | Python backend/renderer shared helper |
-| P2 | `SmallFabric` topology lacks explicit endpoint count semantics | Fixed in current P2 Rust hardening package; CI validation pending | Intent validation + requirements docs |
-| P2 | endpoint lock jitter uses time-derived modulo instead of independent PRNG | Fixed in current P2 Rust hardening package; CI validation pending | Rust endpoint lock |
-| P2 | scope VLAN `int()` conversion has defensive error-message gap | Fixed in current P2 adapter hygiene package; CI validation pending | Python state scope helpers |
+| P2 | Rust `device/render.rs` renderer skeletons are dead code | Fixed in `d286f3b`; GitHub Actions run `25198279834` passed | Rust device module |
+| P2 | Python vendor driver stubs raise `NotImplementedError` on construction | Fixed in `a3cc43a`; GitHub Actions run `25197914750` passed | Python driver registry |
+| P2 | `_admin_state_to_text` duplicated with inconsistent defaults | Fixed in `a3cc43a`; GitHub Actions run `25197914750` passed | Python backend/renderer shared helper |
+| P2 | `SmallFabric` topology lacks explicit endpoint count semantics | Fixed in `9808ef7`; GitHub Actions run `25198141224` passed | Intent validation + requirements docs |
+| P2 | endpoint lock jitter uses time-derived modulo instead of independent PRNG | Fixed in `9808ef7`; GitHub Actions run `25198141224` passed | Rust endpoint lock |
+| P2 | scope VLAN `int()` conversion has defensive error-message gap | Fixed in `a3cc43a`; GitHub Actions run `25197914750` passed | Python state scope helpers |
 
 ## Newly Confirmed 2026-04-30 Deep Review Findings
 
@@ -333,10 +333,11 @@ fingerprint.
 
 **Fix direction:** Remove the four renderer structs, the trait, and `renderer_for_vendor()`, or wire them to the Python adapter.
 
-**Resolution 2026-05-01:** Fixed in the P2 renderer cleanup package. The Rust
+**Resolution 2026-05-01:** Fixed in `d286f3b`; GitHub Actions run
+`25198279834` passed. The Rust
 `device/render.rs` module, its re-exports, and the tests that only exercised
 the dead skeletons were removed. Production rendering remains Python-side via
-the adapter renderer registry. CI validation pending for this package.
+the adapter renderer registry.
 
 ---
 
@@ -353,11 +354,11 @@ Currently unreachable in production because `interface_to_proto` only maps `Up(1
 
 **Fix direction:** Consolidate to a single shared implementation.
 
-**Resolution 2026-05-01:** Fixed in the P2 adapter hygiene package. NETCONF,
+**Resolution 2026-05-01:** Fixed in `a3cc43a`; GitHub Actions run
+`25197914750` passed. NETCONF,
 mock backend, and renderer code now share one `admin_state_to_text` helper.
 Unspecified/zero admin state is normalized as `"up"` consistently, and
-regression coverage checks NETCONF, mock, and renderer callers. CI validation
-pending for this package.
+regression coverage checks NETCONF, mock, and renderer callers.
 
 ---
 
@@ -369,10 +370,11 @@ pending for this package.
 
 **Fix direction:** Move the error to the driver factory so unsupported vendors fail at lookup time.
 
-**Resolution 2026-05-01:** Fixed in the P2 adapter hygiene package. Unsupported
+**Resolution 2026-05-01:** Fixed in `a3cc43a`; GitHub Actions run
+`25197914750` passed. Unsupported
 vendor stubs are now constructable and fail closed when an operation is invoked,
 so registry/import paths can inspect them without triggering construction-time
-panics. CI validation pending for this package.
+panics.
 
 ---
 
@@ -384,10 +386,11 @@ panics. CI validation pending for this package.
 
 **Fix direction:** Add minimum endpoint count validation for SmallFabric, or document the intended range.
 
-**Resolution 2026-05-01:** Fixed in the P2 Rust hardening package.
+**Resolution 2026-05-01:** Fixed in `9808ef7`; GitHub Actions run
+`25198141224` passed.
 `SmallFabric` now has explicit endpoint semantics: at least two management
 endpoints and no hard-coded upper bound. Single-endpoint deployments should use
-`StackSingleManagementIp`. CI validation pending for this package.
+`StackSingleManagementIp`.
 
 ---
 
@@ -399,11 +402,11 @@ endpoints and no hard-coded upper bound. Single-endpoint deployments should use
 
 **Fix direction:** Use a proper PRNG (e.g., `rand::thread_rng()`) for independent jitter values.
 
-**Resolution 2026-05-01:** Fixed in the P2 Rust hardening package. Endpoint
+**Resolution 2026-05-01:** Fixed in `9808ef7`; GitHub Actions run
+`25198141224` passed. Endpoint
 lock backoff now uses `rand::thread_rng()` through an `add_jitter` helper
 instead of deriving jitter from wall-clock nanoseconds. Unit coverage verifies
-the helper keeps jitter within the documented 25% bound. CI validation pending
-for this package.
+the helper keeps jitter within the documented 25% bound.
 
 ---
 
@@ -415,7 +418,8 @@ for this package.
 
 **Fix direction:** Add explicit error message if `int()` conversion fails.
 
-**Resolution 2026-05-01:** Fixed in the P2 adapter hygiene package. NETCONF
+**Resolution 2026-05-01:** Fixed in `a3cc43a`; GitHub Actions run
+`25197914750` passed. NETCONF
 state filter construction and fixture state parser scope filtering now convert
 scope VLAN IDs with per-index error context and return structured AdapterError
-instead of leaking a bare `ValueError`. CI validation pending for this package.
+instead of leaking a bare `ValueError`.
