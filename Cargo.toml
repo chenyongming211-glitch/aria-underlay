@@ -7,6 +7,10 @@ edition = "2021"
 name = "aria_underlay"
 path = "src/lib.rs"
 
+[[bin]]
+name = "aria-underlay-worker"
+path = "src/bin/aria_underlay_worker.rs"
+
 [dependencies]
 async-trait = "0.1"
 dashmap = "6"
