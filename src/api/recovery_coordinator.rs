@@ -9,18 +9,20 @@ use crate::api::recovery_ops::{
     recover_phase_from_adapter_status,
 };
 use crate::device::DeviceInventory;
+use crate::state::{DeviceShadowState, ShadowStateStore};
 use crate::telemetry::{EventSink, UnderlayEvent};
 use crate::tx::recovery::{classify_recovery, RecoveryAction, RecoveryReport};
 use crate::tx::{
     EndpointLockTable, TransactionStrategy, TxContext, TxJournalRecord, TxJournalStore, TxPhase,
 };
-use crate::UnderlayResult;
+use crate::{UnderlayError, UnderlayResult};
 
 #[derive(Clone)]
 pub(crate) struct RecoveryCoordinator {
     inventory: DeviceInventory,
     journal: Arc<dyn TxJournalStore>,
     endpoint_locks: EndpointLockTable,
+    shadow_store: Arc<dyn ShadowStateStore>,
     event_sink: Arc<dyn EventSink>,
     adapter_pool: AdapterClientPool,
 }
@@ -30,6 +32,7 @@ impl RecoveryCoordinator {
         inventory: DeviceInventory,
         journal: Arc<dyn TxJournalStore>,
         endpoint_locks: EndpointLockTable,
+        shadow_store: Arc<dyn ShadowStateStore>,
         event_sink: Arc<dyn EventSink>,
         adapter_pool: AdapterClientPool,
     ) -> Self {
@@ -37,6 +40,7 @@ impl RecoveryCoordinator {
             inventory,
             journal,
             endpoint_locks,
+            shadow_store,
             event_sink,
             adapter_pool,
         }
@@ -74,6 +78,18 @@ impl RecoveryCoordinator {
                         Ok(phase) => {
                             let terminal =
                                 matches!(phase, TxPhase::Committed | TxPhase::RolledBack);
+                            if phase == TxPhase::Committed {
+                                if let Err(err) = self.persist_recovered_shadow(&record) {
+                                    let (code, message) = journal_error_fields(&err);
+                                    self.journal.put(
+                                        &record
+                                            .clone()
+                                            .with_phase(TxPhase::InDoubt)
+                                            .with_error(code, message),
+                                    )?;
+                                    continue;
+                                }
+                            }
                             self.journal.put(&record.clone().with_phase(phase))?;
                             if terminal {
                                 recovered += 1;
@@ -273,5 +289,20 @@ impl RecoveryCoordinator {
         }
 
         Ok(merged_phase.unwrap_or(TxPhase::InDoubt))
+    }
+
+    fn persist_recovered_shadow(&self, record: &TxJournalRecord) -> UnderlayResult<()> {
+        for device_id in &record.devices {
+            let desired = desired_state_for_record(record, device_id).ok_or_else(|| {
+                UnderlayError::InvalidDeviceState(format!(
+                    "journal record {} has no desired state for recovered device {}",
+                    record.tx_id, device_id.0
+                ))
+            })?;
+            self.shadow_store
+                .put(DeviceShadowState::from_desired(desired, 0))?;
+        }
+
+        Ok(())
     }
 }

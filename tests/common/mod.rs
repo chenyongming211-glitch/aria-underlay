@@ -47,6 +47,13 @@ pub async fn start_test_adapter(adapter: TestAdapter) -> String {
         std::net::TcpListener::bind("127.0.0.1:0").expect("test adapter listener should bind");
     let addr = listener.local_addr().expect("test adapter addr should exist");
     drop(listener);
+    start_test_adapter_at(adapter, addr).await
+}
+
+pub async fn start_test_adapter_at(
+    adapter: TestAdapter,
+    addr: std::net::SocketAddr,
+) -> String {
     tokio::spawn(async move {
         tonic::transport::Server::builder()
             .add_service(UnderlayAdapterServer::new(adapter))

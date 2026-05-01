@@ -49,7 +49,7 @@ These older claims should not be re-opened unless new evidence appears:
 
 | Area | Item | Why it matters | Next action |
 | --- | --- | --- | --- |
-| Transactions | Crash/restart matrix still needs process-level chaos coverage | File-backed restart coverage now includes pending recovery, `ForceResolved` restart, successful shadow persistence, terminal `Committed` / `Failed` / `RolledBack` filtering, corrupt journal/shadow fail-closed behavior, and `.tmp` residue handling. The remaining gap is process-kill / adapter session-drop chaos rather than basic store recreation. | Add a process-level crash harness and adapter session-drop scenarios when the test infrastructure can launch/kill the service process. |
+| Transactions | Crash/restart matrix still needs broader process-level chaos coverage | File-backed restart coverage now includes pending recovery, `ForceResolved` restart, successful shadow persistence, terminal `Committed` / `Failed` / `RolledBack` filtering, corrupt journal/shadow fail-closed behavior, `.tmp` residue handling, and a process child that exits during `FinalConfirming`. Recovery now writes shadow before terminal `Committed` journal on roll-forward. Remaining coverage gaps are broader kill points such as `Preparing` / `Committing` and longer adapter reconnect sequences. | Extend the process chaos harness to additional phases and multi-device records. |
 | Rust API architecture | `AriaUnderlayService` still needs a thinner facade over time | Apply, recovery, and admin-operation coordinators now own the main orchestration flows. The remaining architecture work is to keep future flows from leaking back into the facade and to split drift audit if it grows. | Keep new transaction/admin logic in the coordinator modules; consider a dedicated drift coordinator if the audit loop expands. |
 | Operations | Audit/metrics still need external sink integration | Force-resolve, drift audit, GC, recovery, and transaction InDoubt events now map into queryable operation summaries and metrics counters. The remaining work is integration with a persistent audit backend or UI/API query surface. | Wire `OperationSummary` output into the chosen production audit store and expose an operator query API when product requirements are fixed. |
 | GC | GC is implemented but not fully productionized | `run_once` and retention policy exist; production still needs scheduling, quota thinking, and clearer audit output. | Wire GC into a periodic worker path and expose retention / deletion summaries. |
@@ -73,8 +73,8 @@ These older claims should not be re-opened unless new evidence appears:
 
 The next no-real-switch sequence is:
 
-1. Expand transaction crash/restart tests.
-2. Continue splitting Rust service orchestration into coordinators.
-3. Add audit/metrics operation summaries.
+1. Productionize journal/artifact GC scheduling and deletion summaries.
+2. Add a drift background audit loop with operator-facing status.
+3. Expose operation summaries through the chosen API/CLI surface.
 4. Revisit real-device parser/renderer only after hardware or captured XML is
    available.

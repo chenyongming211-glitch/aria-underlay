@@ -179,6 +179,7 @@ impl AriaUnderlayService {
             self.inventory.clone(),
             self.journal.clone(),
             self.endpoint_locks.clone(),
+            self.shadow_store.clone(),
             self.event_sink.clone(),
             self.adapter_pool.clone(),
         )
