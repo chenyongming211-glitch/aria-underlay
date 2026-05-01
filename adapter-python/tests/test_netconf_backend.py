@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from aria_underlay_adapter.backends import netconf as netconf_module
+from aria_underlay_adapter.backends import netconf_hostkey
 from aria_underlay_adapter.backends.netconf import (
     BASE_10,
     CANDIDATE,
@@ -144,7 +145,7 @@ def test_ncclient_backend_tofu_fails_closed_when_trust_store_write_fails(
     def fail_write(*_args, **_kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr(netconf_module, "_atomic_write_text", fail_write)
+    monkeypatch.setattr(netconf_hostkey, "atomic_write_text", fail_write)
     backend = NcclientNetconfBackend(
         host="192.0.2.10",
         port=830,
