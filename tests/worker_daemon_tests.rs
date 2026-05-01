@@ -101,8 +101,8 @@ async fn daemon_config_wires_gc_drift_and_persistent_operation_summaries() {
     fs::remove_dir_all(temp).ok();
 }
 
-#[test]
-fn daemon_config_file_rejects_invalid_worker_schedule_before_start() {
+#[tokio::test]
+async fn daemon_config_file_rejects_invalid_worker_schedule_before_start() {
     let temp = temp_test_dir("daemon-invalid-schedule");
     let config_path = temp.join("worker.json");
     let config_json = format!(
