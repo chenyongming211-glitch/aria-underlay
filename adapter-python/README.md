@@ -5,12 +5,35 @@ Python southbound adapter for Aria Underlay.
 The adapter is intentionally limited to device-facing work:
 
 - capability probe
-- NETCONF / NAPALM / Netmiko backends
+- NETCONF backend
+- NAPALM / Netmiko backend plans, not implemented code paths
 - vendor driver translation
-- device-level diff
-- rollback artifacts
+- vendor renderer and running state parser selection
+- device-level prepare / commit / rollback / verify
+- offline parser and renderer qualification tools
 
 Rust owns global transaction semantics and final operation status.
+
+## Current readiness
+
+Implemented and CI-covered:
+
+- fake and mock drivers for local integration tests
+- ncclient-based NETCONF backend
+- fail-closed renderer and state-parser registries
+- TOFU known-host trust store and known-hosts policy wiring
+- dry-run candidate rendering preflight without opening a device session
+- offline `aria-underlay-state-parse`
+- offline `aria-underlay-render-snapshot`
+
+Not production-ready yet:
+
+- Huawei/H3C renderers are still skeleton renderers and are rejected by real
+  NETCONF prepare unless explicitly marked `production_ready=True` after review.
+- Huawei/H3C state parsers are fixture-verified only. They need real-device
+  running XML samples before production use.
+- Cisco/Ruijie renderers and state parsers are not implemented.
+- NAPALM and Netmiko backends are not implemented.
 
 Generate Python protobuf stubs after dependencies are installed:
 

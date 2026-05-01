@@ -15,9 +15,9 @@ Rust Underlay Core（主控 / 大脑）
     v
 Python Underlay Adapter（适配器 / 双手）
     |
-    +-- ncclient / NETCONF
-    +-- NAPALM
-    +-- Netmiko / SSH CLI
+    +-- ncclient / NETCONF（当前可用路径）
+    +-- NAPALM（规划中，未实现）
+    +-- Netmiko / SSH CLI（规划中，未实现）
     |
     v
 Physical Switches
@@ -40,11 +40,11 @@ Rust 主控负责：
 Python Adapter 负责：
 
 - 厂商 driver
-- NETCONF / NAPALM / Netmiko / SSH CLI 后端
+- NETCONF 后端
+- NAPALM / Netmiko / SSH CLI 降级后端规划
 - capability probe
-- 设备级 diff
-- rollback artifact
-- 单设备 prepare / commit / rollback / verify
+- 厂商 renderer / running state parser
+- 设备级 prepare / commit / rollback / verify
 
 核心原则：
 
@@ -53,16 +53,24 @@ Rust 负责事务语义和平台一致性
 Python 负责厂商适配和设备脏活
 ```
 
-## 当前阶段
+## 当前状态
 
-当前仓库处于 Sprint 0 初始化阶段，已包含：
+当前仓库已经越过 Sprint 0 骨架阶段，重点在“无真实交换机条件下把事务可靠性、适配器边界和厂商 XML 工具链做稳”。
 
-- Rust crate 骨架
-- Python Adapter 骨架
-- gRPC / Protobuf 初版契约
-- Device Registration / Onboarding 初始模型
-- GitHub Actions CI
-- 需求、开发方案和详细实施计划文档
+已经具备：
+
+- Rust Core：intent validation、planner、diff/normalize、事务 journal、endpoint lock、recovery、drift audit、GC worker、force-resolve、adapter client pool。
+- Python Adapter：fake/mock backend、NETCONF backend、fail-closed renderer/parser registry、TOFU known-host trust store、dry-run preflight、offline state parser validator、offline renderer snapshot validator。
+- gRPC / Protobuf：Rust Core 和 Python Adapter 的 10 个设备操作 RPC 契约。
+- CI：Rust、Python adapter、fake adapter integration matrix 已接入 GitHub Actions。
+
+仍然明确不是生产完成：
+
+- Huawei/H3C renderer 仍是 skeleton，只能离线 snapshot，默认不能进入真实 `prepare` 下发路径。
+- Huawei/H3C running state parser 只是 fixture-verified，仍需要真实设备 XML 验证后才能 `production_ready=True`。
+- Cisco/Ruijie renderer/parser 未实现。
+- NAPALM / Netmiko / SSH CLI 后端未实现。
+- fingerprint-only host-key pinning、完整现场 audit/metrics、真实设备联调仍是后续工作。
 
 ## 文档
 
@@ -77,9 +85,8 @@ Python 负责厂商适配和设备脏活
 推荐开发顺序：
 
 ```text
-1. 完善 proto/aria_underlay_adapter.proto
-2. 跑通 Python fake Adapter
-3. 跑通 Rust -> Python GetCapabilities
-4. 完成 Device Registration / Onboarding 闭环
-5. 再进入 NETCONF capability probe
+1. 保持事务正确性优先：新增功能必须补 crash/recovery、journal/shadow、drift/verify 相关测试。
+2. 在没有真实交换机时，继续强化 parser fixture、renderer snapshot、dry-run、audit/metrics 和代码边界。
+3. 真实交换机到位后，先采集 running XML 并验证 parser，再验证 renderer 下发。
+4. 只有真实样本和测试闭环通过后，才允许厂商 renderer/parser 提升到 production_ready=True。
 ```
