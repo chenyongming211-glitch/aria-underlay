@@ -23,13 +23,13 @@ trusted as-is.
 | P1 | File-backed journal/shadow writes are not production-durable under concurrent writes or crash | Fixed in `3f15941`; GitHub Actions run `25176390555` passed | Rust journal/shadow persistence |
 | P1 | Product initialization/register accepts invalid connection inputs | Fixed in `8ca1aec`; GitHub Actions run `25175796255` passed | Rust bootstrap/registration validation |
 | P1 | Additional adapter error details dropped from journal diagnostics | Fixed in `e76e961`; GitHub Actions run `25176070652` passed | Rust error/journal mapping |
-| P2 | `TrustOnFirstUse` currently behaves as strict known-hosts verification, not TOFU | Fixed in current P2 TOFU package; CI validation pending | Python NETCONF backend + host-key trust store |
+| P2 | `TrustOnFirstUse` currently behaves as strict known-hosts verification, not TOFU | Fixed in `817607d`; GitHub Actions run `25197588455` passed | Python NETCONF backend + host-key trust store |
 | P2 | Rust `device/render.rs` renderer skeletons are dead code | Confirmed low-risk tech debt | Rust device module |
-| P2 | Python vendor driver stubs raise `NotImplementedError` on construction | Confirmed low-risk tech debt | Python driver registry |
-| P2 | `_admin_state_to_text` duplicated with inconsistent defaults | Confirmed low-risk fidelity gap | Python backend/renderer shared helper |
+| P2 | Python vendor driver stubs raise `NotImplementedError` on construction | Fixed in current P2 adapter hygiene package; CI validation pending | Python driver registry |
+| P2 | `_admin_state_to_text` duplicated with inconsistent defaults | Fixed in current P2 adapter hygiene package; CI validation pending | Python backend/renderer shared helper |
 | P2 | `SmallFabric` topology lacks explicit endpoint count semantics | Confirmed ambiguity | Intent validation + requirements docs |
 | P2 | endpoint lock jitter uses time-derived modulo instead of independent PRNG | Confirmed low-risk contention hardening | Rust endpoint lock |
-| P2 | scope VLAN `int()` conversion has defensive error-message gap | Confirmed low-risk hardening | Python state scope helpers |
+| P2 | scope VLAN `int()` conversion has defensive error-message gap | Fixed in current P2 adapter hygiene package; CI validation pending | Python state scope helpers |
 
 ## Newly Confirmed 2026-04-30 Deep Review Findings
 
@@ -233,7 +233,8 @@ hosts set.
 on unknown host, persist the first key atomically, verify subsequent keys
 against the stored key, and audit first-use acceptance.
 
-**Resolution 2026-05-01:** Fixed in the P2 TOFU package. Python adapter now has
+**Resolution 2026-05-01:** Fixed in `817607d`; GitHub Actions run
+`25197588455` passed. Python adapter now has
 a configurable TOFU trust store (`ARIA_UNDERLAY_TOFU_KNOWN_HOSTS_FILE`, default
 `/tmp/aria-underlay-adapter/tofu_known_hosts`). First use persists the observed
 remote host key atomically before returning the session; later connects use
@@ -334,7 +335,7 @@ fingerprint.
 
 ---
 
-## LOW — _admin_state_to_text: Three Implementations, Two Behaviors
+## RESOLVED LOW — _admin_state_to_text: Three Implementations, Two Behaviors
 
 **Files:** `backends/netconf.py:810-815`, `backends/mock_netconf.py:510-515`, `renderers/common.py:189-194`
 
@@ -347,15 +348,26 @@ Currently unreachable in production because `interface_to_proto` only maps `Up(1
 
 **Fix direction:** Consolidate to a single shared implementation.
 
+**Resolution 2026-05-01:** Fixed in the P2 adapter hygiene package. NETCONF,
+mock backend, and renderer code now share one `admin_state_to_text` helper.
+Unspecified/zero admin state is normalized as `"up"` consistently, and
+regression coverage checks NETCONF, mock, and renderer callers. CI validation
+pending for this package.
+
 ---
 
-## LOW — Five Python Driver Stubs That Crash on Construction
+## RESOLVED LOW — Five Python Driver Stubs That Crash on Construction
 
 **Files:** `drivers/ruijie.py:5`, `drivers/legacy_cli.py:5`, `drivers/h3c.py:5`, `drivers/cisco.py:5`, `drivers/huawei.py:5`
 
 **Finding:** Each class `__init__` immediately raises `NotImplementedError`. Any code path that instantiates them will panic at runtime rather than getting a clear "unsupported vendor" error.
 
 **Fix direction:** Move the error to the driver factory so unsupported vendors fail at lookup time.
+
+**Resolution 2026-05-01:** Fixed in the P2 adapter hygiene package. Unsupported
+vendor stubs are now constructable and fail closed when an operation is invoked,
+so registry/import paths can inspect them without triggering construction-time
+panics. CI validation pending for this package.
 
 ---
 
@@ -379,10 +391,15 @@ Currently unreachable in production because `interface_to_proto` only maps `Up(1
 
 ---
 
-## LOW — _normalized_scope_vlan_ids Defensive Gap
+## RESOLVED LOW — _normalized_scope_vlan_ids Defensive Gap
 
 **Files:** `backends/netconf.py:649`, `renderers/common.py:105`
 
 **Finding:** `int(vlan_id)` in set comprehensions without try/except. Protobuf uint32 prevents non-numeric values, so no current trigger. Defensive hardening only.
 
 **Fix direction:** Add explicit error message if `int()` conversion fails.
+
+**Resolution 2026-05-01:** Fixed in the P2 adapter hygiene package. NETCONF
+state filter construction and fixture state parser scope filtering now convert
+scope VLAN IDs with per-index error context and return structured AdapterError
+instead of leaking a bare `ValueError`. CI validation pending for this package.

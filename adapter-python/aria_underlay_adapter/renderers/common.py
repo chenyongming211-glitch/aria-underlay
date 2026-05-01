@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from aria_underlay_adapter.normalization import admin_state_to_text
 from aria_underlay_adapter.renderers.base import render_edit_config_document
 from aria_underlay_adapter.renderers.xml import NETCONF_BASE_NAMESPACE
 from aria_underlay_adapter.renderers.xml import XmlElement
@@ -187,8 +188,4 @@ def _validate_vlan_id(value, field: str) -> int:
 
 
 def _admin_state_text(value) -> str:
-    if value in {"up", "UP", 1}:
-        return "up"
-    if value in {"down", "DOWN", 2}:
-        return "down"
-    return str(value).lower()
+    return admin_state_to_text(value)

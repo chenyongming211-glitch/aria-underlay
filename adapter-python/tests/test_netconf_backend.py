@@ -18,6 +18,7 @@ from aria_underlay_adapter.backends.netconf import (
     NcclientNetconfBackend,
     NetconfBackend,
     _adapter_error_from_ncclient_exception,
+    _admin_state_to_text,
     build_state_filter,
     capability_from_raw,
 )
@@ -801,6 +802,24 @@ def test_build_state_filter_rejects_invalid_vlan_scope():
         assert error.retryable is False
     else:
         raise AssertionError("invalid state scope should fail closed")
+
+
+def test_build_state_filter_rejects_non_integer_vlan_scope_with_context():
+    scope = _Scope(full=False, vlan_ids=["not-a-vlan"], interface_names=[])
+
+    try:
+        build_state_filter(scope)
+    except AdapterError as error:
+        assert error.code == "INVALID_STATE_SCOPE"
+        assert "scope.vlan_ids[0] must be an integer" in error.raw_error_summary
+    else:
+        raise AssertionError("non-integer state scope should fail closed")
+
+
+def test_admin_state_text_uses_shared_default_for_unspecified_values():
+    assert _admin_state_to_text(0) == "up"
+    assert _admin_state_to_text(None) == "up"
+    assert _admin_state_to_text("DOWN") == "down"
 
 
 def test_get_current_state_empty_scope_returns_empty_state_without_device_read():

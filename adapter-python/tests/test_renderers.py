@@ -5,6 +5,7 @@ from xml.etree import ElementTree
 import pytest
 
 from aria_underlay_adapter.errors import AdapterError
+from aria_underlay_adapter.renderers.common import _admin_state_text
 from aria_underlay_adapter.renderers.h3c import H3cRenderer
 from aria_underlay_adapter.renderers.huawei import HuaweiRenderer
 from aria_underlay_adapter.renderers.xml import NETCONF_BASE_NAMESPACE
@@ -36,6 +37,12 @@ def test_xml_renderer_escapes_text():
     xml = render_xml(XmlElement("description", children=["a & b < c"]))
 
     assert xml == "<description>a &amp; b &lt; c</description>"
+
+
+def test_renderer_admin_state_text_matches_netconf_default_for_unspecified_values():
+    assert _admin_state_text(0) == "up"
+    assert _admin_state_text(None) == "up"
+    assert _admin_state_text("DOWN") == "down"
 
 
 @pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])

@@ -1,5 +1,5 @@
-class H3cDriver:
-    """Not yet implemented."""
+from aria_underlay_adapter.drivers.unsupported import UnsupportedDriver
 
-    def __init__(self, *args, **kwargs):
-        raise NotImplementedError("H3cDriver is not yet implemented")
+
+class H3cDriver(UnsupportedDriver):
+    vendor_name = "H3c"

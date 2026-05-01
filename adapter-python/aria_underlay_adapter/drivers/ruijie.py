@@ -1,5 +1,5 @@
-class RuijieDriver:
-    """Not yet implemented."""
+from aria_underlay_adapter.drivers.unsupported import UnsupportedDriver
 
-    def __init__(self, *args, **kwargs):
-        raise NotImplementedError("RuijieDriver is not yet implemented")
+
+class RuijieDriver(UnsupportedDriver):
+    vendor_name = "Ruijie"

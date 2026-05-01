@@ -1,7 +1,11 @@
 import pytest
 from types import SimpleNamespace
 
-from aria_underlay_adapter.backends.mock_netconf import MockNetconfBackend, _normalize_mode
+from aria_underlay_adapter.backends.mock_netconf import (
+    MockNetconfBackend,
+    _admin_state_to_text,
+    _normalize_mode,
+)
 from aria_underlay_adapter.errors import AdapterError
 
 
@@ -71,6 +75,12 @@ def test_mock_current_state_full_scope_returns_all():
 
     assert state["vlans"][0]["vlan_id"] == 100
     assert state["interfaces"][0]["name"] == "GE1/0/1"
+
+
+def test_mock_admin_state_text_matches_netconf_default_for_unspecified_values():
+    assert _admin_state_to_text(0) == "up"
+    assert _admin_state_to_text(None) == "up"
+    assert _admin_state_to_text("DOWN") == "down"
 
 
 def test_lock_failed_profile_fails_prepare():

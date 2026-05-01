@@ -102,7 +102,7 @@ def _parse_port_mode(mode_node) -> dict:
 def _filter_vlans(vlans: list[dict], scope) -> list[dict]:
     if scope is None or getattr(scope, "full", False):
         return vlans
-    scoped_ids = {int(vlan_id) for vlan_id in getattr(scope, "vlan_ids", [])}
+    scoped_ids = _scope_vlan_ids(scope)
     if not scoped_ids:
         return vlans
     return [vlan for vlan in vlans if vlan["vlan_id"] in scoped_ids]
@@ -115,6 +115,18 @@ def _filter_interfaces(interfaces: list[dict], scope) -> list[dict]:
     if not scoped_names:
         return interfaces
     return [interface for interface in interfaces if interface["name"] in scoped_names]
+
+
+def _scope_vlan_ids(scope) -> set[int]:
+    scoped_ids = set()
+    for index, vlan_id in enumerate(getattr(scope, "vlan_ids", [])):
+        try:
+            scoped_ids.add(int(vlan_id))
+        except (TypeError, ValueError) as exc:
+            raise _parse_error(
+                f"scope.vlan_ids[{index}] must be an integer: {vlan_id!r}"
+            ) from exc
+    return scoped_ids
 
 
 def _first_child(parent, tag: str):

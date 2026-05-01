@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -141,6 +142,19 @@ def test_huawei_parser_normalizes_port_mode_kind_case():
     assert state["interfaces"][0]["mode"]["kind"] == "access"
     assert state["interfaces"][1]["mode"]["kind"] == "trunk"
     assert state["interfaces"][1]["mode"]["allowed_vlans"] == [100, 200]
+
+
+def test_huawei_parser_rejects_non_integer_vlan_scope_with_context():
+    scope = SimpleNamespace(full=False, vlan_ids=["not-a-vlan"], interface_names=[])
+
+    with pytest.raises(AdapterError) as exc:
+        HuaweiStateParser().parse_running(
+            (FIXTURES / "huawei" / "vrp8_running.xml").read_text(),
+            scope=scope,
+        )
+
+    assert exc.value.code == "NETCONF_STATE_PARSE_FAILED"
+    assert "scope.vlan_ids[0] must be an integer" in exc.value.raw_error_summary
 
 
 @pytest.mark.parametrize(

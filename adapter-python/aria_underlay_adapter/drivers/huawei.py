@@ -1,5 +1,5 @@
-class HuaweiDriver:
-    """Not yet implemented."""
+from aria_underlay_adapter.drivers.unsupported import UnsupportedDriver
 
-    def __init__(self, *args, **kwargs):
-        raise NotImplementedError("HuaweiDriver is not yet implemented")
+
+class HuaweiDriver(UnsupportedDriver):
+    vendor_name = "Huawei"

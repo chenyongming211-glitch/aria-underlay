@@ -27,10 +27,12 @@ def test_driver_registry_uses_device_factory():
     assert registry.select(_Device()) == "driver:leaf-a"
 
 
-def test_vendor_drivers_are_explicitly_not_implemented():
+def test_vendor_drivers_are_constructable_but_operations_fail_closed():
     for driver in [CiscoDriver, H3cDriver, HuaweiDriver, LegacyCliDriver, RuijieDriver]:
+        instance = driver()
         try:
-            driver()
-        except NotImplementedError:
+            instance.get_capabilities(None)
+        except NotImplementedError as error:
+            assert driver.__name__.removesuffix("Driver") in str(error)
             continue
-        raise AssertionError(f"{driver.__name__} should not silently use fake behavior")
+        raise AssertionError(f"{driver.__name__} should fail closed for unsupported operations")

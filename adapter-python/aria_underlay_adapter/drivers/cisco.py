@@ -1,5 +1,5 @@
-class CiscoDriver:
-    """Not yet implemented."""
+from aria_underlay_adapter.drivers.unsupported import UnsupportedDriver
 
-    def __init__(self, *args, **kwargs):
-        raise NotImplementedError("CiscoDriver is not yet implemented")
+
+class CiscoDriver(UnsupportedDriver):
+    vendor_name = "Cisco"

@@ -3,6 +3,7 @@ from __future__ import annotations
 from aria_underlay_adapter.backends.base import BackendCapability
 from aria_underlay_adapter.backends.base import CandidateDryRunResult
 from aria_underlay_adapter.errors import AdapterError
+from aria_underlay_adapter.normalization import admin_state_to_text as _admin_state_to_text
 
 
 BASE_10 = "urn:ietf:params:netconf:base:1.0"
@@ -505,14 +506,6 @@ def _optional_field(message, name):
         value = getattr(message, name, None)
 
     return None if value == "" else value
-
-
-def _admin_state_to_text(value) -> str:
-    if value in {"up", "UP", 1}:
-        return "up"
-    if value in {"down", "DOWN", 2}:
-        return "down"
-    return str(value).lower()
 
 
 def _mode_to_dict(mode) -> dict:

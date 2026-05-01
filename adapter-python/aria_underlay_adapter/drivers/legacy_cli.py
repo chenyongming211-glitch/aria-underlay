@@ -1,5 +1,5 @@
-class LegacyCliDriver:
-    """Not yet implemented."""
+from aria_underlay_adapter.drivers.unsupported import UnsupportedDriver
 
-    def __init__(self, *args, **kwargs):
-        raise NotImplementedError("LegacyCliDriver is not yet implemented")
+
+class LegacyCliDriver(UnsupportedDriver):
+    vendor_name = "LegacyCli"

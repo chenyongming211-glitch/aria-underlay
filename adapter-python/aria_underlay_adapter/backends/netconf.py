@@ -10,6 +10,7 @@ from xml.sax.saxutils import escape
 from aria_underlay_adapter.backends.base import BackendCapability
 from aria_underlay_adapter.backends.base import CandidateDryRunResult
 from aria_underlay_adapter.errors import AdapterError
+from aria_underlay_adapter.normalization import admin_state_to_text as _admin_state_to_text
 
 
 BASE_10 = "urn:ietf:params:netconf:base:1.0"
@@ -857,7 +858,22 @@ def _desired_state_is_empty(desired_state) -> bool:
 
 
 def _normalized_scope_vlan_ids(scope) -> list[int]:
-    vlan_ids = sorted({int(vlan_id) for vlan_id in getattr(scope, "vlan_ids", [])})
+    normalized = set()
+    for index, vlan_id in enumerate(getattr(scope, "vlan_ids", [])):
+        try:
+            normalized.add(int(vlan_id))
+        except (TypeError, ValueError) as exc:
+            raise AdapterError(
+                code="INVALID_STATE_SCOPE",
+                message="state scope contains non-integer VLAN IDs",
+                normalized_error="invalid state scope",
+                raw_error_summary=(
+                    f"scope.vlan_ids[{index}] must be an integer: {vlan_id!r}"
+                ),
+                retryable=False,
+            ) from exc
+
+    vlan_ids = sorted(normalized)
     invalid = [vlan_id for vlan_id in vlan_ids if vlan_id < 1 or vlan_id > 4094]
     if invalid:
         raise AdapterError(
@@ -1016,14 +1032,6 @@ def _optional_field(message, name):
     else:
         value = getattr(message, name, None)
     return value if value != "" else None
-
-
-def _admin_state_to_text(value) -> str:
-    if isinstance(value, str):
-        return value.lower()
-    if int(value or 0) == 2:
-        return "down"
-    return "up"
 
 
 def _mode_to_dict(mode) -> dict:
