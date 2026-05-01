@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use crate::telemetry::audit::AuditRecord;
 use crate::telemetry::events::UnderlayEvent;
+use crate::telemetry::events::UnderlayEventKind;
 use crate::telemetry::ops::OperationSummaryStore;
 
 pub trait EventSink: std::fmt::Debug + Send + Sync {
@@ -58,7 +60,17 @@ impl RecordingEventSink {
 
 impl EventSink for RecordingEventSink {
     fn emit(&self, event: UnderlayEvent) {
-        let _ = self.operation_summaries.record_event(&event);
+        if let Err(err) = self.operation_summaries.record_event(&event) {
+            if event.kind != UnderlayEventKind::UnderlayAuditWriteFailed {
+                let audit = AuditRecord::from_event(&event);
+                self.inner.emit(UnderlayEvent::audit_write_failed(
+                    event.request_id.clone(),
+                    event.trace_id.clone(),
+                    audit.action,
+                    format!("{err}"),
+                ));
+            }
+        }
         self.inner.emit(event);
     }
 }

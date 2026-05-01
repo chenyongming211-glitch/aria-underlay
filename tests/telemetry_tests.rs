@@ -10,10 +10,12 @@ use aria_underlay::model::{DeviceId, DeviceRole, Vendor};
 use aria_underlay::proto::adapter;
 use aria_underlay::state::drift::{DriftFinding, DriftReport, DriftType};
 use aria_underlay::telemetry::{
-    AuditRecord, InMemoryEventSink, InMemoryOperationSummaryStore,
+    AuditRecord, EventSink, InMemoryEventSink, InMemoryOperationSummaryStore,
     JsonFileOperationSummaryStore, MetricName, Metrics, OperationSummary,
-    OperationSummaryRetentionPolicy, UnderlayEvent, UnderlayEventKind,
+    OperationSummaryRetentionPolicy, OperationSummaryStore, RecordingEventSink, UnderlayEvent,
+    UnderlayEventKind,
 };
+use aria_underlay::{UnderlayError, UnderlayResult};
 use aria_underlay::tx::recovery::RecoveryReport;
 use aria_underlay::tx::{TransactionStrategy, TxPhase};
 use aria_underlay::worker::gc::JournalGcReport;
@@ -354,6 +356,24 @@ fn metrics_record_operator_events() {
 }
 
 #[test]
+fn metrics_record_audit_write_failures() {
+    let mut metrics = Metrics::default();
+    let event = UnderlayEvent::audit_write_failed(
+        "req-audit",
+        "trace-audit",
+        "recovery.completed",
+        "operation summary io error: disk full",
+    );
+
+    metrics.record_event(&event);
+
+    assert_eq!(
+        metric_value(&metrics.samples(), MetricName::OperationAuditWriteFailedTotal),
+        1.0
+    );
+}
+
+#[test]
 fn operation_summary_store_keeps_queryable_operator_view() {
     let store = InMemoryOperationSummaryStore::default();
     let recovery = UnderlayEvent::recovery_completed(
@@ -403,6 +423,38 @@ fn operation_summary_store_keeps_queryable_operator_view() {
     assert_eq!(attention.len(), 1);
     assert_eq!(attention[0].action, "recovery.completed");
     assert_eq!(attention[0].result, "in_doubt");
+}
+
+#[test]
+fn recording_event_sink_emits_audit_write_failed_when_summary_persistence_fails() {
+    let inner = Arc::new(InMemoryEventSink::default());
+    let sink = RecordingEventSink::new(inner.clone(), Arc::new(FailingOperationSummaryStore));
+    let event = recovery_event(1);
+
+    sink.emit(event.clone());
+
+    let events = inner.events();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].kind, UnderlayEventKind::UnderlayAuditWriteFailed);
+    assert_eq!(events[0].request_id, "req-1");
+    assert_eq!(events[0].trace_id, "trace-1");
+    assert_eq!(events[0].result.as_deref(), Some("failed"));
+    assert_eq!(
+        events[0].error_code.as_deref(),
+        Some("OPERATION_SUMMARY_WRITE_FAILED")
+    );
+    assert_eq!(
+        events[0].fields.get("failed_action").map(String::as_str),
+        Some("recovery.completed")
+    );
+    assert!(
+        events[0]
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("forced operation summary failure")
+    );
+    assert_eq!(events[1], event);
 }
 
 #[test]
@@ -725,4 +777,19 @@ fn operation_summary_archive_path(path: &std::path::Path, generation: usize) -> 
         .and_then(|name| name.to_str())
         .expect("summary path should have file name");
     path.with_file_name(format!("{file_name}.{generation}"))
+}
+
+#[derive(Debug)]
+struct FailingOperationSummaryStore;
+
+impl OperationSummaryStore for FailingOperationSummaryStore {
+    fn record_event(&self, _event: &UnderlayEvent) -> UnderlayResult<()> {
+        Err(UnderlayError::Internal(
+            "forced operation summary failure".into(),
+        ))
+    }
+
+    fn list(&self) -> UnderlayResult<Vec<OperationSummary>> {
+        Ok(Vec::new())
+    }
 }

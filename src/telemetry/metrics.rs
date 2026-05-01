@@ -18,6 +18,7 @@ pub enum MetricName {
     OperationDriftDetectedTotal,
     OperationJournalGcTotal,
     OperationJournalGcDeletedTotal,
+    OperationAuditWriteFailedTotal,
     NetconfRpcLatencyMs,
     DeviceSessionReconnectTotal,
 }
@@ -83,6 +84,9 @@ impl Metrics {
                 if deleted > 0 {
                     self.increment(MetricName::OperationJournalGcDeletedTotal);
                 }
+            }
+            UnderlayEventKind::UnderlayAuditWriteFailed => {
+                self.increment(MetricName::OperationAuditWriteFailedTotal);
             }
             _ => {}
         }

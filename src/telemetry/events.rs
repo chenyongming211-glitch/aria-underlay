@@ -19,6 +19,7 @@ pub enum UnderlayEventKind {
     UnderlayDriftAuditCompleted,
     UnderlayJournalGcCompleted,
     UnderlayRecoveryCompleted,
+    UnderlayAuditWriteFailed,
     UnderlayTransactionStarted,
     UnderlayTransactionPhaseChanged,
     UnderlayTransactionCompleted,
@@ -219,6 +220,30 @@ impl UnderlayEvent {
             }),
             error_code: None,
             error_message: None,
+            fields,
+        }
+    }
+
+    pub fn audit_write_failed(
+        request_id: impl Into<String>,
+        trace_id: impl Into<String>,
+        failed_action: impl Into<String>,
+        error_message: impl Into<String>,
+    ) -> Self {
+        let mut fields = BTreeMap::new();
+        fields.insert("failed_action".into(), failed_action.into());
+
+        Self {
+            kind: UnderlayEventKind::UnderlayAuditWriteFailed,
+            request_id: request_id.into(),
+            trace_id: trace_id.into(),
+            tx_id: None,
+            device_id: None,
+            phase: None,
+            strategy: None,
+            result: Some("failed".into()),
+            error_code: Some("OPERATION_SUMMARY_WRITE_FAILED".into()),
+            error_message: Some(error_message.into()),
             fields,
         }
     }

@@ -43,6 +43,7 @@ fn action_name(kind: &UnderlayEventKind) -> &'static str {
         UnderlayEventKind::UnderlayForceUnlockRequested => "device.force_unlock_requested",
         UnderlayEventKind::UnderlayJournalGcCompleted => "journal.gc_completed",
         UnderlayEventKind::UnderlayRecoveryCompleted => "recovery.completed",
+        UnderlayEventKind::UnderlayAuditWriteFailed => "audit.write_failed",
         UnderlayEventKind::UnderlayTransactionStarted => "transaction.started",
         UnderlayEventKind::UnderlayTransactionPhaseChanged => "transaction.phase_changed",
         UnderlayEventKind::UnderlayTransactionCompleted => "transaction.completed",

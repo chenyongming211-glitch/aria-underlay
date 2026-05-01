@@ -376,6 +376,7 @@ fn is_operator_event(kind: &UnderlayEventKind) -> bool {
             | UnderlayEventKind::UnderlayDriftAuditCompleted
             | UnderlayEventKind::UnderlayJournalGcCompleted
             | UnderlayEventKind::UnderlayRecoveryCompleted
+            | UnderlayEventKind::UnderlayAuditWriteFailed
             | UnderlayEventKind::UnderlayTransactionForceResolved
             | UnderlayEventKind::UnderlayTransactionInDoubt
     )
@@ -390,6 +391,7 @@ fn attention_required(event: &UnderlayEvent) -> bool {
         UnderlayEventKind::UnderlayRecoveryCompleted => {
             field_value(event, "in_doubt") > 0 || field_value(event, "pending") > 0
         }
+        UnderlayEventKind::UnderlayAuditWriteFailed => true,
         UnderlayEventKind::UnderlayTransactionInDoubt => true,
         _ => false,
     }
