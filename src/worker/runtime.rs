@@ -7,6 +7,10 @@ use crate::worker::drift_auditor::{
     DriftAuditSchedule, DriftAuditSchedulerReport, DriftAuditWorker,
 };
 use crate::worker::gc::{JournalGcSchedule, JournalGcSchedulerReport, JournalGcWorker};
+use crate::worker::operation_alerts::{
+    OperationAlertDeliverySchedule, OperationAlertDeliverySchedulerReport,
+    OperationAlertDeliveryWorker,
+};
 use crate::worker::operation_summary_compactor::{
     OperationSummaryCompactionSchedule, OperationSummaryCompactionSchedulerReport,
     OperationSummaryCompactionWorker,
@@ -17,6 +21,8 @@ use crate::{UnderlayError, UnderlayResult};
 pub struct UnderlayWorkerRuntime {
     journal_gc: Option<(JournalGcWorker, JournalGcSchedule)>,
     drift_audit: Option<(DriftAuditWorker, DriftAuditSchedule)>,
+    operation_alert_delivery:
+        Option<(OperationAlertDeliveryWorker, OperationAlertDeliverySchedule)>,
     operation_summary_compaction:
         Option<(OperationSummaryCompactionWorker, OperationSummaryCompactionSchedule)>,
 }
@@ -25,12 +31,14 @@ pub struct UnderlayWorkerRuntime {
 pub struct UnderlayWorkerRuntimeReport {
     pub journal_gc: Option<JournalGcSchedulerReport>,
     pub drift_audit: Option<DriftAuditSchedulerReport>,
+    pub operation_alert_delivery: Option<OperationAlertDeliverySchedulerReport>,
     pub operation_summary_compaction: Option<OperationSummaryCompactionSchedulerReport>,
 }
 
 enum RuntimeWorkerOutcome {
     JournalGc(UnderlayResult<JournalGcSchedulerReport>),
     DriftAudit(UnderlayResult<DriftAuditSchedulerReport>),
+    OperationAlertDelivery(UnderlayResult<OperationAlertDeliverySchedulerReport>),
     OperationSummaryCompaction(UnderlayResult<OperationSummaryCompactionSchedulerReport>),
 }
 
@@ -54,6 +62,15 @@ impl UnderlayWorkerRuntime {
         schedule: DriftAuditSchedule,
     ) -> Self {
         self.drift_audit = Some((worker, schedule));
+        self
+    }
+
+    pub fn with_operation_alert_delivery(
+        mut self,
+        worker: OperationAlertDeliveryWorker,
+        schedule: OperationAlertDeliverySchedule,
+    ) -> Self {
+        self.operation_alert_delivery = Some((worker, schedule));
         self
     }
 
@@ -94,6 +111,16 @@ impl UnderlayWorkerRuntime {
             let worker_shutdown = shutdown_rx.clone();
             tasks.spawn(async move {
                 RuntimeWorkerOutcome::DriftAudit(
+                    worker
+                        .run_periodic_until_shutdown(schedule, wait_for_shutdown(worker_shutdown))
+                        .await,
+                )
+            });
+        }
+        if let Some((worker, schedule)) = self.operation_alert_delivery {
+            let worker_shutdown = shutdown_rx.clone();
+            tasks.spawn(async move {
+                RuntimeWorkerOutcome::OperationAlertDelivery(
                     worker
                         .run_periodic_until_shutdown(schedule, wait_for_shutdown(worker_shutdown))
                         .await,
@@ -160,6 +187,9 @@ impl UnderlayWorkerRuntime {
         if let Some((_, schedule)) = &self.drift_audit {
             validate_interval("drift audit", schedule.interval_secs)?;
         }
+        if let Some((_, schedule)) = &self.operation_alert_delivery {
+            validate_interval("operation alert delivery", schedule.interval_secs)?;
+        }
         if let Some((_, schedule)) = &self.operation_summary_compaction {
             validate_interval("operation summary compaction", schedule.interval_secs)?;
         }
@@ -197,6 +227,9 @@ fn record_worker_outcome(
         }
         RuntimeWorkerOutcome::DriftAudit(worker_report) => {
             report.drift_audit = Some(worker_report?);
+        }
+        RuntimeWorkerOutcome::OperationAlertDelivery(worker_report) => {
+            report.operation_alert_delivery = Some(worker_report?);
         }
         RuntimeWorkerOutcome::OperationSummaryCompaction(worker_report) => {
             report.operation_summary_compaction = Some(worker_report?);

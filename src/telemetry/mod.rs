@@ -1,10 +1,16 @@
 pub mod audit;
+pub mod alerts;
 pub mod events;
 pub mod metrics;
 pub mod ops;
 pub mod sink;
 
 pub use audit::AuditRecord;
+pub use alerts::{
+    InMemoryOperationAlertCheckpointStore, InMemoryOperationAlertSink,
+    JsonFileOperationAlertCheckpointStore, JsonFileOperationAlertSink, OperationAlert,
+    OperationAlertCheckpointStore, OperationAlertSeverity, OperationAlertSink,
+};
 pub use events::{UnderlayEvent, UnderlayEventKind};
 pub use metrics::{MetricName, MetricSample, Metrics};
 pub use ops::{

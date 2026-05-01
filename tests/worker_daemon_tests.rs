@@ -4,12 +4,14 @@ use std::fs;
 use aria_underlay::model::{DeviceId, InterfaceConfig, VlanConfig};
 use aria_underlay::state::{DeviceShadowState, JsonFileShadowStateStore, ShadowStateStore};
 use aria_underlay::telemetry::{
-    JsonFileOperationSummaryStore, OperationSummaryRetentionPolicy, UnderlayEvent,
+    JsonFileOperationAlertSink, JsonFileOperationSummaryStore, OperationSummaryRetentionPolicy,
+    UnderlayEvent,
 };
 use aria_underlay::tx::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase};
 use aria_underlay::worker::daemon::{
-    DriftAuditDaemonConfig, JournalGcDaemonConfig, OperationSummaryDaemonConfig,
-    UnderlayWorkerDaemon, UnderlayWorkerDaemonConfig, WorkerScheduleConfig,
+    DriftAuditDaemonConfig, JournalGcDaemonConfig, OperationAlertDaemonConfig,
+    OperationSummaryDaemonConfig, UnderlayWorkerDaemon, UnderlayWorkerDaemonConfig,
+    WorkerScheduleConfig,
 };
 use aria_underlay::worker::gc::RetentionPolicy;
 
@@ -37,6 +39,7 @@ async fn daemon_config_wires_gc_drift_and_persistent_operation_summaries() {
             retention: OperationSummaryRetentionPolicy::default(),
             retention_schedule: WorkerScheduleConfig::default(),
         }),
+        operation_alert: None,
         journal_gc: Some(JournalGcDaemonConfig {
             journal_root: journal_root.clone(),
             artifact_root: None,
@@ -129,6 +132,7 @@ async fn daemon_config_wires_operation_summary_retention_worker() {
                 run_immediately: true,
             },
         }),
+        operation_alert: None,
         journal_gc: None,
         drift_audit: None,
     };
@@ -157,12 +161,95 @@ async fn daemon_config_wires_operation_summary_retention_worker() {
 }
 
 #[tokio::test]
+async fn daemon_config_wires_operation_alert_delivery_worker() {
+    let temp = temp_test_dir("daemon-operation-alert-delivery");
+    let operation_summary_path = temp.join("ops").join("summaries.jsonl");
+    let alert_path = temp.join("alerts").join("alerts.jsonl");
+    let checkpoint_path = temp.join("alerts").join("checkpoint.json");
+    let summary_store = JsonFileOperationSummaryStore::new(&operation_summary_path);
+    summary_store
+        .record_event(&recovery_event(1))
+        .expect("attention-required operation summary should persist before alert delivery");
+    summary_store
+        .record_event(&recovery_event(2))
+        .expect("second attention-required operation summary should persist before alert delivery");
+
+    let config = UnderlayWorkerDaemonConfig {
+        operation_summary: Some(OperationSummaryDaemonConfig {
+            path: operation_summary_path.clone(),
+            retention: OperationSummaryRetentionPolicy::default(),
+            retention_schedule: WorkerScheduleConfig::default(),
+        }),
+        operation_alert: Some(OperationAlertDaemonConfig {
+            path: alert_path.clone(),
+            checkpoint_path: checkpoint_path.clone(),
+            schedule: WorkerScheduleConfig {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+        }),
+        journal_gc: None,
+        drift_audit: None,
+    };
+
+    let report = UnderlayWorkerDaemon::from_config(config)
+        .expect("daemon config should build operation alert runtime")
+        .run_until_shutdown(async {})
+        .await
+        .expect("daemon alert worker should stop cleanly on shutdown");
+
+    assert_eq!(
+        report
+            .operation_alert_delivery
+            .as_ref()
+            .expect("operation alert report should be present")
+            .runs,
+        1
+    );
+    let alerts = JsonFileOperationAlertSink::new(&alert_path)
+        .list()
+        .expect("persisted alerts should be readable");
+    assert_eq!(alerts.len(), 2);
+    assert!(checkpoint_path.exists());
+
+    let second_config = UnderlayWorkerDaemonConfig {
+        operation_summary: Some(OperationSummaryDaemonConfig {
+            path: operation_summary_path.clone(),
+            retention: OperationSummaryRetentionPolicy::default(),
+            retention_schedule: WorkerScheduleConfig::default(),
+        }),
+        operation_alert: Some(OperationAlertDaemonConfig {
+            path: alert_path.clone(),
+            checkpoint_path: checkpoint_path.clone(),
+            schedule: WorkerScheduleConfig {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+        }),
+        journal_gc: None,
+        drift_audit: None,
+    };
+    UnderlayWorkerDaemon::from_config(second_config)
+        .expect("daemon config should rebuild operation alert runtime")
+        .run_until_shutdown(async {})
+        .await
+        .expect("second daemon alert worker run should stop cleanly");
+    let alerts_after_restart = JsonFileOperationAlertSink::new(&alert_path)
+        .list()
+        .expect("persisted alerts should be readable after restart");
+    assert_eq!(alerts_after_restart.len(), 2);
+
+    fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
 async fn daemon_config_file_rejects_invalid_worker_schedule_before_start() {
     let temp = temp_test_dir("daemon-invalid-schedule");
     let config_path = temp.join("worker.json");
     let config_json = format!(
         r#"{{
             "operation_summary": {{"path": "{}"}},
+            "operation_alert": null,
             "journal_gc": {{
                 "journal_root": "{}",
                 "schedule": {{"interval_secs": 0, "run_immediately": true}}
