@@ -1,6 +1,8 @@
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::telemetry::events::UnderlayEvent;
+use crate::telemetry::ops::InMemoryOperationSummaryStore;
 
 pub trait EventSink: std::fmt::Debug + Send + Sync {
     fn emit(&self, event: UnderlayEvent);
@@ -33,5 +35,30 @@ impl EventSink for InMemoryEventSink {
             .lock()
             .expect("in-memory event sink mutex should not be poisoned")
             .push(event);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RecordingEventSink {
+    inner: Arc<dyn EventSink>,
+    operation_summaries: Arc<InMemoryOperationSummaryStore>,
+}
+
+impl RecordingEventSink {
+    pub fn new(
+        inner: Arc<dyn EventSink>,
+        operation_summaries: Arc<InMemoryOperationSummaryStore>,
+    ) -> Self {
+        Self {
+            inner,
+            operation_summaries,
+        }
+    }
+}
+
+impl EventSink for RecordingEventSink {
+    fn emit(&self, event: UnderlayEvent) {
+        let _ = self.operation_summaries.record_event(&event);
+        self.inner.emit(event);
     }
 }

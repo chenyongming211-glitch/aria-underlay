@@ -2,6 +2,7 @@ mod admin_ops;
 mod apply;
 mod apply_coordinator;
 mod drift_ops;
+pub mod operations;
 pub mod force_unlock;
 pub mod force_resolve;
 mod recovery_coordinator;

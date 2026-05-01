@@ -4,6 +4,9 @@ use crate::api::force_resolve::{
     ForceResolveTransactionRequest, ForceResolveTransactionResponse,
 };
 use crate::api::force_unlock::{ForceUnlockRequest, ForceUnlockResponse};
+use crate::api::operations::{
+    ListOperationSummariesRequest, ListOperationSummariesResponse,
+};
 use crate::api::request::{ApplyIntentRequest, DriftAuditRequest, RefreshStateRequest};
 use crate::api::response::{
     ApplyIntentResponse, DeviceOnboardingResponse, DriftAuditResponse, DryRunResponse,
@@ -73,4 +76,9 @@ pub trait UnderlayService: Send + Sync {
         &self,
         request: ForceResolveTransactionRequest,
     ) -> UnderlayResult<ForceResolveTransactionResponse>;
+
+    async fn list_operation_summaries(
+        &self,
+        request: ListOperationSummariesRequest,
+    ) -> UnderlayResult<ListOperationSummariesResponse>;
 }

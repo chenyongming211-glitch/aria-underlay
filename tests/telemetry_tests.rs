@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use aria_underlay::api::operations::ListOperationSummariesRequest;
 use aria_underlay::api::request::DriftAuditRequest;
 use aria_underlay::api::{AriaUnderlayService, UnderlayService};
 use aria_underlay::api::response::{ApplyStatus, DeviceApplyResult};
@@ -192,6 +193,59 @@ async fn service_emits_drift_event_to_configured_sink() {
     assert_eq!(events[1].result.as_deref(), Some("drift_detected"));
     assert_eq!(
         events[1].fields.get("drifted_device_count").map(String::as_str),
+        Some("1")
+    );
+}
+
+#[tokio::test]
+async fn service_records_queryable_operation_summaries_while_emitting_events() {
+    let adapter_endpoint = start_drift_adapter().await;
+    let inventory = telemetry_inventory(adapter_endpoint);
+    let sink = Arc::new(InMemoryEventSink::default());
+    let service = AriaUnderlayService::new(inventory).with_event_sink(sink.clone());
+
+    service
+        .run_drift_audit(DriftAuditRequest {
+            device_ids: vec![DeviceId("leaf-a".into())],
+        })
+        .await
+        .expect("drift audit should complete");
+
+    let events = sink.events();
+    assert_eq!(events.len(), 2);
+
+    let all = service
+        .list_operation_summaries(ListOperationSummariesRequest::default())
+        .await
+        .expect("operation summaries should be queryable");
+    assert_eq!(all.summaries.len(), 2);
+    assert_eq!(all.summaries[0].action, "drift.detected");
+    assert_eq!(all.summaries[1].action, "drift.audit_completed");
+
+    let attention = service
+        .list_operation_summaries(ListOperationSummariesRequest {
+            attention_required_only: true,
+            ..Default::default()
+        })
+        .await
+        .expect("attention summaries should be queryable");
+    assert_eq!(attention.summaries.len(), 2);
+
+    let completed = service
+        .list_operation_summaries(ListOperationSummariesRequest {
+            action: Some("drift.audit_completed".into()),
+            limit: Some(1),
+            ..Default::default()
+        })
+        .await
+        .expect("operation summaries should be filterable");
+    assert_eq!(completed.summaries.len(), 1);
+    assert_eq!(completed.summaries[0].result, "drift_detected");
+    assert_eq!(
+        completed.summaries[0]
+            .fields
+            .get("drifted_device_count")
+            .map(String::as_str),
         Some("1")
     );
 }

@@ -9,6 +9,9 @@ use crate::api::force_resolve::{
     ForceResolveTransactionRequest, ForceResolveTransactionResponse,
 };
 use crate::api::force_unlock::{ForceUnlockRequest, ForceUnlockResponse};
+use crate::api::operations::{
+    ListOperationSummariesRequest, ListOperationSummariesResponse,
+};
 use crate::api::request::{
     ApplyDomainIntentRequest, ApplyIntentRequest, DriftAuditRequest, RefreshStateRequest,
 };
@@ -35,7 +38,10 @@ use crate::state::drift::{detect_drift, DriftPolicy, DriftReport};
 use crate::state::{
     DeviceShadowState, InMemoryShadowStateStore, ShadowStateStore,
 };
-use crate::telemetry::{EventSink, NoopEventSink, UnderlayEvent};
+use crate::telemetry::{
+    EventSink, InMemoryOperationSummaryStore, NoopEventSink, RecordingEventSink,
+    UnderlayEvent,
+};
 use crate::tx::recovery::RecoveryReport;
 use crate::tx::{
     EndpointLockTable, InMemoryTxJournalStore, LockAcquisitionPolicy, TxJournalStore,
@@ -52,6 +58,7 @@ pub struct AriaUnderlayService {
     shadow_store: Arc<dyn ShadowStateStore>,
     observed_store: Arc<dyn ShadowStateStore>,
     event_sink: Arc<dyn EventSink>,
+    operation_summary_store: Arc<InMemoryOperationSummaryStore>,
     adapter_pool: AdapterClientPool,
 }
 
@@ -66,6 +73,7 @@ impl AriaUnderlayService {
             shadow_store: Arc::new(InMemoryShadowStateStore::default()),
             observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
+            operation_summary_store: Arc::new(InMemoryOperationSummaryStore::default()),
             adapter_pool: AdapterClientPool::default(),
         }
     }
@@ -83,6 +91,7 @@ impl AriaUnderlayService {
             shadow_store: Arc::new(InMemoryShadowStateStore::default()),
             observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
+            operation_summary_store: Arc::new(InMemoryOperationSummaryStore::default()),
             adapter_pool: AdapterClientPool::default(),
         }
     }
@@ -101,6 +110,7 @@ impl AriaUnderlayService {
             shadow_store: Arc::new(InMemoryShadowStateStore::default()),
             observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
+            operation_summary_store: Arc::new(InMemoryOperationSummaryStore::default()),
             adapter_pool: AdapterClientPool::default(),
         }
     }
@@ -121,6 +131,7 @@ impl AriaUnderlayService {
             shadow_store: Arc::new(InMemoryShadowStateStore::default()),
             observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
+            operation_summary_store: Arc::new(InMemoryOperationSummaryStore::default()),
             adapter_pool: AdapterClientPool::default(),
         }
     }
@@ -142,6 +153,7 @@ impl AriaUnderlayService {
             shadow_store,
             observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
+            operation_summary_store: Arc::new(InMemoryOperationSummaryStore::default()),
             adapter_pool: AdapterClientPool::default(),
         }
     }
@@ -156,9 +168,28 @@ impl AriaUnderlayService {
         self
     }
 
+    pub fn with_operation_summary_store(
+        mut self,
+        operation_summary_store: Arc<InMemoryOperationSummaryStore>,
+    ) -> Self {
+        self.operation_summary_store = operation_summary_store;
+        self
+    }
+
     pub fn with_adapter_pool(mut self, adapter_pool: AdapterClientPool) -> Self {
         self.adapter_pool = adapter_pool;
         self
+    }
+
+    fn operation_event_sink(&self) -> Arc<dyn EventSink> {
+        Arc::new(RecordingEventSink::new(
+            self.event_sink.clone(),
+            self.operation_summary_store.clone(),
+        ))
+    }
+
+    fn emit_event(&self, event: UnderlayEvent) {
+        self.operation_event_sink().emit(event);
     }
 
     fn apply_coordinator(&self) -> ApplyCoordinator {
@@ -169,7 +200,7 @@ impl AriaUnderlayService {
             self.lock_policy.clone(),
             self.shadow_store.clone(),
             self.observed_store.clone(),
-            self.event_sink.clone(),
+            self.operation_event_sink(),
             self.adapter_pool.clone(),
         )
     }
@@ -180,7 +211,7 @@ impl AriaUnderlayService {
             self.journal.clone(),
             self.endpoint_locks.clone(),
             self.shadow_store.clone(),
-            self.event_sink.clone(),
+            self.operation_event_sink(),
             self.adapter_pool.clone(),
         )
     }
@@ -190,7 +221,7 @@ impl AriaUnderlayService {
             self.inventory.clone(),
             self.journal.clone(),
             self.endpoint_locks.clone(),
-            self.event_sink.clone(),
+            self.operation_event_sink(),
             self.adapter_pool.clone(),
         )
     }
@@ -376,7 +407,7 @@ impl UnderlayService for AriaUnderlayService {
                 ),
             };
             if report.drift_detected {
-                self.event_sink.emit(UnderlayEvent::drift_detected(
+                self.emit_event(UnderlayEvent::drift_detected(
                     "drift-audit",
                     "drift-audit",
                     &report,
@@ -393,7 +424,7 @@ impl UnderlayService for AriaUnderlayService {
             }
         }
 
-        self.event_sink.emit(UnderlayEvent::drift_audit_completed(
+        self.emit_event(UnderlayEvent::drift_audit_completed(
             "drift-audit",
             "drift-audit",
             audited_device_count,
@@ -415,6 +446,39 @@ impl UnderlayService for AriaUnderlayService {
         request: ForceResolveTransactionRequest,
     ) -> UnderlayResult<ForceResolveTransactionResponse> {
         self.admin_ops().force_resolve_transaction(request).await
+    }
+
+    async fn list_operation_summaries(
+        &self,
+        request: ListOperationSummariesRequest,
+    ) -> UnderlayResult<ListOperationSummariesResponse> {
+        let mut summaries = if request.attention_required_only {
+            self.operation_summary_store.list_attention_required()?
+        } else {
+            self.operation_summary_store.list()?
+        };
+
+        if let Some(action) = request.action {
+            summaries.retain(|summary| summary.action == action);
+        }
+        if let Some(device_id) = request.device_id {
+            summaries.retain(|summary| summary.device_id.as_ref() == Some(&device_id));
+        }
+        if let Some(tx_id) = request.tx_id {
+            summaries.retain(|summary| summary.tx_id.as_deref() == Some(tx_id.as_str()));
+        }
+        if let Some(limit) = request.limit {
+            if summaries.len() > limit {
+                summaries = summaries
+                    .into_iter()
+                    .rev()
+                    .take(limit)
+                    .collect::<Vec<_>>();
+                summaries.reverse();
+            }
+        }
+
+        Ok(ListOperationSummariesResponse { summaries })
     }
 }
 
