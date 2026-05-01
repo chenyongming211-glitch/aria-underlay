@@ -59,7 +59,7 @@ These older claims should not be re-opened unless new evidence appears:
 | GC | GC still needs external deployment integration | `run_once`, retention policy, periodic worker entrypoint, event emission, deletion summaries, shared `UnderlayWorkerRuntime`, and the `aria-underlay-worker` JSON-configured daemon binary now exist. Production still needs deployment packaging, shutdown supervision, persistent audit policy, and any site-specific disk quota policy. | Add deployment packaging/system service ownership and site retention policy. |
 | Drift | Drift auditor still needs daemon integration | One-shot audit, scheduler-facing summary, event emission, periodic worker entrypoint, shared `UnderlayWorkerRuntime`, and the `aria-underlay-worker` JSON-configured daemon binary now exist. Production still needs deployment packaging and alert delivery path. | Add deployment packaging/system service ownership and alert integration; keep AutoReconcile fail-closed until explicitly designed. |
 | Real NETCONF parser | Huawei/H3C state parsers are fixture-verified only | Fixture XML proves parser boundaries, not real device namespace and field behavior. | When hardware is available, collect running XML and promote only after validator + tests pass. |
-| Real NETCONF renderer | Huawei/H3C renderers are still skeletons | Snapshot rendering is useful, but real devices may reject the XML. | Keep production prepare fail-closed; add vendor profile tests and later real-device validation. |
+| Real NETCONF renderer | Huawei/H3C renderers are still skeletons | Snapshot rendering is useful, but real devices may reject the XML. Renderer skeletons now validate profile fields, reject production-ready skeleton markers, keep VLAN/interface namespaces distinct, and have snapshot negative coverage for invalid trunk mode. | Keep production prepare fail-closed; continue adding vendor profile/snapshot tests as samples arrive, then promote only after real-device validation. |
 
 ## Open P2 Items
 
@@ -79,7 +79,5 @@ The next no-real-switch sequence is:
 
 1. Add product audit backend/UI/CLI integration on top of `OperationSummaryStore`
    once storage and authorization requirements are fixed.
-2. Continue vendor renderer hardening with Huawei/H3C snapshot negatives,
-   profile field validation, and XML namespace boundaries.
-3. Revisit real-device parser/renderer only after hardware or captured XML is
+2. Revisit real-device parser/renderer only after hardware or captured XML is
    available.

@@ -3,7 +3,12 @@ import json
 from aria_underlay_adapter.renderers import snapshot
 
 
-def _write_desired_state(path, *, vlan_id=100):
+def _write_desired_state(path, *, vlan_id=100, mode=None):
+    if mode is None:
+        mode = {
+            "kind": "access",
+            "access_vlan": 100,
+        }
     path.write_text(
         json.dumps(
             {
@@ -19,10 +24,7 @@ def _write_desired_state(path, *, vlan_id=100):
                         "name": "GE1/0/1",
                         "admin_state": "up",
                         "description": "server uplink",
-                        "mode": {
-                            "kind": "access",
-                            "access_vlan": 100,
-                        },
+                        "mode": mode,
                     }
                 ],
             }
@@ -94,6 +96,32 @@ def test_render_snapshot_returns_structured_error_for_renderer_validation(
     assert captured.out == ""
     assert error["code"] == "RENDER_SNAPSHOT_FAILED"
     assert "range 1..4094" in error["raw_error_summary"]
+
+
+def test_render_snapshot_returns_structured_error_for_invalid_trunk_mode(
+    tmp_path, capsys
+):
+    desired_state = tmp_path / "desired.json"
+    _write_desired_state(
+        desired_state,
+        mode={
+            "kind": "trunk",
+            "native_vlan": None,
+            "allowed_vlans": [100, 100],
+        },
+    )
+
+    result = snapshot.main(
+        ["--vendor", "h3c", "--desired-state", str(desired_state)]
+    )
+
+    captured = capsys.readouterr()
+    error = json.loads(captured.err)
+
+    assert result == 1
+    assert captured.out == ""
+    assert error["code"] == "RENDER_SNAPSHOT_FAILED"
+    assert "duplicate allowed_vlans" in error["raw_error_summary"]
 
 
 def test_render_snapshot_returns_structured_error_for_invalid_input_shape(

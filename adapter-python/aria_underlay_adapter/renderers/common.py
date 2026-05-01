@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from aria_underlay_adapter.normalization import admin_state_to_text
 from aria_underlay_adapter.renderers.base import render_edit_config_document
 from aria_underlay_adapter.renderers.xml import NETCONF_BASE_NAMESPACE
 from aria_underlay_adapter.renderers.xml import XmlElement
 from aria_underlay_adapter.renderers.xml import qualified_attr
+
+
+_PROFILE_TOKEN_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
+_NAMESPACE_SCHEMES = ("urn:", "http://", "https://")
 
 
 @dataclass(frozen=True)
@@ -16,6 +21,24 @@ class RendererNamespaceProfile:
     vlan_namespace: str
     interface_namespace: str
     production_ready: bool = False
+
+    def __post_init__(self) -> None:
+        _validate_token(self.vendor, "vendor")
+        _validate_token(self.profile_name, "profile_name")
+        _validate_namespace(self.vlan_namespace, "vlan_namespace")
+        _validate_namespace(self.interface_namespace, "interface_namespace")
+        if self.vlan_namespace == self.interface_namespace:
+            raise ValueError("vlan_namespace and interface_namespace must be distinct")
+        if f":{self.vendor}:" not in self.vlan_namespace:
+            raise ValueError("vlan_namespace must include the renderer vendor token")
+        if f":{self.vendor}:" not in self.interface_namespace:
+            raise ValueError("interface_namespace must include the renderer vendor token")
+        if self.production_ready and (
+            self.profile_name.endswith("-skeleton")
+            or self.vlan_namespace.endswith(":skeleton")
+            or self.interface_namespace.endswith(":skeleton")
+        ):
+            raise ValueError("production_ready profile cannot use skeleton markers")
 
 
 class StructuredSkeletonRenderer:
@@ -189,3 +212,21 @@ def _validate_vlan_id(value, field: str) -> int:
 
 def _admin_state_text(value) -> str:
     return admin_state_to_text(value)
+
+
+def _validate_token(value: str, field: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} is required")
+    if not _PROFILE_TOKEN_RE.fullmatch(value):
+        raise ValueError(f"{field} must be a stable token")
+
+
+def _validate_namespace(value: str, field: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} is required")
+    if value != value.strip() or any(char.isspace() for char in value):
+        raise ValueError(f"{field} must not contain whitespace")
+    if not value.startswith(_NAMESPACE_SCHEMES):
+        raise ValueError(f"{field} must be an absolute XML namespace URI")
+    if value.endswith(":") or "{" in value or "}" in value:
+        raise ValueError(f"{field} must be a stable XML namespace URI")

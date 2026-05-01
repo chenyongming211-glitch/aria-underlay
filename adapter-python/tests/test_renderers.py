@@ -6,6 +6,7 @@ import pytest
 
 from aria_underlay_adapter.errors import AdapterError
 from aria_underlay_adapter.renderers.common import _admin_state_text
+from aria_underlay_adapter.renderers.common import RendererNamespaceProfile
 from aria_underlay_adapter.renderers.h3c import H3cRenderer
 from aria_underlay_adapter.renderers.huawei import HuaweiRenderer
 from aria_underlay_adapter.renderers.xml import NETCONF_BASE_NAMESPACE
@@ -53,6 +54,64 @@ def test_vendor_renderer_skeletons_are_not_production_ready(renderer):
     assert renderer.profile.profile_name.endswith("-skeleton")
     assert renderer.VLAN_NAMESPACE.endswith(":skeleton")
     assert renderer.IFACE_NAMESPACE.endswith(":skeleton")
+
+
+@pytest.mark.parametrize(
+    "profile_kwargs, message",
+    [
+        (
+            {
+                "vendor": "",
+                "profile_name": "bad-skeleton",
+                "vlan_namespace": "urn:aria:underlay:renderer:bad:vlan:skeleton",
+                "interface_namespace": "urn:aria:underlay:renderer:bad:interface:skeleton",
+            },
+            "vendor is required",
+        ),
+        (
+            {
+                "vendor": "huawei",
+                "profile_name": "bad profile",
+                "vlan_namespace": "urn:aria:underlay:renderer:huawei:vlan:skeleton",
+                "interface_namespace": "urn:aria:underlay:renderer:huawei:interface:skeleton",
+            },
+            "profile_name must be a stable token",
+        ),
+        (
+            {
+                "vendor": "huawei",
+                "profile_name": "vrp8-skeleton",
+                "vlan_namespace": "",
+                "interface_namespace": "urn:aria:underlay:renderer:huawei:interface:skeleton",
+            },
+            "vlan_namespace is required",
+        ),
+        (
+            {
+                "vendor": "huawei",
+                "profile_name": "vrp8-skeleton",
+                "vlan_namespace": "urn:aria:underlay:renderer:huawei:shared:skeleton",
+                "interface_namespace": "urn:aria:underlay:renderer:huawei:shared:skeleton",
+            },
+            "vlan_namespace and interface_namespace must be distinct",
+        ),
+        (
+            {
+                "vendor": "huawei",
+                "profile_name": "vrp8-skeleton",
+                "vlan_namespace": "urn:aria:underlay:renderer:huawei:vlan:skeleton",
+                "interface_namespace": "urn:aria:underlay:renderer:huawei:interface:skeleton",
+                "production_ready": True,
+            },
+            "production_ready profile cannot use skeleton markers",
+        ),
+    ],
+)
+def test_renderer_namespace_profile_fails_closed_for_invalid_fields(
+    profile_kwargs, message
+):
+    with pytest.raises(ValueError, match=message):
+        RendererNamespaceProfile(**profile_kwargs)
 
 
 @pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])
@@ -127,6 +186,12 @@ def test_vendor_renderer_builds_single_edit_config_document(renderer):
     assert "<ns0:id>200</ns0:id>" in xml
     assert "<ns1:admin-state>up</ns1:admin-state>" in xml
     assert "<ns1:vlan-id>100</ns1:vlan-id>" in xml
+
+    root = ElementTree.fromstring(xml)
+    assert root.find(f".//{{{renderer.VLAN_NAMESPACE}}}vlan") is not None
+    assert root.find(f".//{{{renderer.IFACE_NAMESPACE}}}interface") is not None
+    assert root.find(f".//{{{renderer.IFACE_NAMESPACE}}}vlan") is None
+    assert root.find(f".//{{{renderer.VLAN_NAMESPACE}}}interface") is None
 
 
 @pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])
