@@ -12,6 +12,10 @@ Latest verified main commits:
 
 | Commit | Scope | CI |
 | --- | --- | --- |
+| `9461c95` | Transaction process chaos coverage package 1 | `25211232450` success |
+| `351b449` | Journal GC worker productionization package | `25211412687` success |
+| `d56a3c9` | Drift audit worker loop package | `25211569832` success |
+| `7934e8d` | Operation summary query surface package | `25211804565` success |
 | `c415bad` | Documentation truth refresh | `25198760941` success |
 | `f6396f2` | Remove Python placeholder module ambiguity | `25198892159` success |
 | `a58907b` | Split Rust service helper boundaries | `25199109107` success |
@@ -49,7 +53,7 @@ These older claims should not be re-opened unless new evidence appears:
 
 | Area | Item | Why it matters | Next action |
 | --- | --- | --- | --- |
-| Transactions | Crash/restart matrix still needs broader process-level chaos coverage | File-backed restart coverage now includes pending recovery, `ForceResolved` restart, successful shadow persistence, terminal `Committed` / `Failed` / `RolledBack` filtering, corrupt journal/shadow fail-closed behavior, `.tmp` residue handling, and a process child that exits during `FinalConfirming`. Recovery now writes shadow before terminal `Committed` journal on roll-forward. Remaining coverage gaps are broader kill points such as `Preparing` / `Committing` and longer adapter reconnect sequences. | Extend the process chaos harness to additional phases and multi-device records. |
+| Transactions | Crash/restart matrix still needs broader process-level chaos coverage | File-backed restart coverage now includes pending recovery, `ForceResolved` restart, successful shadow persistence, terminal `Committed` / `Failed` / `RolledBack` filtering, corrupt journal/shadow fail-closed behavior, `.tmp` residue handling, process children that exit during `Preparing`, `Committing`, and `FinalConfirming`, and a multi-device `Committing` recovery record with mixed adapter outcomes. Recovery now writes shadow before terminal `Committed` journal on roll-forward. Remaining coverage gaps are later kill points such as `Verifying` / `RollingBack` and longer adapter reconnect sequences. | Extend the process chaos harness to later phases and longer reconnect paths. |
 | Rust API architecture | `AriaUnderlayService` still needs a thinner facade over time | Apply, recovery, and admin-operation coordinators now own the main orchestration flows. The remaining architecture work is to keep future flows from leaking back into the facade and to split drift audit if it grows. | Keep new transaction/admin logic in the coordinator modules; consider a dedicated drift coordinator if the audit loop expands. |
 | Operations | Audit/metrics still need persistent external sink integration | Force-resolve, drift audit, GC, recovery, and transaction InDoubt events now map into service-queryable operation summaries and metrics counters. The remaining work is integration with a persistent audit backend and product UI/CLI surface. | Wire `OperationSummary` output into the chosen production audit store once storage requirements are fixed. |
 | GC | GC still needs external deployment integration | `run_once`, retention policy, periodic worker entrypoint, event emission, and deletion summaries now exist. Production still needs wiring into the actual daemon lifecycle, persistent audit sink, and any site-specific disk quota policy. | Mount `JournalGcWorker::run_periodic_until_shutdown` from the production process once daemon lifecycle/shutdown ownership is fixed. |
@@ -73,7 +77,9 @@ These older claims should not be re-opened unless new evidence appears:
 
 The next no-real-switch sequence is:
 
-1. Continue expanding transaction process chaos kill points.
+1. Continue expanding transaction process chaos kill points to `Verifying` and
+   `RollingBack`, if we want one more reliability package before switching
+   focus.
 2. Add persistent audit sink integration when the product storage target is fixed.
 3. Revisit real-device parser/renderer only after hardware or captured XML is
    available.
