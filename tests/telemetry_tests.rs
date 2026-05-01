@@ -255,6 +255,87 @@ async fn service_records_queryable_operation_summaries_while_emitting_events() {
 }
 
 #[tokio::test]
+async fn operation_summary_query_returns_rollup_for_all_filtered_records_before_limit() {
+    let store = Arc::new(InMemoryOperationSummaryStore::default());
+    store
+        .record_event(&UnderlayEvent::drift_detected(
+            "req-1",
+            "trace-ops",
+            &DriftReport {
+                device_id: DeviceId("leaf-a".into()),
+                drift_detected: true,
+                findings: vec![DriftFinding {
+                    path: "interfaces/Ethernet1/mode".into(),
+                    drift_type: DriftType::InterfaceAttributeMismatch,
+                    expected: Some("access".into()),
+                    actual: Some("trunk".into()),
+                }],
+                warnings: Vec::new(),
+            },
+        ))
+        .expect("drift event should persist");
+    store
+        .record_event(&UnderlayEvent::transaction_result(
+            "req-2",
+            "trace-ops",
+            "tx-in-doubt",
+            Some(DeviceId("leaf-b".into())),
+            TxPhase::InDoubt,
+            Some(TransactionStrategy::CandidateCommit),
+            "in_doubt",
+        ))
+        .expect("transaction in-doubt event should persist");
+    store
+        .record_event(&UnderlayEvent::drift_audit_completed(
+            "req-3",
+            "trace-ops",
+            2,
+            &[DeviceId("leaf-a".into())],
+        ))
+        .expect("drift audit completion should persist");
+
+    let service =
+        AriaUnderlayService::new(DeviceInventory::default()).with_operation_summary_store(store);
+    let response = service
+        .list_operation_summaries(ListOperationSummariesRequest {
+            result: Some("drift_detected".into()),
+            limit: Some(1),
+            ..Default::default()
+        })
+        .await
+        .expect("operation summary rollup should be queryable");
+
+    assert_eq!(response.summaries.len(), 1);
+    assert_eq!(response.overview.matched_records, 2);
+    assert_eq!(response.overview.returned_records, 1);
+    assert_eq!(response.overview.attention_required, 2);
+    assert_eq!(
+        response.overview.by_action.get("drift.detected").copied(),
+        Some(1)
+    );
+    assert_eq!(
+        response
+            .overview
+            .by_action
+            .get("drift.audit_completed")
+            .copied(),
+        Some(1)
+    );
+    assert_eq!(
+        response.overview.by_result.get("drift_detected").copied(),
+        Some(2)
+    );
+    assert_eq!(
+        response.overview.by_device.get("leaf-a").copied(),
+        Some(1)
+    );
+    assert_eq!(
+        response.overview.by_device.get("leaf-b").copied(),
+        None
+    );
+}
+
+#[tokio::test]
 async fn service_emits_recovery_completion_event_to_configured_sink() {
     let sink = Arc::new(InMemoryEventSink::default());
     let service = AriaUnderlayService::new(DeviceInventory::default()).with_event_sink(sink.clone());

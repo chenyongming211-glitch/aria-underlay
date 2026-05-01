@@ -10,7 +10,7 @@ use crate::api::force_resolve::{
 };
 use crate::api::force_unlock::{ForceUnlockRequest, ForceUnlockResponse};
 use crate::api::operations::{
-    ListOperationSummariesRequest, ListOperationSummariesResponse,
+    ListOperationSummariesRequest, ListOperationSummariesResponse, OperationSummaryOverview,
 };
 use crate::api::request::{
     ApplyDomainIntentRequest, ApplyIntentRequest, DriftAuditRequest, RefreshStateRequest,
@@ -461,24 +461,35 @@ impl UnderlayService for AriaUnderlayService {
         if let Some(action) = request.action {
             summaries.retain(|summary| summary.action == action);
         }
+        if let Some(result) = request.result {
+            summaries.retain(|summary| summary.result == result);
+        }
         if let Some(device_id) = request.device_id {
             summaries.retain(|summary| summary.device_id.as_ref() == Some(&device_id));
         }
         if let Some(tx_id) = request.tx_id {
             summaries.retain(|summary| summary.tx_id.as_deref() == Some(tx_id.as_str()));
         }
+
+        let mut returned_summaries = summaries.clone();
         if let Some(limit) = request.limit {
-            if summaries.len() > limit {
-                summaries = summaries
+            if returned_summaries.len() > limit {
+                returned_summaries = returned_summaries
                     .into_iter()
                     .rev()
                     .take(limit)
                     .collect::<Vec<_>>();
-                summaries.reverse();
+                returned_summaries.reverse();
             }
         }
 
-        Ok(ListOperationSummariesResponse { summaries })
+        let overview =
+            OperationSummaryOverview::from_summaries(&summaries, returned_summaries.len());
+
+        Ok(ListOperationSummariesResponse {
+            summaries: returned_summaries,
+            overview,
+        })
     }
 }
 

@@ -3,10 +3,12 @@ use std::io;
 use std::sync::Arc;
 
 use aria_underlay::api::force_resolve::ForceResolveTransactionRequest;
+use aria_underlay::api::operations::ListOperationSummariesRequest;
 use aria_underlay::api::transactions::ListInDoubtTransactionsRequest;
 use aria_underlay::api::{AriaUnderlayService, UnderlayService};
 use aria_underlay::device::DeviceInventory;
 use aria_underlay::model::DeviceId;
+use aria_underlay::telemetry::JsonFileOperationSummaryStore;
 use aria_underlay::tx::JsonFileTxJournalStore;
 
 #[tokio::main]
@@ -20,6 +22,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     match command {
         "list-in-doubt" => list_in_doubt(&args[1..]).await,
         "force-resolve" => force_resolve(&args[1..]).await,
+        "list-operations" => list_operations(&args[1..]).await,
+        "operation-summary" => operation_summary(&args[1..]).await,
         "-h" | "--help" | "help" => {
             print_usage();
             Ok(())
@@ -67,11 +71,50 @@ async fn force_resolve(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+async fn list_operations(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let operation_summary_path = required_option(args, "--operation-summary-path")?;
+    let service = service_for_operation_summary_path(operation_summary_path);
+    let response = service
+        .list_operation_summaries(operation_summary_request(args)?)
+        .await?;
+
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+async fn operation_summary(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let operation_summary_path = required_option(args, "--operation-summary-path")?;
+    let service = service_for_operation_summary_path(operation_summary_path);
+    let response = service
+        .list_operation_summaries(operation_summary_request(args)?)
+        .await?;
+
+    println!("{}", serde_json::to_string_pretty(&response.overview)?);
+    Ok(())
+}
+
 fn service_for_journal_root(journal_root: String) -> AriaUnderlayService {
     AriaUnderlayService::new_with_journal(
         DeviceInventory::default(),
         Arc::new(JsonFileTxJournalStore::new(journal_root)),
     )
+}
+
+fn service_for_operation_summary_path(operation_summary_path: String) -> AriaUnderlayService {
+    AriaUnderlayService::new(DeviceInventory::default()).with_operation_summary_store(Arc::new(
+        JsonFileOperationSummaryStore::new(operation_summary_path),
+    ))
+}
+
+fn operation_summary_request(args: &[String]) -> Result<ListOperationSummariesRequest, io::Error> {
+    Ok(ListOperationSummariesRequest {
+        attention_required_only: has_flag(args, "--attention-required"),
+        action: option_value(args, "--action"),
+        result: option_value(args, "--result"),
+        device_id: option_value(args, "--device-id").map(DeviceId),
+        tx_id: option_value(args, "--tx-id"),
+        limit: optional_usize(args, "--limit")?,
+    })
 }
 
 fn required_option(args: &[String], name: &str) -> Result<String, io::Error> {
@@ -84,6 +127,16 @@ fn option_value(args: &[String], name: &str) -> Option<String> {
         .map(|window| window[1].clone())
 }
 
+fn optional_usize(args: &[String], name: &str) -> Result<Option<usize>, io::Error> {
+    option_value(args, name)
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .map_err(|_| invalid_input(format!("{name} must be an unsigned integer")))
+        })
+        .transpose()
+}
+
 fn has_flag(args: &[String], name: &str) -> bool {
     args.iter().any(|arg| arg == name)
 }
@@ -94,6 +147,6 @@ fn invalid_input(message: impl Into<String>) -> io::Error {
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  cargo run --example transaction_ops -- list-in-doubt --journal-root <dir> [--device-id <id>]\n  cargo run --example transaction_ops -- force-resolve --journal-root <dir> --tx-id <tx> --operator <name> --reason <text> --break-glass [--request-id <id>] [--trace-id <id>]"
+        "usage:\n  cargo run --example transaction_ops -- list-in-doubt --journal-root <dir> [--device-id <id>]\n  cargo run --example transaction_ops -- force-resolve --journal-root <dir> --tx-id <tx> --operator <name> --reason <text> --break-glass [--request-id <id>] [--trace-id <id>]\n  cargo run --example transaction_ops -- list-operations --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]\n  cargo run --example transaction_ops -- operation-summary --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]"
     );
 }
