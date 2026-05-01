@@ -181,6 +181,100 @@ fn file_journal_lists_only_recoverable_records() {
 }
 
 #[test]
+fn file_journal_terminal_records_stay_non_recoverable_after_store_recreation() {
+    let root = temp_journal_dir("terminal-restart");
+    let store = JsonFileTxJournalStore::new(&root);
+    let terminal_records = [
+        ("tx-committed", TxPhase::Committed),
+        ("tx-failed", TxPhase::Failed),
+        ("tx-rolled-back", TxPhase::RolledBack),
+        ("tx-force-resolved", TxPhase::ForceResolved),
+    ];
+
+    for (tx_id, phase) in &terminal_records {
+        let record = TxJournalRecord::started(
+            &TxContext {
+                tx_id: (*tx_id).into(),
+                request_id: format!("req-{tx_id}"),
+                trace_id: format!("trace-{tx_id}"),
+            },
+            vec![DeviceId("leaf-a".into())],
+        )
+        .with_phase(phase.clone());
+
+        store
+            .put(&record)
+            .expect("terminal journal put should succeed");
+    }
+
+    let restarted = JsonFileTxJournalStore::new(&root);
+    let recoverable = restarted
+        .list_recoverable()
+        .expect("journal restart scan should succeed");
+
+    assert!(recoverable.is_empty());
+    for (tx_id, phase) in &terminal_records {
+        let loaded = restarted
+            .get(tx_id)
+            .expect("terminal journal get should succeed")
+            .expect("terminal journal should survive restart");
+        assert_eq!(&loaded.phase, phase);
+    }
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn file_journal_rejects_corrupt_record_during_restart_scan() {
+    let root = temp_journal_dir("corrupt-restart");
+    std::fs::create_dir_all(&root).expect("journal root should be created");
+    std::fs::write(root.join("tx-corrupt.json"), b"{not valid json")
+        .expect("corrupt journal fixture should be written");
+
+    let restarted = JsonFileTxJournalStore::new(&root);
+    let err = restarted
+        .list_recoverable()
+        .expect_err("corrupt journal record should fail closed during recovery scan");
+    let message = format!("{err}");
+
+    assert!(
+        message.contains("parse tx journal"),
+        "unexpected journal parse error: {message}"
+    );
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn file_journal_ignores_tmp_crash_residue_after_store_recreation() {
+    let root = temp_journal_dir("tmp-residue");
+    let store = JsonFileTxJournalStore::new(&root);
+    let active = TxJournalRecord::started(
+        &TxContext {
+            tx_id: "tx-active".into(),
+            request_id: "req-active".into(),
+            trace_id: "trace-active".into(),
+        },
+        vec![DeviceId("leaf-a".into())],
+    )
+    .with_phase(TxPhase::Preparing);
+
+    store.put(&active).expect("active journal put should succeed");
+    std::fs::write(root.join(".tx-active.json.leftover.tmp"), b"not json")
+        .expect("tmp journal residue should be written");
+
+    let restarted = JsonFileTxJournalStore::new(&root);
+    let recoverable = restarted
+        .list_recoverable()
+        .expect("journal restart scan should ignore tmp residue");
+
+    assert_eq!(recoverable.len(), 1);
+    assert_eq!(recoverable[0].tx_id, "tx-active");
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn file_journal_sanitizes_transaction_id_path() {
     let root = temp_journal_dir("sanitize");
     let store = JsonFileTxJournalStore::new(&root);

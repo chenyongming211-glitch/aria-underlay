@@ -106,6 +106,48 @@ fn file_shadow_store_lists_states_in_device_order_after_recreation() {
 }
 
 #[test]
+fn file_shadow_store_rejects_corrupt_state_after_recreation() {
+    let root = temp_shadow_dir("corrupt-restart");
+    std::fs::create_dir_all(&root).expect("shadow root should be created");
+    std::fs::write(root.join("leaf-a.json"), b"{not valid json")
+        .expect("corrupt shadow fixture should be written");
+
+    let restarted = JsonFileShadowStateStore::new(&root);
+    let err = restarted
+        .get(&DeviceId("leaf-a".into()))
+        .expect_err("corrupt shadow state should fail closed after restart");
+    let message = format!("{err}");
+
+    assert!(
+        message.contains("parse shadow state"),
+        "unexpected shadow parse error: {message}"
+    );
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn file_shadow_store_ignores_tmp_crash_residue_after_recreation() {
+    let root = temp_shadow_dir("tmp-residue");
+    let store = JsonFileShadowStateStore::new(&root);
+    store
+        .put(shadow_state("leaf-a", 100))
+        .expect("file shadow put should succeed");
+    std::fs::write(root.join(".leaf-a.json.leftover.tmp"), b"not json")
+        .expect("tmp shadow residue should be written");
+
+    let states = JsonFileShadowStateStore::new(&root)
+        .list()
+        .expect("file shadow list should ignore tmp residue");
+
+    assert_eq!(states.len(), 1);
+    assert_eq!(states[0].device_id.0, "leaf-a");
+    assert!(states[0].vlans.contains_key(&100));
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn file_shadow_store_removes_state() {
     let root = temp_shadow_dir("remove");
     let store = JsonFileShadowStateStore::new(&root);
