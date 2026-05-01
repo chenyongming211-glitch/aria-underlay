@@ -1,5 +1,10 @@
 # Bug Inventory — 2026-04-30
 
+> Verified review snapshot. This file records the 2026-04-30 bug pass and its
+> resolutions. For the current open-bug and tech-debt list after the
+> 2026-05-01 architecture hygiene packages, use
+> [Current Bug / Tech Debt Inventory 2026-05-01](./bug-inventory-current-2026-05-01.md).
+
 Verified bug findings from two-pass code review, refreshed after the
 2026-04-30 adapter pool, secret cleanup, dry-run, parser fixture work, and
 the 2026-04-30 deep whole-code review.

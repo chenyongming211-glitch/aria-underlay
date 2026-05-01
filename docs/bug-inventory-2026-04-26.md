@@ -1,5 +1,10 @@
 # Bug Inventory — 2026-04-26
 
+> Historical snapshot. Do not use this file as the current open-bug source.
+> Many findings and line numbers below were fixed or moved by later work.
+> Use [Current Bug / Tech Debt Inventory 2026-05-01](./bug-inventory-current-2026-05-01.md)
+> for current planning.
+
 Comprehensive bug report from full codebase review (~10,500 lines, ~73% sprint completion). 11 bugs fixed, 32 remaining.
 
 ## Rust — High Severity (4)
