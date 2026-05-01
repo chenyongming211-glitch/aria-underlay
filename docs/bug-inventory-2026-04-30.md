@@ -24,7 +24,7 @@ trusted as-is.
 | P1 | Product initialization/register accepts invalid connection inputs | Fixed in `8ca1aec`; GitHub Actions run `25175796255` passed | Rust bootstrap/registration validation |
 | P1 | Additional adapter error details dropped from journal diagnostics | Fixed in `e76e961`; GitHub Actions run `25176070652` passed | Rust error/journal mapping |
 | P2 | `TrustOnFirstUse` currently behaves as strict known-hosts verification, not TOFU | Fixed in `817607d`; GitHub Actions run `25197588455` passed | Python NETCONF backend + host-key trust store |
-| P2 | Rust `device/render.rs` renderer skeletons are dead code | Confirmed low-risk tech debt | Rust device module |
+| P2 | Rust `device/render.rs` renderer skeletons are dead code | Fixed in current P2 renderer cleanup package; CI validation pending | Rust device module |
 | P2 | Python vendor driver stubs raise `NotImplementedError` on construction | Fixed in current P2 adapter hygiene package; CI validation pending | Python driver registry |
 | P2 | `_admin_state_to_text` duplicated with inconsistent defaults | Fixed in current P2 adapter hygiene package; CI validation pending | Python backend/renderer shared helper |
 | P2 | `SmallFabric` topology lacks explicit endpoint count semantics | Fixed in current P2 Rust hardening package; CI validation pending | Intent validation + requirements docs |
@@ -325,13 +325,18 @@ fingerprint.
 
 ---
 
-## LOW — Rust DeviceConfigRenderer Dead Code
+## RESOLVED LOW — Rust DeviceConfigRenderer Dead Code
 
 **Files:** `src/device/render.rs` (all 99 lines)
 
 **Finding:** `CiscoRenderer`, `H3cRenderer`, `HuaweiRenderer`, `RuijieRenderer` all implement `DeviceConfigRenderer` by returning `Err(UnderlayError::UnsupportedOperation)`. `grep -rn` across `src/` confirms zero callers outside `render.rs` and `mod.rs` (the re-export). `renderer_for_vendor()` constructs dead objects. Actual rendering is Python-side via gRPC.
 
 **Fix direction:** Remove the four renderer structs, the trait, and `renderer_for_vendor()`, or wire them to the Python adapter.
+
+**Resolution 2026-05-01:** Fixed in the P2 renderer cleanup package. The Rust
+`device/render.rs` module, its re-exports, and the tests that only exercised
+the dead skeletons were removed. Production rendering remains Python-side via
+the adapter renderer registry. CI validation pending for this package.
 
 ---
 
