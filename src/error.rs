@@ -32,6 +32,9 @@ pub enum UnderlayError {
     #[error("authorization denied: {0}")]
     AuthorizationDenied(String),
 
+    #[error("authentication failed: {0}")]
+    AuthenticationFailed(String),
+
     #[error("product audit write failed: {0}")]
     ProductAuditWriteFailed(String),
 

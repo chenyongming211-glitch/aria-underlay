@@ -428,7 +428,7 @@ Local JSONL mode is intentionally simple and auditable, but it is not the final 
 - immutable audit records,
 - searchable UI/API.
 
-The first product-facing Rust operation boundary is `ProductOpsManager` in `src/api/product_ops.rs`. The first handler-facing facade is `ProductOpsApi` in `src/api/product_api.rs`. The first framework-neutral HTTP route contract is `ProductHttpRouter` in `src/api/product_http.rs`. It defines method/path/status/body JSON behavior, but it is not a listener and does not select the final web framework.
+The first product-facing Rust operation boundary is `ProductOpsManager` in `src/api/product_ops.rs`. The first handler-facing facade is `ProductOpsApi` in `src/api/product_api.rs`. The first framework-neutral HTTP route contract is `ProductHttpRouter` in `src/api/product_http.rs`. It defines method/path/status/body JSON behavior, but it is not a listener and does not select the final web framework. The first identity boundary is `product_identity` in `src/api/product_identity.rs`.
 
 `ProductOpsApi` currently accepts a typed `ProductApiRequest<T>` envelope:
 
@@ -437,14 +437,29 @@ The first product-facing Rust operation boundary is `ProductOpsManager` in `src/
 - headers
 - typed body
 
-The local/mock session extractor is `HeaderProductSessionExtractor`. It reads:
+There are now two session extractors:
+
+| Extractor | Intended use |
+| --- | --- |
+| `HeaderProductSessionExtractor` | Local/mock contract tests only. |
+| `BearerTokenProductSessionExtractor` | Product-facing route wiring before a real IdP verifier is selected. |
+
+The local/mock header extractor reads:
 
 | Header | Meaning |
 | --- | --- |
 | `x-aria-operator-id` | Operator identity for local product API contract tests. |
 | `x-aria-role` | One of `Viewer`, `Operator`, `BreakGlassOperator`, `Admin`, or `Auditor`. |
 
-The header extractor is not a production identity model. It is a replaceable seam for future IdP/token validation.
+The bearer extractor reads:
+
+| Header | Meaning |
+| --- | --- |
+| `Authorization: Bearer <token>` | Token passed to `ProductIdentityVerifier`. |
+
+`StaticProductIdentityVerifier` is deterministic local/offline infrastructure. It maps bearer tokens to normalized principals with `operator_id`, role, optional issuer, optional subject, optional session ID, and optional expiry. Missing, malformed, unknown, and expired tokens fail closed before RBAC or product audit export runs.
+
+The header extractor and static verifier are not production identity models. Production should replace the verifier with OIDC/JWT/JWKS or the selected internal SSO/session verifier before exposing a listener.
 
 `ProductHttpRouter` currently defines these product HTTP routes:
 
@@ -458,8 +473,7 @@ Required HTTP headers:
 | Header | Meaning |
 | --- | --- |
 | `x-aria-request-id` | Operator-visible request ID. |
-| `x-aria-operator-id` | Operator identity for local/mock session extraction. |
-| `x-aria-role` | Local/mock RBAC role. |
+| `Authorization` | `Bearer <token>` when using `BearerTokenProductSessionExtractor`. |
 
 Optional HTTP headers:
 
@@ -467,7 +481,7 @@ Optional HTTP headers:
 | --- | --- |
 | `x-aria-trace-id` | Cross-service trace ID; defaults to request ID in error responses when omitted. |
 
-HTTP errors are JSON. Invalid requests return `400`, RBAC denial returns `403`, unknown paths return `404`, known paths with the wrong method return `405` plus `allow: POST`, and audit/internal failures return `500`.
+HTTP errors are JSON. Authentication failures return `401` plus `www-authenticate: Bearer`, invalid requests return `400`, RBAC denial returns `403`, unknown paths return `404`, known paths with the wrong method return `405` plus `allow: POST`, and audit/internal failures return `500`.
 
 Current product boundary behavior:
 
@@ -481,8 +495,8 @@ Audit export is fail-closed. If the export action cannot be appended to product 
 Still missing from the product layer:
 
 - Real HTTP listener/server wiring.
-- Identity provider integration.
-- token/session validation.
+- Real identity provider integration.
+- JWT/OIDC/JWKS or internal SSO token validation.
 - product UI.
 - online daemon reload.
 
@@ -493,4 +507,5 @@ docs/superpowers/specs/2026-05-03-product-audit-rbac-design.md
 docs/superpowers/specs/2026-05-03-product-ops-rbac-boundary-design.md
 docs/superpowers/specs/2026-05-03-product-api-routing-skeleton-design.md
 docs/superpowers/specs/2026-05-03-product-http-routing-design.md
+docs/superpowers/specs/2026-05-04-product-session-identity-boundary-design.md
 ```

@@ -139,6 +139,9 @@ pub(super) fn journal_error_fields(error: &UnderlayError) -> (String, String) {
         UnderlayError::AuthorizationDenied(message) => {
             ("AUTHORIZATION_DENIED".into(), message.clone())
         }
+        UnderlayError::AuthenticationFailed(message) => {
+            ("AUTHENTICATION_FAILED".into(), message.clone())
+        }
         UnderlayError::ProductAuditWriteFailed(message) => {
             ("PRODUCT_AUDIT_WRITE_FAILED".into(), message.clone())
         }

@@ -129,6 +129,7 @@ fn underlay_error_response(
     error: UnderlayError,
 ) -> ProductHttpResponse {
     let (status, error_code) = match &error {
+        UnderlayError::AuthenticationFailed(_) => (401, "authentication_failed"),
         UnderlayError::InvalidIntent(_) => (400, "invalid_request"),
         UnderlayError::AuthorizationDenied(_) => (403, "authorization_denied"),
         UnderlayError::DeviceNotFound(_) => (404, "not_found"),
@@ -138,7 +139,13 @@ fn underlay_error_response(
         }
         _ => (500, "internal_error"),
     };
-    error_response(request, status, error_code, error.to_string())
+    let mut response = error_response(request, status, error_code, error.to_string());
+    if status == 401 {
+        response
+            .headers
+            .insert("www-authenticate".into(), "Bearer".into());
+    }
+    response
 }
 
 fn not_found_response(request: &ProductHttpRequest) -> ProductHttpResponse {
