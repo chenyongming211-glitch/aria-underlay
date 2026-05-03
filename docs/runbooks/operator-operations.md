@@ -11,6 +11,7 @@ Covered:
 - Operation alert inspection.
 - Internal alert lifecycle: acknowledge, resolve, suppress, and expire.
 - Worker daemon config, retention, and schedule changes.
+- Worker deployment samples and offline config preflight.
 - Journal/artifact GC signal review.
 - Drift audit signal review.
 - InDoubt transaction review and force-resolve.
@@ -29,6 +30,7 @@ The checked-in sample config is:
 
 ```text
 docs/examples/underlay-worker-daemon.local.json
+docs/examples/underlay-worker-daemon.production.json
 ```
 
 It uses these local paths:
@@ -47,6 +49,64 @@ It uses these local paths:
 
 Use site-specific absolute paths in production-like environments, for example `/var/lib/aria-underlay/...`.
 
+## Deployment Samples
+
+Checked-in deployment samples are:
+
+```text
+docs/examples/underlay-worker-daemon.production.json
+docs/examples/systemd/aria-underlay-worker.service
+docs/examples/tmpfiles.d/aria-underlay.conf
+```
+
+The production JSON sample uses `/var/lib/aria-underlay` for state, journal, artifacts, summaries, alerts, and drift shadow stores. The tmpfiles.d sample creates those directories with `aria-underlay` ownership. The systemd sample runs a config preflight before daemon startup and restricts daemon writes to:
+
+```text
+/var/lib/aria-underlay
+/var/log/aria-underlay
+/run/aria-underlay
+```
+
+These files are deployment examples, not a package installer. Site packaging still owns user creation, binary placement, `/etc/aria-underlay/worker.json` installation, service enablement, log policy, and host-level disk quotas.
+
+## Check Worker Config
+
+Run preflight without starting daemon workers:
+
+```bash
+cargo run --bin aria-underlay-ops -- check-worker-config \
+  --worker-config-path docs/examples/underlay-worker-daemon.production.json
+```
+
+Run strict host checks before service startup:
+
+```bash
+aria-underlay-ops check-worker-config \
+  --worker-config-path /etc/aria-underlay/worker.json \
+  --strict-paths
+```
+
+`check-worker-config` prints a JSON report with:
+
+| Field | Meaning |
+| --- | --- |
+| `valid` | `true` only when no errors were found. |
+| `strict_paths` | Whether filesystem directory and write probes were enabled. |
+| `errors` | Fail-closed reasons such as invalid schedules or missing directories. |
+| `warnings` | Non-blocking operator notes, such as a config with no enabled worker sections. |
+| `checked_paths` | Files and directories considered by preflight. |
+
+Preflight validates:
+
+- JSON config parsing.
+- `operation_alert` requires `operation_summary`.
+- Worker schedule `interval_secs` must be greater than zero.
+- Operation summary retention must have positive limits when set.
+- Journal GC retention must keep `max_artifacts_per_device` greater than zero.
+- In strict mode, required directories must exist and be writable by the current user.
+
+Preflight does not open NETCONF sessions, lock devices, edit candidate config, run GC, run drift audit, deliver alerts, or compact summaries.
+
 ## Start the Worker
 
 Run the worker daemon with the sample config:
@@ -60,6 +120,14 @@ Installed binary form:
 ```bash
 aria-underlay-worker /etc/aria-underlay/worker.json
 ```
+
+When using the systemd sample, startup runs:
+
+```bash
+aria-underlay-ops check-worker-config --worker-config-path /etc/aria-underlay/worker.json --strict-paths
+```
+
+If preflight fails, the daemon is not started.
 
 The daemon wires these workers when the corresponding config sections exist:
 

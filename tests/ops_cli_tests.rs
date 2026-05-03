@@ -281,6 +281,51 @@ fn ops_cli_changes_worker_schedule_with_audit() {
 }
 
 #[test]
+fn ops_cli_checks_worker_config_without_starting_daemon() {
+    let temp = temp_test_dir("worker-config-check");
+    let config_path = temp.join("worker.json");
+    let config = worker_config(&temp);
+    create_worker_dirs(&config);
+    fs::create_dir_all(&temp).expect("temp dir should be created");
+    config
+        .write_to_path(&config_path)
+        .expect("worker config should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_aria-underlay-ops"))
+        .args([
+            "check-worker-config",
+            "--worker-config-path",
+            config_path.to_str().expect("config path should be utf-8"),
+            "--strict-paths",
+        ])
+        .output()
+        .expect("aria-underlay-ops should run");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("preflight report should be JSON");
+    assert_eq!(payload["valid"], true);
+    assert_eq!(payload["strict_paths"], true);
+    assert!(
+        payload["checked_paths"]
+            .as_array()
+            .expect("checked_paths should be an array")
+            .iter()
+            .any(|check| check["kind"] == "operation_summary.path.parent")
+    );
+    assert!(
+        !temp.join("ops").join("summaries.jsonl").exists(),
+        "check-worker-config must not start daemon workers"
+    );
+
+    fs::remove_dir_all(temp).ok();
+}
+
+#[test]
 fn ops_cli_force_resolve_writes_journal_and_operation_summary() {
     let temp = temp_test_dir("force-resolve");
     let journal_root = temp.join("journal");
@@ -410,5 +455,35 @@ fn worker_config(temp: &std::path::Path) -> UnderlayWorkerDaemonConfig {
                 run_immediately: true,
             },
         }),
+    }
+}
+
+fn create_worker_dirs(config: &UnderlayWorkerDaemonConfig) {
+    if let Some(operation_summary) = &config.operation_summary {
+        fs::create_dir_all(operation_summary.path.parent().expect("summary parent"))
+            .expect("summary parent should be created");
+    }
+    if let Some(operation_alert) = &config.operation_alert {
+        fs::create_dir_all(operation_alert.path.parent().expect("alert parent"))
+            .expect("alert parent should be created");
+        fs::create_dir_all(
+            operation_alert
+                .checkpoint_path
+                .parent()
+                .expect("alert checkpoint parent"),
+        )
+        .expect("alert checkpoint parent should be created");
+    }
+    if let Some(journal_gc) = &config.journal_gc {
+        fs::create_dir_all(&journal_gc.journal_root).expect("journal root should be created");
+        if let Some(artifact_root) = &journal_gc.artifact_root {
+            fs::create_dir_all(artifact_root).expect("artifact root should be created");
+        }
+    }
+    if let Some(drift_audit) = &config.drift_audit {
+        fs::create_dir_all(&drift_audit.expected_shadow_root)
+            .expect("expected shadow root should be created");
+        fs::create_dir_all(&drift_audit.observed_shadow_root)
+            .expect("observed shadow root should be created");
     }
 }
