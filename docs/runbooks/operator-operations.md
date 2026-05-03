@@ -428,7 +428,23 @@ Local JSONL mode is intentionally simple and auditable, but it is not the final 
 - immutable audit records,
 - searchable UI/API.
 
-The first product-facing Rust boundary is `ProductOpsManager` in `src/api/product_ops.rs`. It is not an HTTP server. It is the API-layer facade future product handlers should call so product reads cannot bypass operator identity and RBAC.
+The first product-facing Rust operation boundary is `ProductOpsManager` in `src/api/product_ops.rs`. The first handler-facing facade is `ProductOpsApi` in `src/api/product_api.rs`. Neither is an HTTP server. Future HTTP handlers should call `ProductOpsApi` so product reads cannot bypass session extraction, operator identity, RBAC, and product audit behavior.
+
+`ProductOpsApi` currently accepts a typed `ProductApiRequest<T>` envelope:
+
+- `request_id`
+- optional `trace_id`
+- headers
+- typed body
+
+The local/mock session extractor is `HeaderProductSessionExtractor`. It reads:
+
+| Header | Meaning |
+| --- | --- |
+| `x-aria-operator-id` | Operator identity for local product API contract tests. |
+| `x-aria-role` | One of `Viewer`, `Operator`, `BreakGlassOperator`, `Admin`, or `Auditor`. |
+
+The header extractor is not a production identity model. It is a replaceable seam for future IdP/token validation.
 
 Current product boundary behavior:
 
@@ -441,9 +457,9 @@ Audit export is fail-closed. If the export action cannot be appended to product 
 
 Still missing from the product layer:
 
-- HTTP routes.
+- Real HTTP routes/server.
 - Identity provider integration.
-- token/session parsing.
+- token/session validation.
 - product UI.
 - online daemon reload.
 
@@ -452,4 +468,5 @@ The design boundary is recorded in:
 ```text
 docs/superpowers/specs/2026-05-03-product-audit-rbac-design.md
 docs/superpowers/specs/2026-05-03-product-ops-rbac-boundary-design.md
+docs/superpowers/specs/2026-05-03-product-api-routing-skeleton-design.md
 ```
