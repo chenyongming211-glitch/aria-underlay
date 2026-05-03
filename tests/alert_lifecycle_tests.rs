@@ -157,6 +157,10 @@ impl ProductAuditStore for FailingProductAuditStore {
             "simulated product audit failure".into(),
         ))
     }
+
+    fn list(&self) -> UnderlayResult<Vec<ProductAuditRecord>> {
+        Ok(Vec::new())
+    }
 }
 
 fn transition_request(

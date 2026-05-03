@@ -428,8 +428,28 @@ Local JSONL mode is intentionally simple and auditable, but it is not the final 
 - immutable audit records,
 - searchable UI/API.
 
+The first product-facing Rust boundary is `ProductOpsManager` in `src/api/product_ops.rs`. It is not an HTTP server. It is the API-layer facade future product handlers should call so product reads cannot bypass operator identity and RBAC.
+
+Current product boundary behavior:
+
+| Operation | RBAC action | Audit behavior |
+| --- | --- | --- |
+| List operation summaries | `ListOperationSummaries` | Read-only; no product audit record in this package. |
+| Export product audit history | `ExportAuditHistory` | Writes `product_audit.export_requested` before returning records. |
+
+Audit export is fail-closed. If the export action cannot be appended to product audit, no audit records are returned.
+
+Still missing from the product layer:
+
+- HTTP routes.
+- Identity provider integration.
+- token/session parsing.
+- product UI.
+- online daemon reload.
+
 The design boundary is recorded in:
 
 ```text
 docs/superpowers/specs/2026-05-03-product-audit-rbac-design.md
+docs/superpowers/specs/2026-05-03-product-ops-rbac-boundary-design.md
 ```

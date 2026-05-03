@@ -4,6 +4,7 @@ mod apply;
 mod apply_coordinator;
 mod drift_ops;
 pub mod operations;
+pub mod product_ops;
 pub mod force_unlock;
 pub mod force_resolve;
 mod recovery_coordinator;

@@ -161,6 +161,10 @@ impl ProductAuditStore for FailingProductAuditStore {
             "simulated audit write failure".into(),
         ))
     }
+
+    fn list(&self) -> UnderlayResult<Vec<ProductAuditRecord>> {
+        Ok(Vec::new())
+    }
 }
 
 fn journal_record(tx_id: &str, phase: TxPhase, device_id: &str) -> TxJournalRecord {

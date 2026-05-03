@@ -131,10 +131,39 @@ impl ProductAuditRecord {
             appended_at_unix_secs: now_unix_secs(),
         }
     }
+
+    pub fn product_audit_export_requested(
+        request_id: impl Into<String>,
+        trace_id: impl Into<String>,
+        operator_id: impl Into<String>,
+        role: RbacRole,
+        reason: impl Into<String>,
+        mut fields: BTreeMap<String, String>,
+    ) -> Self {
+        fields.insert("export_type".into(), "product_audit".into());
+
+        Self {
+            request_id: request_id.into(),
+            trace_id: trace_id.into(),
+            action: "product_audit.export_requested".into(),
+            result: "authorized".into(),
+            tx_id: None,
+            device_id: None,
+            operator_id: Some(operator_id.into()),
+            role: Some(role),
+            reason: Some(reason.into()),
+            attention_required: false,
+            error_code: None,
+            error_message: None,
+            fields,
+            appended_at_unix_secs: now_unix_secs(),
+        }
+    }
 }
 
 pub trait ProductAuditStore: std::fmt::Debug + Send + Sync {
     fn append(&self, record: ProductAuditRecord) -> UnderlayResult<()>;
+    fn list(&self) -> UnderlayResult<Vec<ProductAuditRecord>>;
 }
 
 #[derive(Debug, Default)]
@@ -143,6 +172,10 @@ pub struct NoopProductAuditStore;
 impl ProductAuditStore for NoopProductAuditStore {
     fn append(&self, _record: ProductAuditRecord) -> UnderlayResult<()> {
         Ok(())
+    }
+
+    fn list(&self) -> UnderlayResult<Vec<ProductAuditRecord>> {
+        Ok(Vec::new())
     }
 }
 
@@ -167,6 +200,10 @@ impl ProductAuditStore for InMemoryProductAuditStore {
             .map_err(|_| UnderlayError::Internal("product audit store mutex poisoned".into()))?
             .push(record);
         Ok(())
+    }
+
+    fn list(&self) -> UnderlayResult<Vec<ProductAuditRecord>> {
+        Ok(self.records())
     }
 }
 
@@ -219,6 +256,10 @@ impl ProductAuditStore for JsonFileProductAuditStore {
         file.write_all(&payload).map_err(product_audit_io_error)?;
         file.sync_all().map_err(product_audit_io_error)?;
         Ok(())
+    }
+
+    fn list(&self) -> UnderlayResult<Vec<ProductAuditRecord>> {
+        JsonFileProductAuditStore::list(self)
     }
 }
 
