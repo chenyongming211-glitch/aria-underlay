@@ -6,9 +6,11 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
+use crate::authz::RbacRole;
 use crate::model::DeviceId;
 use crate::telemetry::ops::OperationSummary;
 use crate::utils::atomic_file::atomic_write;
+use crate::utils::time::now_unix_secs;
 use crate::{UnderlayError, UnderlayResult};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,8 +32,61 @@ pub struct OperationAlert {
     pub fields: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OperationAlertLifecycleStatus {
+    Open,
+    Acknowledged,
+    Resolved,
+    Suppressed,
+    Expired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperationAlertLifecycleEvent {
+    pub status: OperationAlertLifecycleStatus,
+    pub operator_id: String,
+    pub role: Option<RbacRole>,
+    pub reason: Option<String>,
+    pub request_id: String,
+    pub trace_id: String,
+    pub updated_at_unix_secs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperationAlertLifecycleRecord {
+    pub dedupe_key: String,
+    pub status: OperationAlertLifecycleStatus,
+    pub operator_id: Option<String>,
+    pub role: Option<RbacRole>,
+    pub reason: Option<String>,
+    pub request_id: String,
+    pub trace_id: String,
+    pub updated_at_unix_secs: u64,
+    pub history: Vec<OperationAlertLifecycleEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationAlertLifecycleTransition {
+    pub dedupe_key: String,
+    pub status: OperationAlertLifecycleStatus,
+    pub operator_id: String,
+    pub role: Option<RbacRole>,
+    pub reason: Option<String>,
+    pub request_id: String,
+    pub trace_id: String,
+}
+
 pub trait OperationAlertSink: std::fmt::Debug + Send + Sync {
     fn deliver(&self, alerts: &[OperationAlert]) -> UnderlayResult<()>;
+}
+
+pub trait OperationAlertLifecycleStore: std::fmt::Debug + Send + Sync {
+    fn get(&self, dedupe_key: &str) -> UnderlayResult<Option<OperationAlertLifecycleRecord>>;
+    fn list(&self) -> UnderlayResult<Vec<OperationAlertLifecycleRecord>>;
+    fn transition(
+        &self,
+        transition: OperationAlertLifecycleTransition,
+    ) -> UnderlayResult<OperationAlertLifecycleRecord>;
 }
 
 pub trait OperationAlertCheckpointStore: std::fmt::Debug + Send + Sync {
@@ -138,6 +193,102 @@ impl OperationAlertSink for JsonFileOperationAlertSink {
 }
 
 #[derive(Debug, Default)]
+pub struct InMemoryOperationAlertLifecycleStore {
+    records: Mutex<BTreeMap<String, OperationAlertLifecycleRecord>>,
+}
+
+impl OperationAlertLifecycleStore for InMemoryOperationAlertLifecycleStore {
+    fn get(&self, dedupe_key: &str) -> UnderlayResult<Option<OperationAlertLifecycleRecord>> {
+        Ok(self
+            .records
+            .lock()
+            .map_err(|_| {
+                UnderlayError::Internal("operation alert lifecycle mutex poisoned".into())
+            })?
+            .get(dedupe_key)
+            .cloned())
+    }
+
+    fn list(&self) -> UnderlayResult<Vec<OperationAlertLifecycleRecord>> {
+        Ok(self
+            .records
+            .lock()
+            .map_err(|_| {
+                UnderlayError::Internal("operation alert lifecycle mutex poisoned".into())
+            })?
+            .values()
+            .cloned()
+            .collect())
+    }
+
+    fn transition(
+        &self,
+        transition: OperationAlertLifecycleTransition,
+    ) -> UnderlayResult<OperationAlertLifecycleRecord> {
+        let mut records = self.records.lock().map_err(|_| {
+            UnderlayError::Internal("operation alert lifecycle mutex poisoned".into())
+        })?;
+        let record = transition_lifecycle_record(records.get(&transition.dedupe_key), transition)?;
+        records.insert(record.dedupe_key.clone(), record.clone());
+        Ok(record)
+    }
+}
+
+#[derive(Debug)]
+pub struct JsonFileOperationAlertLifecycleStore {
+    path: PathBuf,
+    lock: Mutex<()>,
+}
+
+impl JsonFileOperationAlertLifecycleStore {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            lock: Mutex::new(()),
+        }
+    }
+}
+
+impl OperationAlertLifecycleStore for JsonFileOperationAlertLifecycleStore {
+    fn get(&self, dedupe_key: &str) -> UnderlayResult<Option<OperationAlertLifecycleRecord>> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| {
+                UnderlayError::Internal("operation alert lifecycle file mutex poisoned".into())
+            })?;
+        Ok(read_lifecycle_records(&self.path)?.get(dedupe_key).cloned())
+    }
+
+    fn list(&self) -> UnderlayResult<Vec<OperationAlertLifecycleRecord>> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| {
+                UnderlayError::Internal("operation alert lifecycle file mutex poisoned".into())
+            })?;
+        Ok(read_lifecycle_records(&self.path)?.into_values().collect())
+    }
+
+    fn transition(
+        &self,
+        transition: OperationAlertLifecycleTransition,
+    ) -> UnderlayResult<OperationAlertLifecycleRecord> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| {
+                UnderlayError::Internal("operation alert lifecycle file mutex poisoned".into())
+            })?;
+        let mut records = read_lifecycle_records(&self.path)?;
+        let record = transition_lifecycle_record(records.get(&transition.dedupe_key), transition)?;
+        records.insert(record.dedupe_key.clone(), record.clone());
+        write_lifecycle_records(&self.path, records)?;
+        Ok(record)
+    }
+}
+
+#[derive(Debug, Default)]
 pub struct InMemoryOperationAlertCheckpointStore {
     delivered_keys: Mutex<BTreeSet<String>>,
 }
@@ -212,6 +363,106 @@ impl OperationAlertCheckpointStore for JsonFileOperationAlertCheckpointStore {
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct OperationAlertCheckpoint {
     delivered_keys: BTreeSet<String>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct OperationAlertLifecycleState {
+    records: BTreeMap<String, OperationAlertLifecycleRecord>,
+}
+
+fn read_lifecycle_records(
+    path: &Path,
+) -> UnderlayResult<BTreeMap<String, OperationAlertLifecycleRecord>> {
+    if !path.exists() {
+        return Ok(BTreeMap::new());
+    }
+
+    let payload = fs::read_to_string(path).map_err(alert_io_error)?;
+    let state = serde_json::from_str::<OperationAlertLifecycleState>(&payload).map_err(|err| {
+        UnderlayError::Internal(format!("parse operation alert lifecycle {:?}: {err}", path))
+    })?;
+    Ok(state.records)
+}
+
+fn write_lifecycle_records(
+    path: &Path,
+    records: BTreeMap<String, OperationAlertLifecycleRecord>,
+) -> UnderlayResult<()> {
+    let payload = serde_json::to_vec_pretty(&OperationAlertLifecycleState { records }).map_err(
+        |err| UnderlayError::Internal(format!("serialize operation alert lifecycle: {err}")),
+    )?;
+    atomic_write(path, &payload, alert_io_error)
+}
+
+fn transition_lifecycle_record(
+    current: Option<&OperationAlertLifecycleRecord>,
+    transition: OperationAlertLifecycleTransition,
+) -> UnderlayResult<OperationAlertLifecycleRecord> {
+    let from_status = current
+        .map(|record| record.status.clone())
+        .unwrap_or(OperationAlertLifecycleStatus::Open);
+    if !is_allowed_lifecycle_transition(&from_status, &transition.status) {
+        return Err(UnderlayError::InvalidIntent(format!(
+            "cannot transition alert {} from {:?} to {:?}",
+            transition.dedupe_key, from_status, transition.status
+        )));
+    }
+
+    let updated_at_unix_secs = now_unix_secs();
+    let event = OperationAlertLifecycleEvent {
+        status: transition.status.clone(),
+        operator_id: transition.operator_id.clone(),
+        role: transition.role.clone(),
+        reason: transition.reason.clone(),
+        request_id: transition.request_id.clone(),
+        trace_id: transition.trace_id.clone(),
+        updated_at_unix_secs,
+    };
+
+    let mut record = current.cloned().unwrap_or_else(|| OperationAlertLifecycleRecord {
+        dedupe_key: transition.dedupe_key.clone(),
+        status: OperationAlertLifecycleStatus::Open,
+        operator_id: None,
+        role: None,
+        reason: None,
+        request_id: transition.request_id.clone(),
+        trace_id: transition.trace_id.clone(),
+        updated_at_unix_secs,
+        history: Vec::new(),
+    });
+    record.status = transition.status;
+    record.operator_id = Some(transition.operator_id);
+    record.role = transition.role;
+    record.reason = transition.reason;
+    record.request_id = transition.request_id;
+    record.trace_id = transition.trace_id;
+    record.updated_at_unix_secs = updated_at_unix_secs;
+    record.history.push(event);
+    Ok(record)
+}
+
+fn is_allowed_lifecycle_transition(
+    from_status: &OperationAlertLifecycleStatus,
+    to_status: &OperationAlertLifecycleStatus,
+) -> bool {
+    match from_status {
+        OperationAlertLifecycleStatus::Open => matches!(
+            to_status,
+            OperationAlertLifecycleStatus::Acknowledged
+                | OperationAlertLifecycleStatus::Resolved
+                | OperationAlertLifecycleStatus::Suppressed
+                | OperationAlertLifecycleStatus::Expired
+        ),
+        OperationAlertLifecycleStatus::Acknowledged => matches!(
+            to_status,
+            OperationAlertLifecycleStatus::Resolved
+                | OperationAlertLifecycleStatus::Suppressed
+                | OperationAlertLifecycleStatus::Expired
+        ),
+        OperationAlertLifecycleStatus::Resolved
+        | OperationAlertLifecycleStatus::Suppressed
+        | OperationAlertLifecycleStatus::Expired => false,
+    }
 }
 
 fn read_checkpoint_keys(path: &Path) -> UnderlayResult<BTreeSet<String>> {

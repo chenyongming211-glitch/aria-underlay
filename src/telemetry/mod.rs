@@ -6,13 +6,16 @@ pub mod ops;
 pub mod sink;
 
 pub use audit::{
-    AuditRecord, InMemoryProductAuditStore, NoopProductAuditStore, ProductAuditRecord,
-    ProductAuditStore,
+    AuditRecord, InMemoryProductAuditStore, JsonFileProductAuditStore, NoopProductAuditStore,
+    ProductAuditRecord, ProductAuditStore,
 };
 pub use alerts::{
-    InMemoryOperationAlertCheckpointStore, InMemoryOperationAlertSink,
-    JsonFileOperationAlertCheckpointStore, JsonFileOperationAlertSink, OperationAlert,
-    OperationAlertCheckpointStore, OperationAlertSeverity, OperationAlertSink,
+    InMemoryOperationAlertCheckpointStore, InMemoryOperationAlertLifecycleStore,
+    InMemoryOperationAlertSink, JsonFileOperationAlertCheckpointStore,
+    JsonFileOperationAlertLifecycleStore, JsonFileOperationAlertSink, OperationAlert,
+    OperationAlertCheckpointStore, OperationAlertLifecycleEvent, OperationAlertLifecycleRecord,
+    OperationAlertLifecycleStatus, OperationAlertLifecycleStore, OperationAlertLifecycleTransition,
+    OperationAlertSeverity, OperationAlertSink,
 };
 pub use events::{UnderlayEvent, UnderlayEventKind};
 pub use metrics::{MetricName, MetricSample, Metrics};

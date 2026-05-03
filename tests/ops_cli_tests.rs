@@ -4,8 +4,8 @@ use std::process::Command;
 
 use aria_underlay::model::DeviceId;
 use aria_underlay::telemetry::{
-    JsonFileOperationAlertSink, JsonFileOperationSummaryStore, OperationAlert,
-    OperationAlertSeverity, OperationAlertSink, UnderlayEvent,
+    JsonFileOperationAlertSink, JsonFileOperationSummaryStore, JsonFileProductAuditStore,
+    OperationAlert, OperationAlertSeverity, OperationAlertSink, UnderlayEvent,
 };
 use aria_underlay::tx::context::TxContext;
 use aria_underlay::tx::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase};
@@ -122,6 +122,88 @@ fn ops_cli_lists_and_summarizes_alerts() {
     assert_eq!(summary_payload["returned_alerts"], 2);
     assert_eq!(summary_payload["critical"], 1);
     assert_eq!(summary_payload["warning"], 1);
+
+    fs::remove_dir_all(temp).ok();
+}
+
+#[test]
+fn ops_cli_acknowledges_alert_and_enriches_alert_list() {
+    let temp = temp_test_dir("alert-lifecycle");
+    let alert_path = temp.join("alerts.jsonl");
+    let alert_state_path = temp.join("alert-state.json");
+    let product_audit_path = temp.join("product-audit.jsonl");
+    JsonFileOperationAlertSink::new(&alert_path)
+        .deliver(&[alert(
+            "critical-key",
+            OperationAlertSeverity::Critical,
+            "transaction.in_doubt",
+        )])
+        .expect("alert should be written");
+
+    let ack_output = Command::new(env!("CARGO_BIN_EXE_aria-underlay-ops"))
+        .args([
+            "ack-alert",
+            "--alert-state-path",
+            alert_state_path
+                .to_str()
+                .expect("alert state path should be utf-8"),
+            "--product-audit-path",
+            product_audit_path
+                .to_str()
+                .expect("product audit path should be utf-8"),
+            "--dedupe-key",
+            "critical-key",
+            "--operator",
+            "netops-a",
+            "--role",
+            "Operator",
+            "--reason",
+            "investigating current operation alert",
+        ])
+        .output()
+        .expect("aria-underlay-ops should run");
+    assert!(
+        ack_output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&ack_output.stderr)
+    );
+    let ack_payload: serde_json::Value =
+        serde_json::from_slice(&ack_output.stdout).expect("ack response should be JSON");
+    assert_eq!(ack_payload["record"]["dedupe_key"], "critical-key");
+    assert_eq!(ack_payload["record"]["status"], "Acknowledged");
+
+    let list_output = Command::new(env!("CARGO_BIN_EXE_aria-underlay-ops"))
+        .args([
+            "list-alerts",
+            "--operation-alert-path",
+            alert_path.to_str().expect("alert path should be utf-8"),
+            "--alert-state-path",
+            alert_state_path
+                .to_str()
+                .expect("alert state path should be utf-8"),
+        ])
+        .output()
+        .expect("aria-underlay-ops should run");
+    assert!(
+        list_output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&list_output.stderr)
+    );
+    let list_payload: serde_json::Value =
+        serde_json::from_slice(&list_output.stdout).expect("alert list should be JSON");
+    assert_eq!(list_payload["alerts"][0]["dedupe_key"], "critical-key");
+    assert_eq!(
+        list_payload["alerts"][0]["lifecycle"]["status"],
+        "Acknowledged"
+    );
+    assert_eq!(list_payload["overview"]["acknowledged"], 1);
+
+    let audit_records = JsonFileProductAuditStore::new(&product_audit_path)
+        .list()
+        .expect("product audit should be readable");
+    assert_eq!(audit_records.len(), 1);
+    assert_eq!(audit_records[0].action, "alert.acknowledged");
+    assert_eq!(audit_records[0].operator_id.as_deref(), Some("netops-a"));
 
     fs::remove_dir_all(temp).ok();
 }

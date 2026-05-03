@@ -9,6 +9,7 @@ Covered:
 - Operation summary inspection.
 - Attention-required operation filtering.
 - Operation alert inspection.
+- Internal alert lifecycle: acknowledge, resolve, suppress, and expire.
 - Worker daemon config and schedules.
 - Journal/artifact GC signal review.
 - Drift audit signal review.
@@ -17,7 +18,7 @@ Covered:
 Not covered:
 
 - Product audit database deployment.
-- Operator identity and RBAC enforcement.
+- Product identity provider deployment.
 - Real switch parser/renderer promotion.
 
 External paging systems such as enterprise IM, Slack, email, PagerDuty, or webhook delivery are intentionally out of scope. Alerts stay inside Aria Underlay and are queried through CLI, later product APIs, and later UI.
@@ -36,7 +37,9 @@ It uses these local paths:
 | --- | --- |
 | `var/aria-underlay/ops/operation-summaries.jsonl` | Append-only operation summaries generated from operator-facing events. |
 | `var/aria-underlay/ops/operation-alerts.jsonl` | Append-only alerts generated from attention-required summaries. |
+| `var/aria-underlay/ops/operation-alert-state.json` | Internal alert lifecycle state keyed by alert `dedupe_key`. |
 | `var/aria-underlay/ops/operation-alert-checkpoint.json` | Dedupe checkpoint so alert delivery does not resend the same alert after restart. |
+| `var/aria-underlay/ops/product-audit.jsonl` | Append-only product audit records for privileged operator actions in local mode. |
 | `var/aria-underlay/journal` | File-backed transaction journal root. |
 | `var/aria-underlay/artifacts` | Rollback/artifact root used by GC. |
 | `var/aria-underlay/shadow/expected` | Expected shadow state for drift audit. |
@@ -112,6 +115,7 @@ List critical alerts:
 ```bash
 cargo run --bin aria-underlay-ops -- list-alerts \
   --operation-alert-path var/aria-underlay/ops/operation-alerts.jsonl \
+  --alert-state-path var/aria-underlay/ops/operation-alert-state.json \
   --severity Critical \
   --limit 20
 ```
@@ -120,7 +124,8 @@ Print alert counts:
 
 ```bash
 cargo run --bin aria-underlay-ops -- alert-summary \
-  --operation-alert-path var/aria-underlay/ops/operation-alerts.jsonl
+  --operation-alert-path var/aria-underlay/ops/operation-alerts.jsonl \
+  --alert-state-path var/aria-underlay/ops/operation-alert-state.json
 ```
 
 Alert severity:
@@ -131,6 +136,61 @@ Alert severity:
 | `Warning` | Attention-required condition that does not meet the critical rule. |
 
 The checkpoint file only records delivered dedupe keys. Deleting it causes the alert worker to deliver existing attention-required summaries again.
+
+## Manage Alert Lifecycle
+
+`OperationAlert` records are immutable evidence. Operator actions are recorded in a separate lifecycle state file and written to product audit before state changes.
+
+Lifecycle states:
+
+| State | Meaning |
+| --- | --- |
+| `Open` | No operator lifecycle action has been recorded for the alert. |
+| `Acknowledged` | An operator accepted triage ownership. |
+| `Resolved` | A break-glass operator or admin marked the condition handled. |
+| `Suppressed` | A break-glass operator or admin intentionally hid the alert from active triage. |
+| `Expired` | An admin retired stale lifecycle state. |
+
+Allowed transitions:
+
+- `Open` -> `Acknowledged`, `Resolved`, `Suppressed`, or `Expired`.
+- `Acknowledged` -> `Resolved`, `Suppressed`, or `Expired`.
+- `Resolved`, `Suppressed`, and `Expired` are terminal.
+
+RBAC:
+
+| Action | Allowed roles |
+| --- | --- |
+| `ack-alert` | `Operator`, `BreakGlassOperator`, `Admin` |
+| `resolve-alert` | `BreakGlassOperator`, `Admin` |
+| `suppress-alert` | `BreakGlassOperator`, `Admin` |
+| `expire-alert` | `Admin` |
+
+Acknowledge an alert:
+
+```bash
+cargo run --bin aria-underlay-ops -- ack-alert \
+  --alert-state-path var/aria-underlay/ops/operation-alert-state.json \
+  --product-audit-path var/aria-underlay/ops/product-audit.jsonl \
+  --dedupe-key "transaction.in_doubt|in_doubt|req-123|trace-123|tx-123|leaf-a" \
+  --operator alice \
+  --role Operator \
+  --reason "investigating tx-123 recovery state"
+```
+
+Resolve after out-of-band verification:
+
+```bash
+cargo run --bin aria-underlay-ops -- resolve-alert \
+  --alert-state-path var/aria-underlay/ops/operation-alert-state.json \
+  --product-audit-path var/aria-underlay/ops/product-audit.jsonl \
+  --dedupe-key "transaction.in_doubt|in_doubt|req-123|trace-123|tx-123|leaf-a" \
+  --operator bob \
+  --role BreakGlassOperator \
+  --reason "validated transaction state and force-resolved tx-123"
+```
+
+If product audit cannot be written, lifecycle writes fail closed and the alert state file is not updated.
 
 ## Triage GC
 
@@ -215,10 +275,12 @@ When an alert appears:
 
 1. Run `alert-summary` to see severity counts.
 2. Run `list-alerts --severity Critical --limit 20`.
-3. For `transaction.in_doubt`, run `list-in-doubt`.
-4. Verify actual device or fake-adapter state through the relevant runbook.
-5. Use `force-resolve` only with a concrete reason and operator identity.
-6. Keep the alert and summary files for incident review until retention policy or product audit backend owns the record.
+3. Run `ack-alert` once someone starts investigation.
+4. For `transaction.in_doubt`, run `list-in-doubt`.
+5. Verify actual device or fake-adapter state through the relevant runbook.
+6. Use `force-resolve` only with a concrete reason and operator identity.
+7. Run `resolve-alert` only after the underlying condition has been handled.
+8. Keep the alert, lifecycle, summary, and product audit files for incident review until retention policy or product audit backend owns the record.
 
 ## Product Boundary
 
@@ -228,7 +290,6 @@ Local JSONL mode is intentionally simple and auditable, but it is not the final 
 - operator identity,
 - RBAC,
 - immutable audit records,
-- internal alert lifecycle,
 - searchable UI/API.
 
 The design boundary is recorded in:

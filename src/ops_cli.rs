@@ -5,14 +5,18 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+use crate::api::alert_lifecycle::{AlertLifecycleManager, AlertLifecycleTransitionRequest};
 use crate::api::force_resolve::ForceResolveTransactionRequest;
 use crate::api::operations::ListOperationSummariesRequest;
 use crate::api::transactions::ListInDoubtTransactionsRequest;
 use crate::api::{AriaUnderlayService, UnderlayService};
+use crate::authz::{RbacRole, StaticAuthorizationPolicy};
 use crate::device::DeviceInventory;
 use crate::model::DeviceId;
 use crate::telemetry::{
-    JsonFileOperationAlertSink, JsonFileOperationSummaryStore, OperationAlert,
+    JsonFileOperationAlertLifecycleStore, JsonFileOperationAlertSink,
+    JsonFileOperationSummaryStore, JsonFileProductAuditStore, OperationAlert,
+    OperationAlertLifecycleRecord, OperationAlertLifecycleStatus, OperationAlertLifecycleStore,
     OperationAlertSeverity,
 };
 use crate::tx::JsonFileTxJournalStore;
@@ -34,6 +38,18 @@ where
         "operation-summary" => operation_summary(&args[1..]).await,
         "list-alerts" => list_alerts(&args[1..]).await,
         "alert-summary" => alert_summary(&args[1..]).await,
+        "ack-alert" => {
+            transition_alert(&args[1..], OperationAlertLifecycleStatus::Acknowledged).await
+        }
+        "resolve-alert" => {
+            transition_alert(&args[1..], OperationAlertLifecycleStatus::Resolved).await
+        }
+        "suppress-alert" => {
+            transition_alert(&args[1..], OperationAlertLifecycleStatus::Suppressed).await
+        }
+        "expire-alert" => {
+            transition_alert(&args[1..], OperationAlertLifecycleStatus::Expired).await
+        }
         "-h" | "--help" | "help" => {
             print_usage();
             Ok(())
@@ -107,10 +123,15 @@ async fn operation_summary(args: &[String]) -> Result<(), Box<dyn Error>> {
 async fn list_alerts(args: &[String]) -> Result<(), Box<dyn Error>> {
     let operation_alert_path = required_option(args, "--operation-alert-path")?;
     let alerts = filtered_alerts(args, operation_alert_path)?;
+    let lifecycle_records = lifecycle_records(args)?;
     let limit = optional_usize(args, "--limit")?;
-    let returned_alerts = limit_alerts(&alerts, limit);
+    let returned_alerts = limit_alerts(&alerts, &lifecycle_records, limit);
     let response = ListOperationAlertsResponse {
-        overview: OperationAlertOverview::from_alerts(&alerts, returned_alerts.len()),
+        overview: OperationAlertOverview::from_alerts(
+            &alerts,
+            returned_alerts.len(),
+            &lifecycle_records,
+        ),
         alerts: returned_alerts,
     };
 
@@ -121,9 +142,42 @@ async fn list_alerts(args: &[String]) -> Result<(), Box<dyn Error>> {
 async fn alert_summary(args: &[String]) -> Result<(), Box<dyn Error>> {
     let operation_alert_path = required_option(args, "--operation-alert-path")?;
     let alerts = filtered_alerts(args, operation_alert_path)?;
-    let overview = OperationAlertOverview::from_alerts(&alerts, alerts.len());
+    let lifecycle_records = lifecycle_records(args)?;
+    let overview = OperationAlertOverview::from_alerts(&alerts, alerts.len(), &lifecycle_records);
 
     println!("{}", serde_json::to_string_pretty(&overview)?);
+    Ok(())
+}
+
+async fn transition_alert(
+    args: &[String],
+    target_status: OperationAlertLifecycleStatus,
+) -> Result<(), Box<dyn Error>> {
+    let alert_state_path = required_option(args, "--alert-state-path")?;
+    let product_audit_path = required_option(args, "--product-audit-path")?;
+    let dedupe_key = required_option(args, "--dedupe-key")?;
+    let operator = required_option(args, "--operator")?;
+    let role = required_role(args, "--role")?;
+    let reason = required_option(args, "--reason")?;
+    let request_id = option_value(args, "--request-id")
+        .unwrap_or_else(|| format!("alert-lifecycle-{}", uuid::Uuid::new_v4()));
+    let trace_id = option_value(args, "--trace-id");
+    let authorization_policy = StaticAuthorizationPolicy::new().with_role(operator.clone(), role);
+    let manager = AlertLifecycleManager::new(
+        Arc::new(authorization_policy),
+        Arc::new(JsonFileProductAuditStore::new(product_audit_path)),
+        Arc::new(JsonFileOperationAlertLifecycleStore::new(alert_state_path)),
+    );
+    let response = manager.transition(AlertLifecycleTransitionRequest {
+        request_id,
+        trace_id,
+        dedupe_key,
+        operator,
+        reason,
+        target_status,
+    })?;
+
+    println!("{}", serde_json::to_string_pretty(&response)?);
     Ok(())
 }
 
@@ -179,18 +233,47 @@ fn filtered_alerts(
     Ok(alerts)
 }
 
-fn limit_alerts(alerts: &[OperationAlert], limit: Option<usize>) -> Vec<OperationAlert> {
+fn lifecycle_records(
+    args: &[String],
+) -> Result<BTreeMap<String, OperationAlertLifecycleRecord>, Box<dyn Error>> {
+    let Some(alert_state_path) = option_value(args, "--alert-state-path") else {
+        return Ok(BTreeMap::new());
+    };
+    let records = JsonFileOperationAlertLifecycleStore::new(alert_state_path)
+        .list()?
+        .into_iter()
+        .map(|record| (record.dedupe_key.clone(), record))
+        .collect();
+    Ok(records)
+}
+
+fn limit_alerts(
+    alerts: &[OperationAlert],
+    lifecycle_records: &BTreeMap<String, OperationAlertLifecycleRecord>,
+    limit: Option<usize>,
+) -> Vec<OperationAlertView> {
     alerts
         .iter()
         .take(limit.unwrap_or(alerts.len()))
-        .cloned()
+        .map(|alert| OperationAlertView {
+            alert: alert.clone(),
+            lifecycle: lifecycle_records.get(&alert.dedupe_key).cloned(),
+        })
         .collect()
 }
 
 #[derive(Debug, Serialize)]
 struct ListOperationAlertsResponse {
-    alerts: Vec<OperationAlert>,
+    alerts: Vec<OperationAlertView>,
     overview: OperationAlertOverview,
+}
+
+#[derive(Debug, Serialize)]
+struct OperationAlertView {
+    #[serde(flatten)]
+    alert: OperationAlert,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lifecycle: Option<OperationAlertLifecycleRecord>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -199,13 +282,22 @@ struct OperationAlertOverview {
     returned_alerts: usize,
     critical: usize,
     warning: usize,
+    open: usize,
+    acknowledged: usize,
+    resolved: usize,
+    suppressed: usize,
+    expired: usize,
     by_action: BTreeMap<String, usize>,
     by_result: BTreeMap<String, usize>,
     by_device: BTreeMap<String, usize>,
 }
 
 impl OperationAlertOverview {
-    fn from_alerts(alerts: &[OperationAlert], returned_alerts: usize) -> Self {
+    fn from_alerts(
+        alerts: &[OperationAlert],
+        returned_alerts: usize,
+        lifecycle_records: &BTreeMap<String, OperationAlertLifecycleRecord>,
+    ) -> Self {
         let mut overview = Self {
             matched_alerts: alerts.len(),
             returned_alerts,
@@ -222,9 +314,25 @@ impl OperationAlertOverview {
             if let Some(device_id) = &alert.device_id {
                 increment(&mut overview.by_device, &device_id.0);
             }
+            overview.record_lifecycle_status(
+                lifecycle_records
+                    .get(&alert.dedupe_key)
+                    .map(|record| &record.status)
+                    .unwrap_or(&OperationAlertLifecycleStatus::Open),
+            );
         }
 
         overview
+    }
+
+    fn record_lifecycle_status(&mut self, status: &OperationAlertLifecycleStatus) {
+        match status {
+            OperationAlertLifecycleStatus::Open => self.open += 1,
+            OperationAlertLifecycleStatus::Acknowledged => self.acknowledged += 1,
+            OperationAlertLifecycleStatus::Resolved => self.resolved += 1,
+            OperationAlertLifecycleStatus::Suppressed => self.suppressed += 1,
+            OperationAlertLifecycleStatus::Expired => self.expired += 1,
+        }
     }
 }
 
@@ -267,6 +375,22 @@ fn optional_alert_severity(
         .transpose()
 }
 
+fn required_role(args: &[String], name: &str) -> Result<RbacRole, io::Error> {
+    let value = required_option(args, name)?;
+    match value.as_str() {
+        "Viewer" | "viewer" => Ok(RbacRole::Viewer),
+        "Operator" | "operator" => Ok(RbacRole::Operator),
+        "BreakGlassOperator" | "break-glass-operator" | "break_glass_operator" => {
+            Ok(RbacRole::BreakGlassOperator)
+        }
+        "Admin" | "admin" => Ok(RbacRole::Admin),
+        "Auditor" | "auditor" => Ok(RbacRole::Auditor),
+        _ => Err(invalid_input(format!(
+            "{name} must be Viewer, Operator, BreakGlassOperator, Admin, or Auditor"
+        ))),
+    }
+}
+
 fn has_flag(args: &[String], name: &str) -> bool {
     args.iter().any(|arg| arg == name)
 }
@@ -277,6 +401,6 @@ fn invalid_input(message: impl Into<String>) -> io::Error {
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  aria-underlay-ops list-in-doubt --journal-root <dir> [--device-id <id>]\n  aria-underlay-ops force-resolve --journal-root <dir> --operation-summary-path <file> --tx-id <tx> --operator <name> --reason <text> --break-glass [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops list-operations --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]\n  aria-underlay-ops operation-summary --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]\n  aria-underlay-ops list-alerts --operation-alert-path <file> [--severity Critical|Warning] [--limit <n>]\n  aria-underlay-ops alert-summary --operation-alert-path <file> [--severity Critical|Warning]"
+        "usage:\n  aria-underlay-ops list-in-doubt --journal-root <dir> [--device-id <id>]\n  aria-underlay-ops force-resolve --journal-root <dir> --operation-summary-path <file> --tx-id <tx> --operator <name> --reason <text> --break-glass [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops list-operations --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]\n  aria-underlay-ops operation-summary --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]\n  aria-underlay-ops list-alerts --operation-alert-path <file> [--alert-state-path <file>] [--severity Critical|Warning] [--limit <n>]\n  aria-underlay-ops alert-summary --operation-alert-path <file> [--alert-state-path <file>] [--severity Critical|Warning]\n  aria-underlay-ops ack-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops resolve-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops suppress-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops expire-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]"
     );
 }

@@ -18,6 +18,10 @@ pub enum AdminAction {
     ListOperationSummaries,
     ListAlerts,
     ListInDoubtTransactions,
+    AcknowledgeAlert,
+    ResolveAlert,
+    SuppressAlert,
+    ExpireAlert,
     ForceResolveTransaction,
     ForceUnlockSession,
     ChangeRetentionPolicy,
@@ -124,6 +128,16 @@ fn role_allows_action(role: &RbacRole, action: &AdminAction) -> bool {
         AdminAction::ListOperationSummaries
         | AdminAction::ListAlerts
         | AdminAction::ListInDoubtTransactions => true,
+        AdminAction::AcknowledgeAlert => {
+            matches!(
+                role,
+                RbacRole::Operator | RbacRole::BreakGlassOperator | RbacRole::Admin
+            )
+        }
+        AdminAction::ResolveAlert | AdminAction::SuppressAlert => {
+            matches!(role, RbacRole::BreakGlassOperator | RbacRole::Admin)
+        }
+        AdminAction::ExpireAlert => matches!(role, RbacRole::Admin),
         AdminAction::ForceResolveTransaction => {
             matches!(role, RbacRole::BreakGlassOperator | RbacRole::Admin)
         }

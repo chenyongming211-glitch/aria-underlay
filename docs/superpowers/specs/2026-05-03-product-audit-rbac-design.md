@@ -68,6 +68,10 @@ Audit records are append-only. Corrections are new records, not mutations.
 | --- | --- | --- | --- | --- | --- |
 | List operation summaries | yes | yes | yes | yes | yes |
 | List alerts | yes | yes | yes | yes | yes |
+| Acknowledge alert | no | yes | yes | yes | no |
+| Resolve alert | no | no | yes | yes | no |
+| Suppress alert | no | no | yes | yes | no |
+| Expire alert lifecycle state | no | no | no | yes | no |
 | Read alert checkpoints | no | no | no | yes | yes |
 | List InDoubt transactions | yes | yes | yes | yes | yes |
 | Force-resolve transaction | no | no | yes | yes | no |
@@ -86,6 +90,7 @@ The product backend must fail closed for privileged operations:
 - If product audit write fails before `force-resolve`, deny the operation.
 - If product audit write fails after a transaction reaches `InDoubt`, emit a local `audit.write_failed` event and keep the transaction blocking.
 - If alert delivery fails, do not advance the alert checkpoint.
+- If alert lifecycle product audit write fails, do not update alert lifecycle state.
 - If RBAC config is missing, default to read-only access at most.
 
 Read-only local inspection may continue in degraded mode only when the operator explicitly chooses local JSONL mode.
@@ -135,13 +140,15 @@ Required tests before product backend promotion:
 - Authorization denied for each privileged action.
 - Missing reason rejects force-resolve.
 - Audit write failure rejects force-resolve.
+- Audit write failure rejects alert lifecycle writes.
 - Alert delivery failure preserves checkpoint.
 - Dual-write summary count parity.
 - RBAC role matrix coverage.
 - Audit export includes force-resolve operator and reason.
+- Alert lifecycle history preserves operator, role, reason, request ID, and trace ID.
 
 ## Current Decision
 
-Continue using JSONL local mode for no-real-switch development. Build product audit/RBAC as a separate backend behind existing traits once product storage and identity provider requirements are fixed.
+Continue using JSONL local mode for no-real-switch development. Product audit/RBAC now has a local foundation for `force_resolve_transaction` and internal alert lifecycle actions. Build the database-backed product audit/RBAC backend behind existing traits once product storage and identity provider requirements are fixed.
 
-External alert delivery is not part of the current product direction. Do not build webhook, enterprise IM, PagerDuty, email, or external retry adapters unless the product requirement changes. Alerts remain internal records queried through `aria-underlay-ops`, product APIs, and later UI. The next alert work is internal lifecycle management: `open`, `acknowledged`, `resolved`, `suppressed`, and `expired`, with audit and RBAC on every operator action.
+External alert delivery is not part of the current product direction. Do not build webhook, enterprise IM, PagerDuty, email, or external retry adapters unless the product requirement changes. Alerts remain internal records queried through `aria-underlay-ops`, product APIs, and later UI. Current local alert lifecycle supports `open`, `acknowledged`, `resolved`, `suppressed`, and `expired`, with audit and RBAC on every operator action. Remaining product work is database-backed lifecycle storage plus product API/UI packaging.
