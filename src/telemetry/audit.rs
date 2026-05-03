@@ -101,6 +101,36 @@ impl ProductAuditRecord {
             appended_at_unix_secs: now_unix_secs(),
         }
     }
+
+    pub fn worker_config_change_requested(
+        request_id: impl Into<String>,
+        trace_id: impl Into<String>,
+        action: impl Into<String>,
+        target: impl Into<String>,
+        operator_id: impl Into<String>,
+        role: RbacRole,
+        reason: impl Into<String>,
+        mut fields: BTreeMap<String, String>,
+    ) -> Self {
+        fields.insert("target".into(), target.into());
+
+        Self {
+            request_id: request_id.into(),
+            trace_id: trace_id.into(),
+            action: action.into(),
+            result: "authorized".into(),
+            tx_id: None,
+            device_id: None,
+            operator_id: Some(operator_id.into()),
+            role: Some(role),
+            reason: Some(reason.into()),
+            attention_required: false,
+            error_code: None,
+            error_message: None,
+            fields,
+            appended_at_unix_secs: now_unix_secs(),
+        }
+    }
 }
 
 pub trait ProductAuditStore: std::fmt::Debug + Send + Sync {

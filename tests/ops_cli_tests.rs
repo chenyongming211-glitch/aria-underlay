@@ -8,8 +8,13 @@ use aria_underlay::telemetry::{
     OperationAlert, OperationAlertSeverity, OperationAlertSink, UnderlayEvent,
 };
 use aria_underlay::tx::context::TxContext;
-use aria_underlay::tx::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase};
 use aria_underlay::tx::recovery::RecoveryReport;
+use aria_underlay::tx::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase};
+use aria_underlay::worker::daemon::{
+    DriftAuditDaemonConfig, JournalGcDaemonConfig, OperationAlertDaemonConfig,
+    OperationSummaryDaemonConfig, UnderlayWorkerDaemonConfig, WorkerScheduleConfig,
+};
+use aria_underlay::worker::gc::RetentionPolicy;
 
 #[test]
 fn ops_cli_prints_attention_required_operation_overview() {
@@ -209,6 +214,73 @@ fn ops_cli_acknowledges_alert_and_enriches_alert_list() {
 }
 
 #[test]
+fn ops_cli_changes_worker_schedule_with_audit() {
+    let temp = temp_test_dir("worker-schedule");
+    let config_path = temp.join("worker.json");
+    let product_audit_path = temp.join("product-audit.jsonl");
+    worker_config(&temp)
+        .write_to_path(&config_path)
+        .expect("worker config should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_aria-underlay-ops"))
+        .args([
+            "set-worker-schedule",
+            "--worker-config-path",
+            config_path.to_str().expect("config path should be utf-8"),
+            "--product-audit-path",
+            product_audit_path
+                .to_str()
+                .expect("product audit path should be utf-8"),
+            "--operator",
+            "admin-a",
+            "--role",
+            "Admin",
+            "--reason",
+            "slow down local alert delivery",
+            "--target",
+            "operation-alert",
+            "--interval-secs",
+            "300",
+            "--run-immediately",
+            "false",
+        ])
+        .output()
+        .expect("aria-underlay-ops should run");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("schedule response should be JSON");
+    assert_eq!(payload["target"], "operation_alert");
+    assert_eq!(payload["changed"], true);
+
+    let config = UnderlayWorkerDaemonConfig::from_path(&config_path)
+        .expect("updated worker config should parse");
+    let schedule = config
+        .operation_alert
+        .expect("operation_alert section should exist")
+        .schedule;
+    assert_eq!(schedule.interval_secs, 300);
+    assert!(!schedule.run_immediately);
+
+    let audit_records = JsonFileProductAuditStore::new(&product_audit_path)
+        .list()
+        .expect("product audit should be readable");
+    assert_eq!(audit_records.len(), 1);
+    assert_eq!(audit_records[0].action, "daemon.schedule_change_requested");
+    assert_eq!(audit_records[0].operator_id.as_deref(), Some("admin-a"));
+    assert_eq!(
+        audit_records[0].fields.get("target").map(String::as_str),
+        Some("operation_alert")
+    );
+
+    fs::remove_dir_all(temp).ok();
+}
+
+#[test]
 fn ops_cli_force_resolve_writes_journal_and_operation_summary() {
     let temp = temp_test_dir("force-resolve");
     let journal_root = temp.join("journal");
@@ -301,4 +373,42 @@ fn journal_record(tx_id: &str, phase: TxPhase, device_id: &str) -> TxJournalReco
         vec![DeviceId(device_id.into())],
     )
     .with_phase(phase)
+}
+
+fn worker_config(temp: &std::path::Path) -> UnderlayWorkerDaemonConfig {
+    UnderlayWorkerDaemonConfig {
+        operation_summary: Some(OperationSummaryDaemonConfig {
+            path: temp.join("ops").join("summaries.jsonl"),
+            retention: Default::default(),
+            retention_schedule: WorkerScheduleConfig {
+                interval_secs: 60,
+                run_immediately: true,
+            },
+        }),
+        operation_alert: Some(OperationAlertDaemonConfig {
+            path: temp.join("ops").join("alerts.jsonl"),
+            checkpoint_path: temp.join("ops").join("alert-checkpoint.json"),
+            schedule: WorkerScheduleConfig {
+                interval_secs: 60,
+                run_immediately: true,
+            },
+        }),
+        journal_gc: Some(JournalGcDaemonConfig {
+            journal_root: temp.join("journal"),
+            artifact_root: Some(temp.join("artifacts")),
+            schedule: WorkerScheduleConfig {
+                interval_secs: 60,
+                run_immediately: true,
+            },
+            retention: RetentionPolicy::default(),
+        }),
+        drift_audit: Some(DriftAuditDaemonConfig {
+            expected_shadow_root: temp.join("expected-shadow"),
+            observed_shadow_root: temp.join("observed-shadow"),
+            schedule: WorkerScheduleConfig {
+                interval_secs: 60,
+                run_immediately: true,
+            },
+        }),
+    }
 }

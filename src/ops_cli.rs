@@ -9,6 +9,10 @@ use crate::api::alert_lifecycle::{AlertLifecycleManager, AlertLifecycleTransitio
 use crate::api::force_resolve::ForceResolveTransactionRequest;
 use crate::api::operations::ListOperationSummariesRequest;
 use crate::api::transactions::ListInDoubtTransactionsRequest;
+use crate::api::worker_config_admin::{
+    ChangeJournalGcRetentionRequest, ChangeSummaryRetentionRequest, ChangeWorkerScheduleRequest,
+    WorkerConfigAdminManager, WorkerScheduleTarget,
+};
 use crate::api::{AriaUnderlayService, UnderlayService};
 use crate::authz::{RbacRole, StaticAuthorizationPolicy};
 use crate::device::DeviceInventory;
@@ -17,9 +21,11 @@ use crate::telemetry::{
     JsonFileOperationAlertLifecycleStore, JsonFileOperationAlertSink,
     JsonFileOperationSummaryStore, JsonFileProductAuditStore, OperationAlert,
     OperationAlertLifecycleRecord, OperationAlertLifecycleStatus, OperationAlertLifecycleStore,
-    OperationAlertSeverity,
+    OperationAlertSeverity, OperationSummaryRetentionPolicy,
 };
 use crate::tx::JsonFileTxJournalStore;
+use crate::worker::daemon::WorkerScheduleConfig;
+use crate::worker::gc::RetentionPolicy;
 
 pub async fn run<I>(args: I) -> Result<(), Box<dyn Error>>
 where
@@ -50,6 +56,9 @@ where
         "expire-alert" => {
             transition_alert(&args[1..], OperationAlertLifecycleStatus::Expired).await
         }
+        "set-summary-retention" => set_summary_retention(&args[1..]).await,
+        "set-gc-retention" => set_gc_retention(&args[1..]).await,
+        "set-worker-schedule" => set_worker_schedule(&args[1..]).await,
         "-h" | "--help" | "help" => {
             print_usage();
             Ok(())
@@ -179,6 +188,81 @@ async fn transition_alert(
 
     println!("{}", serde_json::to_string_pretty(&response)?);
     Ok(())
+}
+
+async fn set_summary_retention(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let manager = worker_config_admin_manager(args)?;
+    let request_id = request_id(args, "set-summary-retention");
+    let response = manager.change_summary_retention(ChangeSummaryRetentionRequest {
+        request_id,
+        trace_id: option_value(args, "--trace-id"),
+        config_path: required_option(args, "--worker-config-path")?.into(),
+        operator: required_option(args, "--operator")?,
+        reason: required_option(args, "--reason")?,
+        retention: OperationSummaryRetentionPolicy {
+            max_records: optional_usize(args, "--max-records")?,
+            max_bytes: optional_u64(args, "--max-bytes")?,
+            max_rotated_files: optional_usize(args, "--max-rotated-files")?
+                .unwrap_or_else(|| OperationSummaryRetentionPolicy::default().max_rotated_files),
+        },
+    })?;
+
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+async fn set_gc_retention(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let manager = worker_config_admin_manager(args)?;
+    let request_id = request_id(args, "set-gc-retention");
+    let response = manager.change_journal_gc_retention(ChangeJournalGcRetentionRequest {
+        request_id,
+        trace_id: option_value(args, "--trace-id"),
+        config_path: required_option(args, "--worker-config-path")?.into(),
+        operator: required_option(args, "--operator")?,
+        reason: required_option(args, "--reason")?,
+        retention: RetentionPolicy {
+            committed_journal_retention_days: required_u32(args, "--committed-days")?,
+            rolled_back_journal_retention_days: required_u32(args, "--rolled-back-days")?,
+            failed_journal_retention_days: required_u32(args, "--failed-days")?,
+            rollback_artifact_retention_days: required_u32(args, "--rollback-artifact-days")?,
+            max_artifacts_per_device: required_u32(args, "--max-artifacts-per-device")?,
+        },
+    })?;
+
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+async fn set_worker_schedule(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let manager = worker_config_admin_manager(args)?;
+    let request_id = request_id(args, "set-worker-schedule");
+    let response = manager.change_worker_schedule(ChangeWorkerScheduleRequest {
+        request_id,
+        trace_id: option_value(args, "--trace-id"),
+        config_path: required_option(args, "--worker-config-path")?.into(),
+        operator: required_option(args, "--operator")?,
+        reason: required_option(args, "--reason")?,
+        target: required_worker_schedule_target(args, "--target")?,
+        schedule: WorkerScheduleConfig {
+            interval_secs: required_u64(args, "--interval-secs")?,
+            run_immediately: required_bool(args, "--run-immediately")?,
+        },
+    })?;
+
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+fn worker_config_admin_manager(
+    args: &[String],
+) -> Result<WorkerConfigAdminManager, Box<dyn Error>> {
+    let operator = required_option(args, "--operator")?;
+    let role = required_role(args, "--role")?;
+    let product_audit_path = required_option(args, "--product-audit-path")?;
+    Ok(WorkerConfigAdminManager::new(
+        Arc::new(StaticAuthorizationPolicy::new().with_role(operator, role)),
+        Arc::new(JsonFileProductAuditStore::new(product_audit_path)),
+    ))
 }
 
 fn service_for_journal_root(
@@ -360,6 +444,27 @@ fn optional_usize(args: &[String], name: &str) -> Result<Option<usize>, io::Erro
         .transpose()
 }
 
+fn optional_u64(args: &[String], name: &str) -> Result<Option<u64>, io::Error> {
+    option_value(args, name)
+        .map(|value| parse_u64(&value, name))
+        .transpose()
+}
+
+fn required_u64(args: &[String], name: &str) -> Result<u64, io::Error> {
+    parse_u64(&required_option(args, name)?, name)
+}
+
+fn required_u32(args: &[String], name: &str) -> Result<u32, io::Error> {
+    let value = required_u64(args, name)?;
+    u32::try_from(value).map_err(|_| invalid_input(format!("{name} must fit in u32")))
+}
+
+fn parse_u64(value: &str, name: &str) -> Result<u64, io::Error> {
+    value
+        .parse::<u64>()
+        .map_err(|_| invalid_input(format!("{name} must be an unsigned integer")))
+}
+
 fn optional_alert_severity(
     args: &[String],
     name: &str,
@@ -391,6 +496,38 @@ fn required_role(args: &[String], name: &str) -> Result<RbacRole, io::Error> {
     }
 }
 
+fn required_bool(args: &[String], name: &str) -> Result<bool, io::Error> {
+    let value = required_option(args, name)?;
+    match value.as_str() {
+        "true" | "True" | "1" => Ok(true),
+        "false" | "False" | "0" => Ok(false),
+        _ => Err(invalid_input(format!("{name} must be true or false"))),
+    }
+}
+
+fn required_worker_schedule_target(
+    args: &[String],
+    name: &str,
+) -> Result<WorkerScheduleTarget, io::Error> {
+    let value = required_option(args, name)?;
+    match value.as_str() {
+        "operation-summary-retention" | "operation_summary_retention" => {
+            Ok(WorkerScheduleTarget::OperationSummaryRetention)
+        }
+        "operation-alert" | "operation_alert" => Ok(WorkerScheduleTarget::OperationAlert),
+        "journal-gc" | "journal_gc" => Ok(WorkerScheduleTarget::JournalGc),
+        "drift-audit" | "drift_audit" => Ok(WorkerScheduleTarget::DriftAudit),
+        _ => Err(invalid_input(format!(
+            "{name} must be operation-summary-retention, operation-alert, journal-gc, or drift-audit"
+        ))),
+    }
+}
+
+fn request_id(args: &[String], prefix: &str) -> String {
+    option_value(args, "--request-id")
+        .unwrap_or_else(|| format!("{prefix}-{}", uuid::Uuid::new_v4()))
+}
+
 fn has_flag(args: &[String], name: &str) -> bool {
     args.iter().any(|arg| arg == name)
 }
@@ -401,6 +538,6 @@ fn invalid_input(message: impl Into<String>) -> io::Error {
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  aria-underlay-ops list-in-doubt --journal-root <dir> [--device-id <id>]\n  aria-underlay-ops force-resolve --journal-root <dir> --operation-summary-path <file> --tx-id <tx> --operator <name> --reason <text> --break-glass [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops list-operations --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]\n  aria-underlay-ops operation-summary --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]\n  aria-underlay-ops list-alerts --operation-alert-path <file> [--alert-state-path <file>] [--severity Critical|Warning] [--limit <n>]\n  aria-underlay-ops alert-summary --operation-alert-path <file> [--alert-state-path <file>] [--severity Critical|Warning]\n  aria-underlay-ops ack-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops resolve-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops suppress-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops expire-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]"
+        "usage:\n  aria-underlay-ops list-in-doubt --journal-root <dir> [--device-id <id>]\n  aria-underlay-ops force-resolve --journal-root <dir> --operation-summary-path <file> --tx-id <tx> --operator <name> --reason <text> --break-glass [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops list-operations --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]\n  aria-underlay-ops operation-summary --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]\n  aria-underlay-ops list-alerts --operation-alert-path <file> [--alert-state-path <file>] [--severity Critical|Warning] [--limit <n>]\n  aria-underlay-ops alert-summary --operation-alert-path <file> [--alert-state-path <file>] [--severity Critical|Warning]\n  aria-underlay-ops ack-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops resolve-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops suppress-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops expire-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops set-summary-retention --worker-config-path <file> --product-audit-path <file> --operator <name> --role Admin --reason <text> [--max-records <n>] [--max-bytes <n>] [--max-rotated-files <n>] [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops set-gc-retention --worker-config-path <file> --product-audit-path <file> --operator <name> --role Admin --reason <text> --committed-days <n> --rolled-back-days <n> --failed-days <n> --rollback-artifact-days <n> --max-artifacts-per-device <n> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops set-worker-schedule --worker-config-path <file> --product-audit-path <file> --operator <name> --role Admin --reason <text> --target <target> --interval-secs <n> --run-immediately true|false [--request-id <id>] [--trace-id <id>]"
     );
 }

@@ -10,7 +10,7 @@ Covered:
 - Attention-required operation filtering.
 - Operation alert inspection.
 - Internal alert lifecycle: acknowledge, resolve, suppress, and expire.
-- Worker daemon config and schedules.
+- Worker daemon config, retention, and schedule changes.
 - Journal/artifact GC signal review.
 - Drift audit signal review.
 - InDoubt transaction review and force-resolve.
@@ -191,6 +191,74 @@ cargo run --bin aria-underlay-ops -- resolve-alert \
 ```
 
 If product audit cannot be written, lifecycle writes fail closed and the alert state file is not updated.
+
+## Change Worker Config
+
+Worker config admin commands update the JSON config file. They do not hot-reload a running daemon. Restart or reload orchestration remains a separate deployment concern.
+
+All config writes require:
+
+- `--operator`
+- `--role Admin`
+- `--reason`
+- `--product-audit-path`
+
+Product audit is written before the config file is mutated. If product audit cannot be written, the config file is not changed.
+
+Change operation summary retention:
+
+```bash
+cargo run --bin aria-underlay-ops -- set-summary-retention \
+  --worker-config-path /etc/aria-underlay/worker.json \
+  --product-audit-path var/aria-underlay/ops/product-audit.jsonl \
+  --operator admin-a \
+  --role Admin \
+  --reason "reduce local summary retention for disk pressure" \
+  --max-records 10000 \
+  --max-bytes 10485760 \
+  --max-rotated-files 5
+```
+
+Change journal GC retention:
+
+```bash
+cargo run --bin aria-underlay-ops -- set-gc-retention \
+  --worker-config-path /etc/aria-underlay/worker.json \
+  --product-audit-path var/aria-underlay/ops/product-audit.jsonl \
+  --operator admin-a \
+  --role Admin \
+  --reason "align local journal retention with incident policy" \
+  --committed-days 30 \
+  --rolled-back-days 30 \
+  --failed-days 90 \
+  --rollback-artifact-days 30 \
+  --max-artifacts-per-device 50
+```
+
+Change a worker schedule:
+
+```bash
+cargo run --bin aria-underlay-ops -- set-worker-schedule \
+  --worker-config-path /etc/aria-underlay/worker.json \
+  --product-audit-path var/aria-underlay/ops/product-audit.jsonl \
+  --operator admin-a \
+  --role Admin \
+  --reason "slow down drift audits during maintenance" \
+  --target drift-audit \
+  --interval-secs 600 \
+  --run-immediately false
+```
+
+Schedule targets:
+
+| Target | Config section |
+| --- | --- |
+| `operation-summary-retention` | `operation_summary.retention_schedule` |
+| `operation-alert` | `operation_alert.schedule` |
+| `journal-gc` | `journal_gc.schedule` |
+| `drift-audit` | `drift_audit.schedule` |
+
+If the target section is absent from the config file, the command fails closed instead of creating a partial config.
 
 ## Triage GC
 

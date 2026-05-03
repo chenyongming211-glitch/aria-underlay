@@ -62,7 +62,7 @@ impl OperationSummaryRetentionPolicy {
         self.max_records.is_some() || self.max_bytes.is_some()
     }
 
-    fn validate(&self) -> UnderlayResult<()> {
+    pub fn validate(&self) -> UnderlayResult<()> {
         if self.max_records == Some(0) {
             return Err(UnderlayError::InvalidIntent(
                 "operation summary retention max_records must be greater than zero".into(),

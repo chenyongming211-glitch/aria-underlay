@@ -12,7 +12,7 @@ use crate::tx::{TxJournalRecord, TxPhase};
 use crate::utils::time::now_unix_secs;
 use crate::{UnderlayError, UnderlayResult};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetentionPolicy {
     pub committed_journal_retention_days: u32,
     pub rolled_back_journal_retention_days: u32,
@@ -30,6 +30,17 @@ impl Default for RetentionPolicy {
             rollback_artifact_retention_days: 30,
             max_artifacts_per_device: 50,
         }
+    }
+}
+
+impl RetentionPolicy {
+    pub fn validate(&self) -> UnderlayResult<()> {
+        if self.max_artifacts_per_device == 0 {
+            return Err(UnderlayError::InvalidIntent(
+                "journal GC retention max_artifacts_per_device must be greater than zero".into(),
+            ));
+        }
+        Ok(())
     }
 }
 

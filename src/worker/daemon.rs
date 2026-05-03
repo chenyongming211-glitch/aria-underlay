@@ -25,6 +25,7 @@ use crate::worker::operation_summary_compactor::{
     OperationSummaryCompactionSchedule, OperationSummaryCompactionWorker,
 };
 use crate::worker::runtime::{UnderlayWorkerRuntime, UnderlayWorkerRuntimeReport};
+use crate::utils::atomic_file::atomic_write;
 use crate::{UnderlayError, UnderlayResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +109,13 @@ impl UnderlayWorkerDaemonConfig {
         serde_json::from_slice(&payload).map_err(|err| {
             UnderlayError::InvalidIntent(format!("parse worker daemon config {:?}: {err}", path))
         })
+    }
+
+    pub fn write_to_path(&self, path: impl AsRef<Path>) -> UnderlayResult<()> {
+        let payload = serde_json::to_vec_pretty(self).map_err(|err| {
+            UnderlayError::Internal(format!("serialize worker daemon config: {err}"))
+        })?;
+        atomic_write(path.as_ref(), &payload, worker_config_io_error)
     }
 }
 
