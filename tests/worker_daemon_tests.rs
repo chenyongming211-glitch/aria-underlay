@@ -15,6 +15,19 @@ use aria_underlay::worker::daemon::{
 };
 use aria_underlay::worker::gc::RetentionPolicy;
 
+#[test]
+fn checked_in_worker_daemon_sample_config_parses() {
+    let config = UnderlayWorkerDaemonConfig::from_path(
+        "docs/examples/underlay-worker-daemon.local.json",
+    )
+    .expect("checked-in worker daemon sample config should parse");
+
+    assert!(config.operation_summary.is_some());
+    assert!(config.operation_alert.is_some());
+    assert!(config.journal_gc.is_some());
+    assert!(config.drift_audit.is_some());
+}
+
 #[tokio::test]
 async fn daemon_config_wires_gc_drift_and_persistent_operation_summaries() {
     let temp = temp_test_dir("daemon-wires-workers");

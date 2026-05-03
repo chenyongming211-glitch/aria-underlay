@@ -1642,6 +1642,23 @@ pub enum ApplyStatus {
 - 所有降级事务必须显式返回 warning。
 - 所有事务日志必须包含 `request_id`、`tx_id`、`trace_id`、`device_id`、`phase`、`rpc`、`latency`、`result`。
 
+### 16.1 运维入口验收补充
+
+在真实交换机接入前，第一版运维入口还必须满足：
+
+- worker daemon 能通过检入的 JSON 配置启动本地 operation summary、operation alert、journal GC 和 drift audit 调度。
+- 运维人员可以通过正式 `aria-underlay-ops` CLI 查询 operation summary overview、operation 明细、alert overview、alert 明细和 InDoubt 事务。
+- `force-resolve` 只能通过显式 break-glass 参数执行，并且必须写入 journal manual resolution 和 operation summary。
+- operation summary / alert 的 JSONL 本地模式必须可轮转、可压缩、可保留、可 fail-closed。
+- operator runbook 必须说明 operation summary、alert、GC、drift、recovery 风险的判断与处理。
+- product audit backend 和 RBAC 在上线前必须独立落地；本地 JSONL/CLI 不是最终审计权限边界。
+
+当前配套文档：
+
+- `docs/examples/underlay-worker-daemon.local.json`
+- `docs/runbooks/operator-operations.md`
+- `docs/superpowers/specs/2026-05-03-product-audit-rbac-design.md`
+
 ## 17. 最小第一步
 
 真正开始写代码时，第一批文件应从这里开始：

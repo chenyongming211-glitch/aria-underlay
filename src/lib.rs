@@ -5,6 +5,7 @@ pub mod engine;
 pub mod error;
 pub mod intent;
 pub mod model;
+pub mod ops_cli;
 pub mod planner;
 pub mod proto;
 pub mod state;

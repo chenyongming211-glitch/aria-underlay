@@ -1,0 +1,45 @@
+{
+  "operation_summary": {
+    "path": "var/aria-underlay/ops/operation-summaries.jsonl",
+    "retention": {
+      "max_records": 10000,
+      "max_bytes": 10485760,
+      "max_rotated_files": 5
+    },
+    "retention_schedule": {
+      "interval_secs": 3600,
+      "run_immediately": true
+    }
+  },
+  "operation_alert": {
+    "path": "var/aria-underlay/ops/operation-alerts.jsonl",
+    "checkpoint_path": "var/aria-underlay/ops/operation-alert-checkpoint.json",
+    "schedule": {
+      "interval_secs": 60,
+      "run_immediately": true
+    }
+  },
+  "journal_gc": {
+    "journal_root": "var/aria-underlay/journal",
+    "artifact_root": "var/aria-underlay/artifacts",
+    "schedule": {
+      "interval_secs": 3600,
+      "run_immediately": true
+    },
+    "retention": {
+      "committed_journal_retention_days": 30,
+      "rolled_back_journal_retention_days": 30,
+      "failed_journal_retention_days": 90,
+      "rollback_artifact_retention_days": 30,
+      "max_artifacts_per_device": 50
+    }
+  },
+  "drift_audit": {
+    "expected_shadow_root": "var/aria-underlay/shadow/expected",
+    "observed_shadow_root": "var/aria-underlay/shadow/observed",
+    "schedule": {
+      "interval_secs": 300,
+      "run_immediately": true
+    }
+  }
+}
