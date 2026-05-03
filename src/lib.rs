@@ -1,5 +1,6 @@
 pub mod adapter_client;
 pub mod api;
+pub mod authz;
 pub mod device;
 pub mod engine;
 pub mod error;

@@ -18,8 +18,9 @@ Not covered:
 
 - Product audit database deployment.
 - Operator identity and RBAC enforcement.
-- External paging systems such as Slack, email, PagerDuty, or webhook delivery.
 - Real switch parser/renderer promotion.
+
+External paging systems such as enterprise IM, Slack, email, PagerDuty, or webhook delivery are intentionally out of scope. Alerts stay inside Aria Underlay and are queried through CLI, later product APIs, and later UI.
 
 ## Local Files
 
@@ -227,7 +228,7 @@ Local JSONL mode is intentionally simple and auditable, but it is not the final 
 - operator identity,
 - RBAC,
 - immutable audit records,
-- external alert delivery,
+- internal alert lifecycle,
 - searchable UI/API.
 
 The design boundary is recorded in:

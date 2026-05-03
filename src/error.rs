@@ -29,6 +29,12 @@ pub enum UnderlayError {
     #[error("invalid intent: {0}")]
     InvalidIntent(String),
 
+    #[error("authorization denied: {0}")]
+    AuthorizationDenied(String),
+
+    #[error("product audit write failed: {0}")]
+    ProductAuditWriteFailed(String),
+
     #[error("unsupported transaction strategy")]
     UnsupportedTransactionStrategy,
 

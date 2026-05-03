@@ -5,7 +5,10 @@ pub mod metrics;
 pub mod ops;
 pub mod sink;
 
-pub use audit::AuditRecord;
+pub use audit::{
+    AuditRecord, InMemoryProductAuditStore, NoopProductAuditStore, ProductAuditRecord,
+    ProductAuditStore,
+};
 pub use alerts::{
     InMemoryOperationAlertCheckpointStore, InMemoryOperationAlertSink,
     JsonFileOperationAlertCheckpointStore, JsonFileOperationAlertSink, OperationAlert,

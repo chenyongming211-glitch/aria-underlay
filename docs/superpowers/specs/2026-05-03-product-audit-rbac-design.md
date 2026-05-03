@@ -25,7 +25,7 @@ Production should add product-backed implementations behind existing operation i
 | Interface | Product implementation |
 | --- | --- |
 | `OperationSummaryStore` | Append immutable event-derived summaries to the audit database. |
-| `OperationAlertSink` | Deliver alerts to the product notification pipeline. |
+| `OperationAlertSink` | Store alerts in the internal product alert store for query and lifecycle handling. |
 | `OperationAlertCheckpointStore` | Store delivery cursor/dedupe keys in durable product storage. |
 | `EventSink` | Fan out to product audit plus metrics, with explicit failure behavior. |
 
@@ -119,6 +119,9 @@ The product API should expose:
 - `GET /operations/summaries/overview`
 - `GET /operations/alerts`
 - `GET /operations/alerts/overview`
+- `POST /operations/alerts/{dedupe_key}/ack`
+- `POST /operations/alerts/{dedupe_key}/resolve`
+- `POST /operations/alerts/{dedupe_key}/suppress`
 - `GET /transactions/in-doubt`
 - `POST /transactions/{tx_id}/force-resolve`
 - `GET /audit/events`
@@ -139,4 +142,6 @@ Required tests before product backend promotion:
 
 ## Current Decision
 
-Continue using JSONL local mode for no-real-switch development. Build product audit/RBAC as a separate backend behind existing traits once product storage, identity provider, and alert delivery requirements are fixed.
+Continue using JSONL local mode for no-real-switch development. Build product audit/RBAC as a separate backend behind existing traits once product storage and identity provider requirements are fixed.
+
+External alert delivery is not part of the current product direction. Do not build webhook, enterprise IM, PagerDuty, email, or external retry adapters unless the product requirement changes. Alerts remain internal records queried through `aria-underlay-ops`, product APIs, and later UI. The next alert work is internal lifecycle management: `open`, `acknowledged`, `resolved`, `suppressed`, and `expired`, with audit and RBAC on every operator action.

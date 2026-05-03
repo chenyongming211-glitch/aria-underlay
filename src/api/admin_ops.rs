@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::adapter_client::mapper::AdapterOperationStatus;
 use crate::adapter_client::AdapterClientPool;
+use crate::authz::{AdminAction, AuthorizationPolicy, AuthorizationRequest};
 use crate::api::force_resolve::{
     ForceResolveTransactionRequest, ForceResolveTransactionResponse,
 };
@@ -12,7 +13,7 @@ use crate::api::transactions::{
 };
 use crate::device::DeviceInventory;
 use crate::proto::adapter::RequestContext;
-use crate::telemetry::{EventSink, UnderlayEvent};
+use crate::telemetry::{EventSink, ProductAuditRecord, ProductAuditStore, UnderlayEvent};
 use crate::tx::{EndpointLockTable, TxJournalStore, TxPhase};
 use crate::{UnderlayError, UnderlayResult};
 
@@ -22,6 +23,8 @@ pub(crate) struct AdminOps {
     journal: Arc<dyn TxJournalStore>,
     endpoint_locks: EndpointLockTable,
     event_sink: Arc<dyn EventSink>,
+    authorization_policy: Arc<dyn AuthorizationPolicy>,
+    product_audit_store: Arc<dyn ProductAuditStore>,
     adapter_pool: AdapterClientPool,
 }
 
@@ -31,6 +34,8 @@ impl AdminOps {
         journal: Arc<dyn TxJournalStore>,
         endpoint_locks: EndpointLockTable,
         event_sink: Arc<dyn EventSink>,
+        authorization_policy: Arc<dyn AuthorizationPolicy>,
+        product_audit_store: Arc<dyn ProductAuditStore>,
         adapter_pool: AdapterClientPool,
     ) -> Self {
         Self {
@@ -38,6 +43,8 @@ impl AdminOps {
             journal,
             endpoint_locks,
             event_sink,
+            authorization_policy,
+            product_audit_store,
             adapter_pool,
         }
     }
@@ -138,6 +145,23 @@ impl AdminOps {
             });
         }
 
+        let authorization = self.authorization_policy.authorize(&AuthorizationRequest::new(
+            request.request_id.clone(),
+            trace_id.clone(),
+            request.operator.clone(),
+            AdminAction::ForceResolveTransaction,
+        ))?;
+        self.product_audit_store
+            .append(ProductAuditRecord::force_resolve_requested(
+                request.request_id.clone(),
+                trace_id.clone(),
+                record.tx_id.clone(),
+                authorization.operator_id,
+                authorization.role,
+                request.reason.clone(),
+            ))
+            .map_err(product_audit_error)?;
+
         let previous_phase = record.phase.clone();
         let resolved = record
             .clone()
@@ -167,5 +191,12 @@ impl AdminOps {
             resolved: true,
             warnings: Vec::new(),
         })
+    }
+}
+
+fn product_audit_error(error: UnderlayError) -> UnderlayError {
+    match error {
+        UnderlayError::ProductAuditWriteFailed(_) => error,
+        other => UnderlayError::ProductAuditWriteFailed(other.to_string()),
     }
 }

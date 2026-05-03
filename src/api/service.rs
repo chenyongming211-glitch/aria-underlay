@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use crate::adapter_client::AdapterClientPool;
+use crate::authz::{AuthorizationPolicy, PermitAllAuthorizationPolicy};
 use crate::api::admin_ops::AdminOps;
 use crate::api::apply::device_results_from_plan;
 use crate::api::apply_coordinator::ApplyCoordinator;
@@ -39,8 +40,8 @@ use crate::state::{
     DeviceShadowState, InMemoryShadowStateStore, ShadowStateStore,
 };
 use crate::telemetry::{
-    EventSink, InMemoryOperationSummaryStore, NoopEventSink, RecordingEventSink,
-    OperationSummaryStore, UnderlayEvent,
+    EventSink, InMemoryOperationSummaryStore, NoopEventSink, NoopProductAuditStore,
+    ProductAuditStore, RecordingEventSink, OperationSummaryStore, UnderlayEvent,
 };
 use crate::tx::recovery::RecoveryReport;
 use crate::tx::{
@@ -59,6 +60,8 @@ pub struct AriaUnderlayService {
     observed_store: Arc<dyn ShadowStateStore>,
     event_sink: Arc<dyn EventSink>,
     operation_summary_store: Arc<dyn OperationSummaryStore>,
+    authorization_policy: Arc<dyn AuthorizationPolicy>,
+    product_audit_store: Arc<dyn ProductAuditStore>,
     adapter_pool: AdapterClientPool,
 }
 
@@ -74,6 +77,8 @@ impl AriaUnderlayService {
             observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
             operation_summary_store: Arc::new(InMemoryOperationSummaryStore::default()),
+            authorization_policy: Arc::new(PermitAllAuthorizationPolicy),
+            product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
         }
     }
@@ -92,6 +97,8 @@ impl AriaUnderlayService {
             observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
             operation_summary_store: Arc::new(InMemoryOperationSummaryStore::default()),
+            authorization_policy: Arc::new(PermitAllAuthorizationPolicy),
+            product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
         }
     }
@@ -111,6 +118,8 @@ impl AriaUnderlayService {
             observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
             operation_summary_store: Arc::new(InMemoryOperationSummaryStore::default()),
+            authorization_policy: Arc::new(PermitAllAuthorizationPolicy),
+            product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
         }
     }
@@ -132,6 +141,8 @@ impl AriaUnderlayService {
             observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
             operation_summary_store: Arc::new(InMemoryOperationSummaryStore::default()),
+            authorization_policy: Arc::new(PermitAllAuthorizationPolicy),
+            product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
         }
     }
@@ -154,6 +165,8 @@ impl AriaUnderlayService {
             observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
             operation_summary_store: Arc::new(InMemoryOperationSummaryStore::default()),
+            authorization_policy: Arc::new(PermitAllAuthorizationPolicy),
+            product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
         }
     }
@@ -178,6 +191,22 @@ impl AriaUnderlayService {
 
     pub fn with_adapter_pool(mut self, adapter_pool: AdapterClientPool) -> Self {
         self.adapter_pool = adapter_pool;
+        self
+    }
+
+    pub fn with_authorization_policy(
+        mut self,
+        authorization_policy: Arc<dyn AuthorizationPolicy>,
+    ) -> Self {
+        self.authorization_policy = authorization_policy;
+        self
+    }
+
+    pub fn with_product_audit_store(
+        mut self,
+        product_audit_store: Arc<dyn ProductAuditStore>,
+    ) -> Self {
+        self.product_audit_store = product_audit_store;
         self
     }
 
@@ -222,6 +251,8 @@ impl AriaUnderlayService {
             self.journal.clone(),
             self.endpoint_locks.clone(),
             self.operation_event_sink(),
+            self.authorization_policy.clone(),
+            self.product_audit_store.clone(),
             self.adapter_pool.clone(),
         )
     }
