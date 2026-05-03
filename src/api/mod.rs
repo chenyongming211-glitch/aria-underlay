@@ -5,6 +5,7 @@ mod apply_coordinator;
 mod drift_ops;
 pub mod operations;
 pub mod product_api;
+pub mod product_http;
 pub mod product_ops;
 pub mod force_unlock;
 pub mod force_resolve;

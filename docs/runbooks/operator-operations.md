@@ -428,7 +428,7 @@ Local JSONL mode is intentionally simple and auditable, but it is not the final 
 - immutable audit records,
 - searchable UI/API.
 
-The first product-facing Rust operation boundary is `ProductOpsManager` in `src/api/product_ops.rs`. The first handler-facing facade is `ProductOpsApi` in `src/api/product_api.rs`. Neither is an HTTP server. Future HTTP handlers should call `ProductOpsApi` so product reads cannot bypass session extraction, operator identity, RBAC, and product audit behavior.
+The first product-facing Rust operation boundary is `ProductOpsManager` in `src/api/product_ops.rs`. The first handler-facing facade is `ProductOpsApi` in `src/api/product_api.rs`. The first framework-neutral HTTP route contract is `ProductHttpRouter` in `src/api/product_http.rs`. It defines method/path/status/body JSON behavior, but it is not a listener and does not select the final web framework.
 
 `ProductOpsApi` currently accepts a typed `ProductApiRequest<T>` envelope:
 
@@ -446,6 +446,29 @@ The local/mock session extractor is `HeaderProductSessionExtractor`. It reads:
 
 The header extractor is not a production identity model. It is a replaceable seam for future IdP/token validation.
 
+`ProductHttpRouter` currently defines these product HTTP routes:
+
+| Method | Path | Body | Success response |
+| --- | --- | --- | --- |
+| `POST` | `/product/v1/operations/summaries:query` | `ListOperationSummariesRequest` JSON | `ProductApiResponse<ListOperationSummariesResponse>` |
+| `POST` | `/product/v1/product-audit:export` | `ExportProductAuditRequest` JSON | `ProductApiResponse<ExportProductAuditResponse>` |
+
+Required HTTP headers:
+
+| Header | Meaning |
+| --- | --- |
+| `x-aria-request-id` | Operator-visible request ID. |
+| `x-aria-operator-id` | Operator identity for local/mock session extraction. |
+| `x-aria-role` | Local/mock RBAC role. |
+
+Optional HTTP headers:
+
+| Header | Meaning |
+| --- | --- |
+| `x-aria-trace-id` | Cross-service trace ID; defaults to request ID in error responses when omitted. |
+
+HTTP errors are JSON. Invalid requests return `400`, RBAC denial returns `403`, unknown paths return `404`, known paths with the wrong method return `405` plus `allow: POST`, and audit/internal failures return `500`.
+
 Current product boundary behavior:
 
 | Operation | RBAC action | Audit behavior |
@@ -457,7 +480,7 @@ Audit export is fail-closed. If the export action cannot be appended to product 
 
 Still missing from the product layer:
 
-- Real HTTP routes/server.
+- Real HTTP listener/server wiring.
 - Identity provider integration.
 - token/session validation.
 - product UI.
@@ -469,4 +492,5 @@ The design boundary is recorded in:
 docs/superpowers/specs/2026-05-03-product-audit-rbac-design.md
 docs/superpowers/specs/2026-05-03-product-ops-rbac-boundary-design.md
 docs/superpowers/specs/2026-05-03-product-api-routing-skeleton-design.md
+docs/superpowers/specs/2026-05-03-product-http-routing-design.md
 ```
