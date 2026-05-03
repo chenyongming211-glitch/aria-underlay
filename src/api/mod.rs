@@ -6,6 +6,7 @@ mod drift_ops;
 pub mod operations;
 pub mod product_api;
 pub mod product_http;
+pub mod product_http_server;
 pub mod product_identity;
 pub mod product_ops;
 pub mod force_unlock;

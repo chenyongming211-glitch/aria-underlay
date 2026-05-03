@@ -428,7 +428,7 @@ Local JSONL mode is intentionally simple and auditable, but it is not the final 
 - immutable audit records,
 - searchable UI/API.
 
-The first product-facing Rust operation boundary is `ProductOpsManager` in `src/api/product_ops.rs`. The first handler-facing facade is `ProductOpsApi` in `src/api/product_api.rs`. The first framework-neutral HTTP route contract is `ProductHttpRouter` in `src/api/product_http.rs`. It defines method/path/status/body JSON behavior, but it is not a listener and does not select the final web framework. The first identity boundary is `product_identity` in `src/api/product_identity.rs`.
+The first product-facing Rust operation boundary is `ProductOpsManager` in `src/api/product_ops.rs`. The first handler-facing facade is `ProductOpsApi` in `src/api/product_api.rs`. The framework-neutral HTTP route contract is `ProductHttpRouter` in `src/api/product_http.rs`. The first local listener adapter is `ProductHttpServer` in `src/api/product_http_server.rs`, exposed by the `aria-underlay-product-api` binary. The first identity boundary is `product_identity` in `src/api/product_identity.rs`.
 
 `ProductOpsApi` currently accepts a typed `ProductApiRequest<T>` envelope:
 
@@ -461,7 +461,7 @@ The bearer extractor reads:
 
 The header extractor and static verifier are not production identity models. Production should replace the verifier with OIDC/JWT/JWKS or the selected internal SSO/session verifier before exposing a listener.
 
-`ProductHttpRouter` currently defines these product HTTP routes:
+`ProductHttpRouter` currently defines these product HTTP routes, and `ProductHttpServer` can serve them over a local HTTP/1.1 listener:
 
 | Method | Path | Body | Success response |
 | --- | --- | --- | --- |
@@ -483,6 +483,23 @@ Optional HTTP headers:
 
 HTTP errors are JSON. Authentication failures return `401` plus `www-authenticate: Bearer`, invalid requests return `400`, RBAC denial returns `403`, unknown paths return `404`, known paths with the wrong method return `405` plus `allow: POST`, and audit/internal failures return `500`.
 
+The local listener adds transport-level guardrails before route dispatch:
+
+| Guardrail | Behavior |
+| --- | --- |
+| HTTP version | Accepts HTTP/1.1 request lines. |
+| request body | Requires fixed `Content-Length` semantics; unsupported transfer encodings return JSON `400`. |
+| body size | `max_body_bytes` defaults to 1 MiB and oversized bodies return JSON `413`. |
+| connection lifecycle | One request per connection; responses include `connection: close`. |
+
+Start the local product API with:
+
+```bash
+aria-underlay-product-api docs/examples/product-api.local.json
+```
+
+The checked-in sample binds to `127.0.0.1:8088` and uses static local bearer tokens. Keep this listener local or behind site access controls until the real IdP/JWT/JWKS verifier, TLS/ingress model, and product packaging are selected.
+
 Current product boundary behavior:
 
 | Operation | RBAC action | Audit behavior |
@@ -494,9 +511,9 @@ Audit export is fail-closed. If the export action cannot be appended to product 
 
 Still missing from the product layer:
 
-- Real HTTP listener/server wiring.
 - Real identity provider integration.
 - JWT/OIDC/JWKS or internal SSO token validation.
+- production TLS/ingress selection.
 - product UI.
 - online daemon reload.
 
@@ -508,4 +525,5 @@ docs/superpowers/specs/2026-05-03-product-ops-rbac-boundary-design.md
 docs/superpowers/specs/2026-05-03-product-api-routing-skeleton-design.md
 docs/superpowers/specs/2026-05-03-product-http-routing-design.md
 docs/superpowers/specs/2026-05-04-product-session-identity-boundary-design.md
+docs/superpowers/specs/2026-05-04-product-http-listener-design.md
 ```

@@ -15,6 +15,10 @@ path = "src/bin/aria_underlay_worker.rs"
 name = "aria-underlay-ops"
 path = "src/bin/aria_underlay_ops.rs"
 
+[[bin]]
+name = "aria-underlay-product-api"
+path = "src/bin/aria_underlay_product_api.rs"
+
 [dependencies]
 async-trait = "0.1"
 dashmap = "6"

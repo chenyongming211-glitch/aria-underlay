@@ -14,13 +14,14 @@ pub const PRODUCT_AUDIT_EXPORT_PATH: &str = "/product/v1/product-audit:export";
 const REQUEST_ID_HEADER: &str = "x-aria-request-id";
 const TRACE_ID_HEADER: &str = "x-aria-trace-id";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProductHttpMethod {
     Get,
     Post,
     Put,
     Patch,
     Delete,
+    Other(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,7 +58,7 @@ impl ProductHttpRouter {
     }
 
     pub fn handle(&self, request: ProductHttpRequest) -> ProductHttpResponse {
-        let method = request.method;
+        let method = request.method.clone();
         let path = request.path.clone();
         match (method, path.as_str()) {
             (ProductHttpMethod::Post, OPERATION_SUMMARIES_QUERY_PATH) => {
