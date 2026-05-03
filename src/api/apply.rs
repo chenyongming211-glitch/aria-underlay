@@ -136,6 +136,12 @@ pub(super) fn journal_error_fields(error: &UnderlayError) -> (String, String) {
         } => (code.clone(), adapter_error_message(message, errors)),
         UnderlayError::AdapterTransport(message) => ("ADAPTER_TRANSPORT".into(), message.clone()),
         UnderlayError::InvalidIntent(message) => ("INVALID_INTENT".into(), message.clone()),
+        UnderlayError::AuthorizationDenied(message) => {
+            ("AUTHORIZATION_DENIED".into(), message.clone())
+        }
+        UnderlayError::ProductAuditWriteFailed(message) => {
+            ("PRODUCT_AUDIT_WRITE_FAILED".into(), message.clone())
+        }
         UnderlayError::InvalidDeviceState(message) => {
             ("INVALID_DEVICE_STATE".into(), message.clone())
         }
