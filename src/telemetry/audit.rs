@@ -5,7 +5,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::authz::RbacRole;
 use crate::model::DeviceId;
 use crate::telemetry::alerts::OperationAlertLifecycleStatus;
 use crate::telemetry::events::{UnderlayEvent, UnderlayEventKind};
@@ -100,7 +99,6 @@ pub struct ProductAuditRecord {
     pub tx_id: Option<String>,
     pub device_id: Option<DeviceId>,
     pub operator_id: Option<String>,
-    pub role: Option<RbacRole>,
     pub reason: Option<String>,
     pub attention_required: bool,
     pub error_code: Option<String>,
@@ -115,7 +113,6 @@ impl ProductAuditRecord {
         trace_id: impl Into<String>,
         tx_id: impl Into<String>,
         operator_id: impl Into<String>,
-        role: RbacRole,
         reason: impl Into<String>,
     ) -> Self {
         Self {
@@ -126,7 +123,6 @@ impl ProductAuditRecord {
             tx_id: Some(tx_id.into()),
             device_id: None,
             operator_id: Some(operator_id.into()),
-            role: Some(role),
             reason: Some(reason.into()),
             attention_required: false,
             error_code: None,
@@ -142,7 +138,6 @@ impl ProductAuditRecord {
         dedupe_key: impl Into<String>,
         status: OperationAlertLifecycleStatus,
         operator_id: impl Into<String>,
-        role: RbacRole,
         reason: impl Into<String>,
     ) -> Self {
         let dedupe_key = dedupe_key.into();
@@ -159,7 +154,6 @@ impl ProductAuditRecord {
             tx_id: None,
             device_id: None,
             operator_id: Some(operator_id.into()),
-            role: Some(role),
             reason: Some(reason.into()),
             attention_required: false,
             error_code: None,
@@ -175,7 +169,6 @@ impl ProductAuditRecord {
         action: impl Into<String>,
         target: impl Into<String>,
         operator_id: impl Into<String>,
-        role: RbacRole,
         reason: impl Into<String>,
         mut fields: BTreeMap<String, String>,
     ) -> Self {
@@ -189,7 +182,6 @@ impl ProductAuditRecord {
             tx_id: None,
             device_id: None,
             operator_id: Some(operator_id.into()),
-            role: Some(role),
             reason: Some(reason.into()),
             attention_required: false,
             error_code: None,
@@ -203,7 +195,6 @@ impl ProductAuditRecord {
         request_id: impl Into<String>,
         trace_id: impl Into<String>,
         operator_id: impl Into<String>,
-        role: RbacRole,
         reason: impl Into<String>,
         mut fields: BTreeMap<String, String>,
     ) -> Self {
@@ -217,7 +208,6 @@ impl ProductAuditRecord {
             tx_id: None,
             device_id: None,
             operator_id: Some(operator_id.into()),
-            role: Some(role),
             reason: Some(reason.into()),
             attention_required: false,
             error_code: None,

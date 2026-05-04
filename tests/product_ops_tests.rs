@@ -7,7 +7,7 @@ use aria_underlay::api::product_ops::{
     ExportProductAuditRequest, ProductGetWorkerReloadStatusRequest,
     ProductOperatorContext, ProductOpsManager,
 };
-use aria_underlay::authz::{RbacRole, StaticAuthorizationPolicy};
+use aria_underlay::authz::StaticAuthorizationPolicy;
 use aria_underlay::telemetry::{
     InMemoryOperationSummaryStore, InMemoryProductAuditStore, OperationSummary,
     ProductAuditRecord, ProductAuditStore, UnderlayEvent,
@@ -19,7 +19,7 @@ use aria_underlay::worker::daemon::{
 use aria_underlay::{UnderlayError, UnderlayResult};
 
 #[test]
-fn viewer_with_assigned_role_can_list_operation_summaries_through_product_boundary() {
+fn registered_operator_can_list_operation_summaries_through_product_boundary() {
     let summary_store = Arc::new(InMemoryOperationSummaryStore::default());
     summary_store
         .record_event(&UnderlayEvent::recovery_completed(
@@ -35,7 +35,7 @@ fn viewer_with_assigned_role_can_list_operation_summaries_through_product_bounda
         ))
         .expect("summary event should be recorded");
     let manager = ProductOpsManager::new(
-        Arc::new(StaticAuthorizationPolicy::new().with_role("viewer-a", RbacRole::Viewer)),
+        Arc::new(StaticAuthorizationPolicy::new().with_operator("viewer-a")),
         summary_store,
         Arc::new(InMemoryProductAuditStore::default()),
     );
@@ -49,7 +49,7 @@ fn viewer_with_assigned_role_can_list_operation_summaries_through_product_bounda
                 ..Default::default()
             },
         )
-        .expect("assigned viewer should list operation summaries");
+        .expect("registered operator should list operation summaries");
 
     assert_eq!(response.overview.matched_records, 1);
     assert_eq!(response.overview.returned_records, 1);
@@ -77,13 +77,13 @@ fn unassigned_operator_cannot_list_operation_summaries() {
 }
 
 #[test]
-fn auditor_exports_product_audit_after_export_action_is_recorded() {
+fn registered_operator_exports_product_audit_after_export_action_is_recorded() {
     let audit_store = Arc::new(InMemoryProductAuditStore::default());
     audit_store
         .append(seed_audit_record("req-existing", "admin-a"))
         .expect("seed audit record should append");
     let manager = ProductOpsManager::new(
-        Arc::new(StaticAuthorizationPolicy::new().with_role("auditor-a", RbacRole::Auditor)),
+        Arc::new(StaticAuthorizationPolicy::new().with_operator("auditor-a")),
         Arc::new(InMemoryOperationSummaryStore::default()),
         audit_store.clone(),
     );
@@ -99,7 +99,7 @@ fn auditor_exports_product_audit_after_export_action_is_recorded() {
                 limit: None,
             },
         )
-        .expect("auditor should export product audit history");
+        .expect("registered operator should export product audit history");
 
     assert_eq!(response.overview.matched_records, 2);
     assert_eq!(response.overview.returned_records, 2);
@@ -107,7 +107,6 @@ fn auditor_exports_product_audit_after_export_action_is_recorded() {
     assert_eq!(response.records[1].request_id, "req-export");
     assert_eq!(response.records[1].action, "product_audit.export_requested");
     assert_eq!(response.records[1].operator_id.as_deref(), Some("auditor-a"));
-    assert_eq!(response.records[1].role, Some(RbacRole::Auditor));
 
     let persisted = audit_store.list().expect("audit records should be readable");
     assert_eq!(persisted.len(), 2);
@@ -115,35 +114,9 @@ fn auditor_exports_product_audit_after_export_action_is_recorded() {
 }
 
 #[test]
-fn operator_cannot_export_product_audit() {
-    let audit_store = Arc::new(InMemoryProductAuditStore::default());
-    let manager = ProductOpsManager::new(
-        Arc::new(StaticAuthorizationPolicy::new().with_role("operator-a", RbacRole::Operator)),
-        Arc::new(InMemoryOperationSummaryStore::default()),
-        audit_store.clone(),
-    );
-
-    let err = manager
-        .export_product_audit(
-            context("req-export-denied", "operator-a"),
-            ExportProductAuditRequest {
-                reason: "curious operator".into(),
-                action: None,
-                result: None,
-                operator_id: None,
-                limit: None,
-            },
-        )
-        .expect_err("operator should not export product audit");
-
-    assert!(matches!(err, UnderlayError::AuthorizationDenied(_)));
-    assert!(audit_store.list().expect("audit list should work").is_empty());
-}
-
-#[test]
 fn product_audit_write_failure_blocks_audit_export() {
     let manager = ProductOpsManager::new(
-        Arc::new(StaticAuthorizationPolicy::new().with_role("admin-a", RbacRole::Admin)),
+        Arc::new(StaticAuthorizationPolicy::new().with_operator("admin-a")),
         Arc::new(InMemoryOperationSummaryStore::default()),
         Arc::new(FailingProductAuditStore),
     );
@@ -165,13 +138,13 @@ fn product_audit_write_failure_blocks_audit_export() {
 }
 
 #[test]
-fn viewer_can_read_worker_reload_status_through_product_boundary() {
+fn registered_operator_can_read_worker_reload_status_through_product_boundary() {
     let temp = temp_test_dir("product-reload-status");
     let checkpoint_path = temp.join("worker-reload-checkpoint.json");
     fs::create_dir_all(&temp).expect("temp dir should be created");
     write_reload_checkpoint(&checkpoint_path, WorkerConfigReloadStatus::Applied, 4, None);
     let manager = ProductOpsManager::new(
-        Arc::new(StaticAuthorizationPolicy::new().with_role("viewer-a", RbacRole::Viewer)),
+        Arc::new(StaticAuthorizationPolicy::new().with_operator("viewer-a")),
         Arc::new(InMemoryOperationSummaryStore::default()),
         Arc::new(InMemoryProductAuditStore::default()),
     );
@@ -183,7 +156,7 @@ fn viewer_can_read_worker_reload_status_through_product_boundary() {
                 checkpoint_path: checkpoint_path.clone(),
             },
         )
-        .expect("assigned viewer should read worker reload status");
+        .expect("registered operator should read worker reload status");
 
     assert_eq!(checkpoint.status, WorkerConfigReloadStatus::Applied);
     assert_eq!(checkpoint.generation, 4);
@@ -250,7 +223,6 @@ fn seed_audit_record(request_id: &str, operator: &str) -> ProductAuditRecord {
         tx_id: None,
         device_id: None,
         operator_id: Some(operator.into()),
-        role: Some(RbacRole::Admin),
         reason: Some("seed record".into()),
         attention_required: false,
         error_code: None,

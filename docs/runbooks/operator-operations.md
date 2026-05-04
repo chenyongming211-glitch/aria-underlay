@@ -2,7 +2,7 @@
 
 ## 范围
 
-本文记录当前内部系统的本地运维入口。当前不做产品 UI、外部系统、SSO/OIDC/JWT/JWKS、外部告警投递、仓库内 ingress/TLS、安装包生成。
+本文记录当前内部系统的本地运维入口。当前不做产品 UI、外部系统、SSO/OIDC/JWT/JWKS、RBAC、外部告警投递、仓库内 ingress/TLS、安装包生成。
 
 ## 已有入口
 
@@ -54,7 +54,7 @@ grep 'device_id=<设备ID>' /var/log/aria/aria-underlay.log
 Authorization: Bearer <token>
 ```
 
-Token 在 `product-api.local.json` 或 `product-api.production.json` 的 `static_tokens` 中手工配置。当前不做 token 创建、轮换、撤销工具。
+Token 在 `product-api.local.json` 或 `product-api.production.json` 的 `static_tokens` 中手工配置。每个 token 只映射到一个 `operator_id`，不包含 role、issuer、subject、session_id 或 expiry。当前不做 token 创建、轮换、撤销工具。
 
 ## 产品 API 部署
 
@@ -78,6 +78,7 @@ Token 在 `product-api.local.json` 或 `product-api.production.json` 的 `static
 
 - 外部 IM、PagerDuty、email、webhook。
 - product 审计 database。
+- RBAC。
 - 产品 UI。
 - token 生命周期。
 - 仓库内 ingress/TLS。

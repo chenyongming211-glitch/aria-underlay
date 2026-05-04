@@ -1651,13 +1651,13 @@ pub enum ApplyStatus {
 - `force-resolve` 只能通过显式 break-glass 参数执行，并且必须写入 journal manual resolution 和 操作摘要。
 - 操作摘要 / 告警 的 JSONL 本地模式必须可轮转、可压缩、可保留、可 失败关闭。
 - operator 操作手册 必须说明 操作摘要、告警、GC、drift、recovery 风险的判断与处理。
-- product 审计 后端 和 RBAC 在上线前必须独立落地；本地 JSONL/CLI 不是最终审计权限边界。
+- 当前产品范围已收敛为内部系统：只保留本地 JSONL 审计和静态 token operator 身份，不做产品审计数据库、RBAC 平台或 token 生命周期工具。
 
 当前配套文档：
 
 - `docs/examples/underlay-worker-daemon.local.json`
-- `docs/操作手册s/operator-operations.md`
-- `docs/superpowers/specs/2026-05-03-product-audit-rbac-design.md`
+- `docs/runbooks/operator-operations.md`
+- `docs/superpowers/specs/2026-05-04-operation-audit-log-design.md`
 
 ## 17. 最小第一步
 

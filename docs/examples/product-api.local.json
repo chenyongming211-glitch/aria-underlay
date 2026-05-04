@@ -1,25 +1,14 @@
 {
-  "deployment_mode": "local",
   "bind_addr": "127.0.0.1:8088",
   "max_body_bytes": 1048576,
   "operation_summary_path": "var/aria-underlay/ops/operation-summaries.jsonl",
   "product_audit_path": "var/aria-underlay/ops/product-audit.jsonl",
   "static_tokens": {
     "local-viewer-token": {
-      "operator_id": "local-viewer",
-      "role": "Viewer",
-      "issuer": "local-static-config",
-      "subject": "local-viewer",
-      "session_id": "local-viewer-session",
-      "expires_at_unix_secs": null
+      "operator_id": "local-viewer"
     },
     "local-auditor-token": {
-      "operator_id": "local-auditor",
-      "role": "Auditor",
-      "issuer": "local-static-config",
-      "subject": "local-auditor",
-      "session_id": "local-auditor-session",
-      "expires_at_unix_secs": null
+      "operator_id": "local-auditor"
     }
   }
 }

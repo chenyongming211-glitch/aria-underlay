@@ -6,28 +6,18 @@ use serde::{Deserialize, Serialize};
 use crate::api::product_api::{
     ProductApiRequestMetadata, ProductSession, ProductSessionExtractor,
 };
-use crate::authz::RbacRole;
-use crate::utils::time::now_unix_secs;
 use crate::{UnderlayError, UnderlayResult};
 
 const AUTHORIZATION_HEADER: &str = "authorization";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProductAuthenticatedPrincipal {
     pub operator_id: String,
-    pub role: RbacRole,
-    pub issuer: Option<String>,
-    pub subject: Option<String>,
-    pub session_id: Option<String>,
-    pub expires_at_unix_secs: Option<u64>,
 }
 
 pub trait ProductIdentityVerifier: std::fmt::Debug + Send + Sync {
-    fn verify_bearer_token(
-        &self,
-        token: &str,
-        now_unix_secs: u64,
-    ) -> UnderlayResult<ProductAuthenticatedPrincipal>;
+    fn verify_bearer_token(&self, token: &str) -> UnderlayResult<ProductAuthenticatedPrincipal>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -41,45 +31,14 @@ pub struct BearerTokenProductSessionExtractor {
 }
 
 impl ProductAuthenticatedPrincipal {
-    pub fn new(operator_id: impl Into<String>, role: RbacRole) -> Self {
+    pub fn new(operator_id: impl Into<String>) -> Self {
         Self {
             operator_id: operator_id.into(),
-            role,
-            issuer: None,
-            subject: None,
-            session_id: None,
-            expires_at_unix_secs: None,
         }
-    }
-
-    pub fn with_issuer(mut self, issuer: impl Into<String>) -> Self {
-        self.issuer = Some(issuer.into());
-        self
-    }
-
-    pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
-        self.subject = Some(subject.into());
-        self
-    }
-
-    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
-        self.session_id = Some(session_id.into());
-        self
-    }
-
-    pub fn with_expires_at_unix_secs(mut self, expires_at_unix_secs: u64) -> Self {
-        self.expires_at_unix_secs = Some(expires_at_unix_secs);
-        self
     }
 
     fn validate(&self) -> UnderlayResult<()> {
         validate_non_empty("product authenticated principal operator_id", &self.operator_id)
-    }
-
-    fn is_expired_at(&self, now_unix_secs: u64) -> bool {
-        self.expires_at_unix_secs
-            .map(|expires_at| expires_at <= now_unix_secs)
-            .unwrap_or(false)
     }
 }
 
@@ -99,11 +58,7 @@ impl StaticProductIdentityVerifier {
 }
 
 impl ProductIdentityVerifier for StaticProductIdentityVerifier {
-    fn verify_bearer_token(
-        &self,
-        token: &str,
-        now_unix_secs: u64,
-    ) -> UnderlayResult<ProductAuthenticatedPrincipal> {
+    fn verify_bearer_token(&self, token: &str) -> UnderlayResult<ProductAuthenticatedPrincipal> {
         validate_non_empty("product bearer token", token).map_err(auth_error)?;
         let principal = self
             .principals_by_token
@@ -113,11 +68,6 @@ impl ProductIdentityVerifier for StaticProductIdentityVerifier {
                 UnderlayError::AuthenticationFailed("product bearer token is not trusted".into())
             })?;
         principal.validate().map_err(auth_error)?;
-        if principal.is_expired_at(now_unix_secs) {
-            return Err(UnderlayError::AuthenticationFailed(
-                "product bearer token is expired".into(),
-            ));
-        }
         Ok(principal)
     }
 }
@@ -134,10 +84,9 @@ impl ProductSessionExtractor for BearerTokenProductSessionExtractor {
         let token = bearer_token(&metadata.headers)?;
         let principal = self
             .verifier
-            .verify_bearer_token(&token, now_unix_secs())?;
+            .verify_bearer_token(&token)?;
         Ok(ProductSession {
             operator_id: principal.operator_id,
-            role: principal.role,
         })
     }
 }

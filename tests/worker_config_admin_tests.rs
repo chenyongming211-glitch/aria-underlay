@@ -5,7 +5,7 @@ use aria_underlay::api::worker_config_admin::{
     ChangeSummaryRetentionRequest, ChangeWorkerScheduleRequest, WorkerConfigAdminManager,
     WorkerScheduleTarget,
 };
-use aria_underlay::authz::{RbacRole, StaticAuthorizationPolicy};
+use aria_underlay::authz::StaticAuthorizationPolicy;
 use aria_underlay::telemetry::{
     InMemoryProductAuditStore, OperationSummaryRetentionPolicy, ProductAuditRecord,
     ProductAuditStore,
@@ -25,7 +25,7 @@ fn admin_changes_summary_retention_after_product_audit() {
         .write_to_path(&config_path)
         .expect("worker config should be written");
     let audit_store = Arc::new(InMemoryProductAuditStore::default());
-    let manager = manager_with_role("admin-a", RbacRole::Admin, audit_store.clone());
+    let manager = manager_with_operator("admin-a", audit_store.clone());
 
     let response = manager
         .change_summary_retention(ChangeSummaryRetentionRequest {
@@ -59,7 +59,6 @@ fn admin_changes_summary_retention_after_product_audit() {
     assert_eq!(records[0].action, "daemon.retention_change_requested");
     assert_eq!(records[0].result, "authorized");
     assert_eq!(records[0].operator_id.as_deref(), Some("admin-a"));
-    assert_eq!(records[0].role, Some(RbacRole::Admin));
     assert_eq!(
         records[0].fields.get("target").map(String::as_str),
         Some("operation_summary")
@@ -69,23 +68,23 @@ fn admin_changes_summary_retention_after_product_audit() {
 }
 
 #[test]
-fn non_admin_cannot_change_worker_schedule_and_config_stays_unchanged() {
+fn unregistered_operator_cannot_change_worker_schedule_and_config_stays_unchanged() {
     let temp = temp_test_dir("schedule-denied");
     let config_path = temp.join("worker.json");
     worker_config(&temp)
         .write_to_path(&config_path)
         .expect("worker config should be written");
     let audit_store = Arc::new(InMemoryProductAuditStore::default());
-    let manager = manager_with_role("viewer-a", RbacRole::Viewer, audit_store.clone());
+    let manager = manager_with_operator("admin-a", audit_store.clone());
 
     let err = manager
         .change_worker_schedule(schedule_request(
             &config_path,
-            "viewer-a",
+            "unknown-operator",
             WorkerScheduleTarget::JournalGc,
             120,
         ))
-        .expect_err("viewer should not change daemon schedule");
+        .expect_err("unregistered operator should not change daemon schedule");
 
     assert!(matches!(err, UnderlayError::AuthorizationDenied(_)));
     let config = UnderlayWorkerDaemonConfig::from_path(&config_path)
@@ -107,7 +106,7 @@ fn product_audit_failure_blocks_worker_config_mutation() {
         .write_to_path(&config_path)
         .expect("worker config should be written");
     let manager = WorkerConfigAdminManager::new(
-        Arc::new(StaticAuthorizationPolicy::new().with_role("admin-a", RbacRole::Admin)),
+        Arc::new(StaticAuthorizationPolicy::new().with_operator("admin-a")),
         Arc::new(FailingProductAuditStore),
     );
 
@@ -143,7 +142,7 @@ fn invalid_schedule_rejects_before_audit_and_config_mutation() {
         .write_to_path(&config_path)
         .expect("worker config should be written");
     let audit_store = Arc::new(InMemoryProductAuditStore::default());
-    let manager = manager_with_role("admin-a", RbacRole::Admin, audit_store.clone());
+    let manager = manager_with_operator("admin-a", audit_store.clone());
 
     let err = manager
         .change_worker_schedule(schedule_request(
@@ -185,13 +184,12 @@ impl ProductAuditStore for FailingProductAuditStore {
     }
 }
 
-fn manager_with_role(
+fn manager_with_operator(
     operator: &str,
-    role: RbacRole,
     audit_store: Arc<InMemoryProductAuditStore>,
 ) -> WorkerConfigAdminManager {
     WorkerConfigAdminManager::new(
-        Arc::new(StaticAuthorizationPolicy::new().with_role(operator, role)),
+        Arc::new(StaticAuthorizationPolicy::new().with_operator(operator)),
         audit_store,
     )
 }

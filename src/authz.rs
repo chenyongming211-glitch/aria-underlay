@@ -1,17 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
 use crate::{UnderlayError, UnderlayResult};
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum RbacRole {
-    Viewer,
-    Operator,
-    BreakGlassOperator,
-    Admin,
-    Auditor,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum AdminAction {
@@ -58,7 +49,6 @@ impl AuthorizationRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorizationDecision {
     pub operator_id: String,
-    pub role: RbacRole,
     pub action: AdminAction,
 }
 
@@ -73,7 +63,6 @@ impl AuthorizationPolicy for PermitAllAuthorizationPolicy {
     fn authorize(&self, request: &AuthorizationRequest) -> UnderlayResult<AuthorizationDecision> {
         Ok(AuthorizationDecision {
             operator_id: request.operator_id.clone(),
-            role: RbacRole::Admin,
             action: request.action.clone(),
         })
     }
@@ -81,7 +70,7 @@ impl AuthorizationPolicy for PermitAllAuthorizationPolicy {
 
 #[derive(Debug, Default)]
 pub struct StaticAuthorizationPolicy {
-    roles_by_operator: BTreeMap<String, BTreeSet<RbacRole>>,
+    operators: BTreeSet<String>,
 }
 
 impl StaticAuthorizationPolicy {
@@ -89,66 +78,23 @@ impl StaticAuthorizationPolicy {
         Self::default()
     }
 
-    pub fn with_role(mut self, operator_id: impl Into<String>, role: RbacRole) -> Self {
-        self.roles_by_operator
-            .entry(operator_id.into())
-            .or_default()
-            .insert(role);
+    pub fn with_operator(mut self, operator_id: impl Into<String>) -> Self {
+        self.operators.insert(operator_id.into());
         self
     }
 }
 
 impl AuthorizationPolicy for StaticAuthorizationPolicy {
     fn authorize(&self, request: &AuthorizationRequest) -> UnderlayResult<AuthorizationDecision> {
-        let roles = self.roles_by_operator.get(&request.operator_id).ok_or_else(|| {
-            UnderlayError::AuthorizationDenied(format!(
-                "operator {} has no assigned roles",
+        if !self.operators.contains(&request.operator_id) {
+            return Err(UnderlayError::AuthorizationDenied(format!(
+                "operator {} is not registered for local admin operations",
                 request.operator_id
-            ))
-        })?;
-
-        roles
-            .iter()
-            .find(|role| role_allows_action(role, &request.action))
-            .cloned()
-            .map(|role| AuthorizationDecision {
-                operator_id: request.operator_id.clone(),
-                role,
-                action: request.action.clone(),
-            })
-            .ok_or_else(|| {
-                UnderlayError::AuthorizationDenied(format!(
-                    "operator {} is not authorized for {:?}",
-                    request.operator_id, request.action
-                ))
-            })
-    }
-}
-
-fn role_allows_action(role: &RbacRole, action: &AdminAction) -> bool {
-    match action {
-        AdminAction::ListOperationSummaries
-        | AdminAction::ListAlerts
-        | AdminAction::ListInDoubtTransactions
-        | AdminAction::GetProductStatusBundle
-        | AdminAction::GetWorkerReloadStatus => true,
-        AdminAction::AcknowledgeAlert => {
-            matches!(
-                role,
-                RbacRole::Operator | RbacRole::BreakGlassOperator | RbacRole::Admin
-            )
+            )));
         }
-        AdminAction::ResolveAlert | AdminAction::SuppressAlert => {
-            matches!(role, RbacRole::BreakGlassOperator | RbacRole::Admin)
-        }
-        AdminAction::ExpireAlert => matches!(role, RbacRole::Admin),
-        AdminAction::ForceResolveTransaction => {
-            matches!(role, RbacRole::BreakGlassOperator | RbacRole::Admin)
-        }
-        AdminAction::ForceUnlockSession => false,
-        AdminAction::ChangeRetentionPolicy | AdminAction::ChangeDaemonSchedule => {
-            matches!(role, RbacRole::Admin)
-        }
-        AdminAction::ExportAuditHistory => matches!(role, RbacRole::Admin | RbacRole::Auditor),
+        Ok(AuthorizationDecision {
+            operator_id: request.operator_id.clone(),
+            action: request.action.clone(),
+        })
     }
 }

@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::api::product_api::ProductOpsApi;
 use crate::api::product_http::ProductHttpRouter;
@@ -16,19 +16,9 @@ use crate::api::product_identity::{
 use crate::telemetry::{JsonFileOperationSummaryStore, JsonFileProductAuditStore};
 use crate::{UnderlayError, UnderlayResult};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProductApiDeploymentMode {
-    #[default]
-    Local,
-    ProductionIngress,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProductApiServerConfig {
-    #[serde(default)]
-    pub deployment_mode: ProductApiDeploymentMode,
     pub bind_addr: SocketAddr,
     #[serde(default = "default_max_body_bytes")]
     pub max_body_bytes: usize,
@@ -53,11 +43,9 @@ impl ProductApiServerConfig {
                 "product API config static_tokens must not be empty".into(),
             ));
         }
-        if self.deployment_mode == ProductApiDeploymentMode::Local
-            && !self.bind_addr.ip().is_loopback()
-        {
+        if !self.bind_addr.ip().is_loopback() {
             return Err(UnderlayError::InvalidIntent(
-                "product API local deployment_mode must bind to a loopback address".into(),
+                "product API must bind to a loopback address".into(),
             ));
         }
         Ok(())

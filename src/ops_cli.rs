@@ -14,7 +14,7 @@ use crate::api::worker_config_admin::{
     WorkerConfigAdminManager, WorkerScheduleTarget,
 };
 use crate::api::{AriaUnderlayService, UnderlayService};
-use crate::authz::{RbacRole, StaticAuthorizationPolicy};
+use crate::authz::StaticAuthorizationPolicy;
 use crate::device::DeviceInventory;
 use crate::model::DeviceId;
 use crate::telemetry::{
@@ -152,12 +152,11 @@ async fn transition_alert(
     let product_audit_path = required_option(args, "--product-audit-path")?;
     let dedupe_key = required_option(args, "--dedupe-key")?;
     let operator = required_option(args, "--operator")?;
-    let role = required_role(args, "--role")?;
     let reason = required_option(args, "--reason")?;
     let request_id = option_value(args, "--request-id")
         .unwrap_or_else(|| format!("alert-lifecycle-{}", uuid::Uuid::new_v4()));
     let trace_id = option_value(args, "--trace-id");
-    let authorization_policy = StaticAuthorizationPolicy::new().with_role(operator.clone(), role);
+    let authorization_policy = StaticAuthorizationPolicy::new().with_operator(operator.clone());
     let manager = AlertLifecycleManager::new(
         Arc::new(authorization_policy),
         Arc::new(JsonFileProductAuditStore::new(product_audit_path)),
@@ -265,10 +264,9 @@ fn worker_config_admin_manager(
     args: &[String],
 ) -> Result<WorkerConfigAdminManager, Box<dyn Error>> {
     let operator = required_option(args, "--operator")?;
-    let role = required_role(args, "--role")?;
     let product_audit_path = required_option(args, "--product-audit-path")?;
     Ok(WorkerConfigAdminManager::new(
-        Arc::new(StaticAuthorizationPolicy::new().with_role(operator, role)),
+        Arc::new(StaticAuthorizationPolicy::new().with_operator(operator)),
         Arc::new(JsonFileProductAuditStore::new(product_audit_path)),
     ))
 }
@@ -372,22 +370,6 @@ fn optional_alert_severity(
         .transpose()
 }
 
-fn required_role(args: &[String], name: &str) -> Result<RbacRole, io::Error> {
-    let value = required_option(args, name)?;
-    match value.as_str() {
-        "Viewer" | "viewer" => Ok(RbacRole::Viewer),
-        "Operator" | "operator" => Ok(RbacRole::Operator),
-        "BreakGlassOperator" | "break-glass-operator" | "break_glass_operator" => {
-            Ok(RbacRole::BreakGlassOperator)
-        }
-        "Admin" | "admin" => Ok(RbacRole::Admin),
-        "Auditor" | "auditor" => Ok(RbacRole::Auditor),
-        _ => Err(invalid_input(format!(
-            "{name} must be Viewer, Operator, BreakGlassOperator, Admin, or Auditor"
-        ))),
-    }
-}
-
 fn required_bool(args: &[String], name: &str) -> Result<bool, io::Error> {
     let value = required_option(args, name)?;
     match value.as_str() {
@@ -430,6 +412,6 @@ fn invalid_input(message: impl Into<String>) -> io::Error {
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  aria-underlay-ops list-in-doubt --journal-root <dir> [--device-id <id>]\n  aria-underlay-ops force-resolve --journal-root <dir> --operation-summary-path <file> --tx-id <tx> --operator <name> --reason <text> --break-glass [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops list-operations --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]\n  aria-underlay-ops operation-summary --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]\n  aria-underlay-ops list-alerts --operation-alert-path <file> [--alert-state-path <file>] [--severity Critical|Warning] [--limit <n>]\n  aria-underlay-ops alert-summary --operation-alert-path <file> [--alert-state-path <file>] [--severity Critical|Warning]\n  aria-underlay-ops ack-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops resolve-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops suppress-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops expire-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops set-summary-retention --worker-config-path <file> --product-audit-path <file> --operator <name> --role Admin --reason <text> [--max-records <n>] [--max-bytes <n>] [--max-rotated-files <n>] [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops set-gc-retention --worker-config-path <file> --product-audit-path <file> --operator <name> --role Admin --reason <text> --committed-days <n> --rolled-back-days <n> --failed-days <n> --rollback-artifact-days <n> --max-artifacts-per-device <n> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops set-worker-schedule --worker-config-path <file> --product-audit-path <file> --operator <name> --role Admin --reason <text> --target <target> --interval-secs <n> --run-immediately true|false [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops check-worker-config --worker-config-path <file> [--strict-paths]\n  aria-underlay-ops worker-reload-status --checkpoint-path <file>"
+        "usage:\n  aria-underlay-ops list-in-doubt --journal-root <dir> [--device-id <id>]\n  aria-underlay-ops force-resolve --journal-root <dir> --operation-summary-path <file> --tx-id <tx> --operator <name> --reason <text> --break-glass [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops list-operations --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]\n  aria-underlay-ops operation-summary --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]\n  aria-underlay-ops list-alerts --operation-alert-path <file> [--alert-state-path <file>] [--severity Critical|Warning] [--limit <n>]\n  aria-underlay-ops alert-summary --operation-alert-path <file> [--alert-state-path <file>] [--severity Critical|Warning]\n  aria-underlay-ops ack-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops resolve-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops suppress-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops expire-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops set-summary-retention --worker-config-path <file> --product-audit-path <file> --operator <name> --reason <text> [--max-records <n>] [--max-bytes <n>] [--max-rotated-files <n>] [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops set-gc-retention --worker-config-path <file> --product-audit-path <file> --operator <name> --reason <text> --committed-days <n> --rolled-back-days <n> --failed-days <n> --rollback-artifact-days <n> --max-artifacts-per-device <n> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops set-worker-schedule --worker-config-path <file> --product-audit-path <file> --operator <name> --reason <text> --target <target> --interval-secs <n> --run-immediately true|false [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops check-worker-config --worker-config-path <file> [--strict-paths]\n  aria-underlay-ops worker-reload-status --checkpoint-path <file>"
     );
 }

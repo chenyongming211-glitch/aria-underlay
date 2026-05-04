@@ -10,14 +10,12 @@ use aria_underlay::api::product_api::{
 };
 use aria_underlay::api::product_http::{
     ProductHttpErrorResponse, ProductHttpMethod, ProductHttpRequest, ProductHttpRouter,
-    OPERATION_SUMMARIES_QUERY_PATH, PRODUCT_AUDIT_EXPORT_PATH,
-    WORKER_RELOAD_STATUS_GET_PATH,
+    OPERATION_SUMMARIES_QUERY_PATH, PRODUCT_AUDIT_EXPORT_PATH, WORKER_RELOAD_STATUS_GET_PATH,
 };
 use aria_underlay::api::product_ops::{
     ExportProductAuditRequest, ExportProductAuditResponse,
     ProductGetWorkerReloadStatusRequest,
 };
-use aria_underlay::authz::RbacRole;
 use aria_underlay::telemetry::{
     InMemoryOperationSummaryStore, InMemoryProductAuditStore, ProductAuditRecord,
     ProductAuditStore, UnderlayEvent,
@@ -28,7 +26,7 @@ use aria_underlay::worker::daemon::{
 };
 
 #[test]
-fn product_http_lists_operation_summaries_with_viewer_session() {
+fn product_http_lists_operation_summaries_with_operator_session() {
     let summary_store = Arc::new(InMemoryOperationSummaryStore::default());
     summary_store
         .record_event(&UnderlayEvent::recovery_completed(
@@ -48,7 +46,7 @@ fn product_http_lists_operation_summaries_with_viewer_session() {
     let response = router.handle(ProductHttpRequest {
         method: ProductHttpMethod::Post,
         path: OPERATION_SUMMARIES_QUERY_PATH.into(),
-        headers: product_headers("req-http-list", Some("trace-http-list"), "viewer-a", "Viewer"),
+        headers: product_headers("req-http-list", Some("trace-http-list"), "netops-a"),
         body: json_body(&ListOperationSummariesRequest {
             attention_required_only: true,
             limit: Some(10),
@@ -64,14 +62,13 @@ fn product_http_lists_operation_summaries_with_viewer_session() {
     let body: ProductApiResponse<ListOperationSummariesResponse> = response_json(&response.body);
     assert_eq!(body.request_id, "req-http-list");
     assert_eq!(body.trace_id, "trace-http-list");
-    assert_eq!(body.operator_id, "viewer-a");
-    assert_eq!(body.role, RbacRole::Viewer);
+    assert_eq!(body.operator_id, "netops-a");
     assert_eq!(body.body.overview.matched_records, 1);
     assert_eq!(body.body.summaries[0].action, "recovery.completed");
 }
 
 #[test]
-fn product_http_exports_product_audit_with_auditor_session() {
+fn product_http_exports_product_audit_with_operator_session() {
     let audit_store = Arc::new(InMemoryProductAuditStore::default());
     audit_store
         .append(seed_audit_record("req-existing", "admin-a"))
@@ -84,12 +81,7 @@ fn product_http_exports_product_audit_with_auditor_session() {
     let response = router.handle(ProductHttpRequest {
         method: ProductHttpMethod::Post,
         path: PRODUCT_AUDIT_EXPORT_PATH.into(),
-        headers: product_headers(
-            "req-http-export",
-            Some("trace-http-export"),
-            "auditor-a",
-            "Auditor",
-        ),
+        headers: product_headers("req-http-export", Some("trace-http-export"), "netops-a"),
         body: json_body(&ExportProductAuditRequest {
             reason: "quarterly audit review".into(),
             action: None,
@@ -102,8 +94,7 @@ fn product_http_exports_product_audit_with_auditor_session() {
     assert_eq!(response.status, 200);
     let body: ProductApiResponse<ExportProductAuditResponse> = response_json(&response.body);
     assert_eq!(body.request_id, "req-http-export");
-    assert_eq!(body.operator_id, "auditor-a");
-    assert_eq!(body.role, RbacRole::Auditor);
+    assert_eq!(body.operator_id, "netops-a");
     assert_eq!(body.body.overview.matched_records, 2);
     assert_eq!(
         body.body.records[1].action,
@@ -112,43 +103,16 @@ fn product_http_exports_product_audit_with_auditor_session() {
 }
 
 #[test]
-fn product_http_denies_audit_export_for_operator_session() {
-    let router = product_router(
-        Arc::new(InMemoryOperationSummaryStore::default()),
-        Arc::new(InMemoryProductAuditStore::default()),
-    );
-
-    let response = router.handle(ProductHttpRequest {
-        method: ProductHttpMethod::Post,
-        path: PRODUCT_AUDIT_EXPORT_PATH.into(),
-        headers: product_headers(
-            "req-http-denied",
-            Some("trace-http-denied"),
-            "operator-a",
-            "Operator",
-        ),
-        body: json_body(&ExportProductAuditRequest {
-            reason: "curious operator".into(),
-            action: None,
-            result: None,
-            operator_id: None,
-            limit: None,
-        }),
-    });
-
-    assert_eq!(response.status, 403);
-    let body: ProductHttpErrorResponse = response_json(&response.body);
-    assert_eq!(body.request_id.as_deref(), Some("req-http-denied"));
-    assert_eq!(body.trace_id.as_deref(), Some("trace-http-denied"));
-    assert_eq!(body.error_code, "authorization_denied");
-}
-
-#[test]
-fn product_http_viewer_can_read_worker_reload_status() {
+fn product_http_operator_can_read_worker_reload_status() {
     let temp = temp_test_dir("http-reload-status");
     let checkpoint_path = temp.join("worker-reload-checkpoint.json");
     fs::create_dir_all(&temp).expect("temp dir should be created");
-    write_reload_checkpoint(&checkpoint_path, WorkerConfigReloadStatus::Rejected, 3, Some("bad interval".into()));
+    write_reload_checkpoint(
+        &checkpoint_path,
+        WorkerConfigReloadStatus::Rejected,
+        3,
+        Some("bad interval".into()),
+    );
     let router = product_router(
         Arc::new(InMemoryOperationSummaryStore::default()),
         Arc::new(InMemoryProductAuditStore::default()),
@@ -157,7 +121,7 @@ fn product_http_viewer_can_read_worker_reload_status() {
     let response = router.handle(ProductHttpRequest {
         method: ProductHttpMethod::Post,
         path: WORKER_RELOAD_STATUS_GET_PATH.into(),
-        headers: product_headers("req-http-reload", Some("trace-http-reload"), "viewer-a", "Viewer"),
+        headers: product_headers("req-http-reload", Some("trace-http-reload"), "netops-a"),
         body: json_body(&ProductGetWorkerReloadStatusRequest {
             checkpoint_path: checkpoint_path.clone(),
         }),
@@ -166,8 +130,7 @@ fn product_http_viewer_can_read_worker_reload_status() {
     assert_eq!(response.status, 200);
     let body: ProductApiResponse<WorkerReloadCheckpoint> = response_json(&response.body);
     assert_eq!(body.request_id, "req-http-reload");
-    assert_eq!(body.operator_id, "viewer-a");
-    assert_eq!(body.role, RbacRole::Viewer);
+    assert_eq!(body.operator_id, "netops-a");
     assert_eq!(body.body.status, WorkerConfigReloadStatus::Rejected);
     assert_eq!(body.body.generation, 3);
     assert_eq!(body.body.error.as_deref(), Some("bad interval"));
@@ -183,7 +146,6 @@ fn product_http_rejects_missing_request_id() {
     );
     let mut headers = BTreeMap::new();
     headers.insert("x-aria-operator-id".into(), "viewer-a".into());
-    headers.insert("x-aria-role".into(), "Viewer".into());
 
     let response = router.handle(ProductHttpRequest {
         method: ProductHttpMethod::Post,
@@ -208,7 +170,7 @@ fn product_http_returns_404_for_unknown_path() {
     let response = router.handle(ProductHttpRequest {
         method: ProductHttpMethod::Post,
         path: "/product/v1/unknown".into(),
-        headers: product_headers("req-http-not-found", None, "viewer-a", "Viewer"),
+        headers: product_headers("req-http-not-found", None, "netops-a"),
         body: Vec::new(),
     });
 
@@ -229,7 +191,7 @@ fn product_http_returns_405_for_wrong_method_on_known_path() {
     let response = router.handle(ProductHttpRequest {
         method: ProductHttpMethod::Get,
         path: OPERATION_SUMMARIES_QUERY_PATH.into(),
-        headers: product_headers("req-http-method", None, "viewer-a", "Viewer"),
+        headers: product_headers("req-http-method", None, "netops-a"),
         body: Vec::new(),
     });
 
@@ -249,7 +211,7 @@ fn product_http_rejects_malformed_json_body() {
     let response = router.handle(ProductHttpRequest {
         method: ProductHttpMethod::Post,
         path: OPERATION_SUMMARIES_QUERY_PATH.into(),
-        headers: product_headers("req-http-bad-json", None, "viewer-a", "Viewer"),
+        headers: product_headers("req-http-bad-json", None, "netops-a"),
         body: b"{broken".to_vec(),
     });
 
@@ -274,7 +236,6 @@ fn product_headers(
     request_id: &str,
     trace_id: Option<&str>,
     operator_id: &str,
-    role: &str,
 ) -> BTreeMap<String, String> {
     let mut headers = BTreeMap::new();
     headers.insert("x-aria-request-id".into(), request_id.into());
@@ -282,7 +243,6 @@ fn product_headers(
         headers.insert("x-aria-trace-id".into(), trace_id.into());
     }
     headers.insert("x-aria-operator-id".into(), operator_id.into());
-    headers.insert("x-aria-role".into(), role.into());
     headers
 }
 
@@ -303,7 +263,6 @@ fn seed_audit_record(request_id: &str, operator: &str) -> ProductAuditRecord {
         tx_id: None,
         device_id: None,
         operator_id: Some(operator.into()),
-        role: Some(RbacRole::Admin),
         reason: Some("seed record".into()),
         attention_required: false,
         error_code: None,

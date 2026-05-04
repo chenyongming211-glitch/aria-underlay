@@ -88,7 +88,7 @@ impl WorkerConfigAdminManager {
         };
 
         let trace_id = trace_id_or_request_id(&request.trace_id, &request.request_id);
-        let decision = self.authorize(
+        self.authorize(
             &request.request_id,
             &trace_id,
             &request.operator,
@@ -104,7 +104,6 @@ impl WorkerConfigAdminManager {
                 "daemon.retention_change_requested",
                 target,
                 request.operator,
-                decision.role,
                 request.reason,
                 fields,
             ))
@@ -127,7 +126,7 @@ impl WorkerConfigAdminManager {
         };
 
         let trace_id = trace_id_or_request_id(&request.trace_id, &request.request_id);
-        let decision = self.authorize(
+        self.authorize(
             &request.request_id,
             &trace_id,
             &request.operator,
@@ -143,7 +142,6 @@ impl WorkerConfigAdminManager {
                 "daemon.retention_change_requested",
                 target,
                 request.operator,
-                decision.role,
                 request.reason,
                 fields,
             ))
@@ -165,7 +163,7 @@ impl WorkerConfigAdminManager {
         schedule_slot(&mut config, &request.target)?;
 
         let trace_id = trace_id_or_request_id(&request.trace_id, &request.request_id);
-        let decision = self.authorize(
+        self.authorize(
             &request.request_id,
             &trace_id,
             &request.operator,
@@ -187,7 +185,6 @@ impl WorkerConfigAdminManager {
                 "daemon.schedule_change_requested",
                 target,
                 request.operator,
-                decision.role,
                 request.reason,
                 fields,
             ))

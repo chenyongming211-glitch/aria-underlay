@@ -12,7 +12,6 @@ use aria_underlay::api::product_http::{
 use aria_underlay::api::product_ops::{
     ProductStatusBundleHealthStatus, ProductStatusBundleRequest, ProductStatusBundleResponse,
 };
-use aria_underlay::authz::RbacRole;
 use aria_underlay::telemetry::{
     InMemoryOperationSummaryStore, InMemoryProductAuditStore, JsonFileOperationAlertSink,
     OperationAlert, OperationAlertSeverity, OperationAlertSink, UnderlayEvent,
@@ -57,7 +56,7 @@ fn product_status_bundle_aggregates_operations_alerts_and_reload_status() {
     let response = router.handle(ProductHttpRequest {
         method: ProductHttpMethod::Post,
         path: PRODUCT_STATUS_BUNDLE_GET_PATH.into(),
-        headers: product_headers("req-bundle", Some("trace-bundle"), "viewer-a", "Viewer"),
+        headers: product_headers("req-bundle", Some("trace-bundle"), "viewer-a"),
         body: json_body(&ProductStatusBundleRequest {
             operation_summary: ListOperationSummariesRequest {
                 attention_required_only: true,
@@ -76,7 +75,6 @@ fn product_status_bundle_aggregates_operations_alerts_and_reload_status() {
     let body: ProductApiResponse<ProductStatusBundleResponse> = response_json(&response.body);
     assert_eq!(body.request_id, "req-bundle");
     assert_eq!(body.operator_id, "viewer-a");
-    assert_eq!(body.role, RbacRole::Viewer);
     assert_eq!(body.body.operation_summary.matched_records, 1);
     assert_eq!(body.body.operation_summary.attention_required, 1);
     assert_eq!(
@@ -116,7 +114,6 @@ fn product_headers(
     request_id: &str,
     trace_id: Option<&str>,
     operator_id: &str,
-    role: &str,
 ) -> BTreeMap<String, String> {
     let mut headers = BTreeMap::new();
     headers.insert("x-aria-request-id".into(), request_id.into());
@@ -124,7 +121,6 @@ fn product_headers(
         headers.insert("x-aria-trace-id".into(), trace_id.into());
     }
     headers.insert("x-aria-operator-id".into(), operator_id.into());
-    headers.insert("x-aria-role".into(), role.into());
     headers
 }
 

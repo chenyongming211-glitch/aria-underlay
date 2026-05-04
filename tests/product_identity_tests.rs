@@ -16,7 +16,6 @@ use aria_underlay::api::product_identity::{
     BearerTokenProductSessionExtractor, ProductAuthenticatedPrincipal,
     StaticProductIdentityVerifier,
 };
-use aria_underlay::authz::RbacRole;
 use aria_underlay::telemetry::{
     InMemoryOperationSummaryStore, InMemoryProductAuditStore, UnderlayEvent,
 };
@@ -30,10 +29,7 @@ fn bearer_token_session_lists_operation_summaries_without_mock_role_headers() {
         Arc::new(bearer_extractor(
             StaticProductIdentityVerifier::new().with_token(
                 "viewer-token",
-                ProductAuthenticatedPrincipal::new("viewer-a", RbacRole::Viewer)
-                    .with_issuer("internal-product-config")
-                    .with_subject("subject-viewer-a")
-                    .with_session_id("session-viewer-a"),
+                ProductAuthenticatedPrincipal::new("viewer-a"),
             ),
         )),
         summary_store,
@@ -56,7 +52,6 @@ fn bearer_token_session_lists_operation_summaries_without_mock_role_headers() {
     assert_eq!(response.request_id, "req-bearer-list");
     assert_eq!(response.trace_id, "trace-bearer-list");
     assert_eq!(response.operator_id, "viewer-a");
-    assert_eq!(response.role, RbacRole::Viewer);
     assert_eq!(response.body.overview.matched_records, 1);
 }
 
@@ -79,7 +74,7 @@ fn bearer_token_session_rejects_missing_authorization_header() {
 fn bearer_token_session_rejects_unknown_token() {
     let extractor = bearer_extractor(StaticProductIdentityVerifier::new().with_token(
         "known-token",
-        ProductAuthenticatedPrincipal::new("viewer-a", RbacRole::Viewer),
+        ProductAuthenticatedPrincipal::new("viewer-a"),
     ));
 
     let err = extractor
@@ -89,25 +84,6 @@ fn bearer_token_session_rejects_unknown_token() {
             headers: authorization_headers("Bearer unknown-token"),
         })
         .expect_err("unknown token should fail closed");
-
-    assert!(matches!(err, UnderlayError::AuthenticationFailed(_)));
-}
-
-#[test]
-fn bearer_token_session_rejects_expired_token() {
-    let extractor = bearer_extractor(StaticProductIdentityVerifier::new().with_token(
-        "expired-token",
-        ProductAuthenticatedPrincipal::new("viewer-a", RbacRole::Viewer)
-            .with_expires_at_unix_secs(1),
-    ));
-
-    let err = extractor
-        .extract(&ProductApiRequestMetadata {
-            request_id: "req-expired-token".into(),
-            trace_id: None,
-            headers: authorization_headers("Bearer expired-token"),
-        })
-        .expect_err("expired token should fail closed");
 
     assert!(matches!(err, UnderlayError::AuthenticationFailed(_)));
 }
@@ -137,7 +113,7 @@ fn product_http_maps_authentication_failure_to_401() {
 fn product_http_accepts_bearer_session_without_mock_role_headers() {
     let router = product_http_router(StaticProductIdentityVerifier::new().with_token(
         "viewer-token",
-        ProductAuthenticatedPrincipal::new("viewer-a", RbacRole::Viewer),
+        ProductAuthenticatedPrincipal::new("viewer-a"),
     ));
     let mut headers = request_headers("req-http-bearer", Some("trace-http-bearer"));
     headers.insert("authorization".into(), "Bearer viewer-token".into());
@@ -158,7 +134,6 @@ fn product_http_accepts_bearer_session_without_mock_role_headers() {
     assert_eq!(body.request_id, "req-http-bearer");
     assert_eq!(body.trace_id, "trace-http-bearer");
     assert_eq!(body.operator_id, "viewer-a");
-    assert_eq!(body.role, RbacRole::Viewer);
     assert_eq!(body.body.overview.matched_records, 1);
 }
 

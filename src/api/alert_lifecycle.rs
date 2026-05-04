@@ -55,7 +55,7 @@ impl AlertLifecycleManager {
             .clone()
             .unwrap_or_else(|| request.request_id.clone());
         let action = action_for_status(&request.target_status)?;
-        let decision = self.authorization_policy.authorize(&AuthorizationRequest::new(
+        self.authorization_policy.authorize(&AuthorizationRequest::new(
             request.request_id.clone(),
             trace_id.clone(),
             request.operator.clone(),
@@ -69,7 +69,6 @@ impl AlertLifecycleManager {
                 request.dedupe_key.clone(),
                 request.target_status.clone(),
                 request.operator.clone(),
-                decision.role.clone(),
                 request.reason.clone(),
             ),
         )?;
@@ -78,7 +77,6 @@ impl AlertLifecycleManager {
             dedupe_key: request.dedupe_key,
             status: request.target_status,
             operator_id: request.operator,
-            role: Some(decision.role),
             reason: Some(request.reason),
             request_id: request.request_id,
             trace_id,

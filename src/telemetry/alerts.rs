@@ -6,7 +6,6 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-use crate::authz::RbacRole;
 use crate::model::DeviceId;
 use crate::telemetry::ops::OperationSummary;
 use crate::utils::atomic_file::atomic_write;
@@ -45,7 +44,6 @@ pub enum OperationAlertLifecycleStatus {
 pub struct OperationAlertLifecycleEvent {
     pub status: OperationAlertLifecycleStatus,
     pub operator_id: String,
-    pub role: Option<RbacRole>,
     pub reason: Option<String>,
     pub request_id: String,
     pub trace_id: String,
@@ -57,7 +55,6 @@ pub struct OperationAlertLifecycleRecord {
     pub dedupe_key: String,
     pub status: OperationAlertLifecycleStatus,
     pub operator_id: Option<String>,
-    pub role: Option<RbacRole>,
     pub reason: Option<String>,
     pub request_id: String,
     pub trace_id: String,
@@ -70,7 +67,6 @@ pub struct OperationAlertLifecycleTransition {
     pub dedupe_key: String,
     pub status: OperationAlertLifecycleStatus,
     pub operator_id: String,
-    pub role: Option<RbacRole>,
     pub reason: Option<String>,
     pub request_id: String,
     pub trace_id: String,
@@ -412,7 +408,6 @@ fn transition_lifecycle_record(
     let event = OperationAlertLifecycleEvent {
         status: transition.status.clone(),
         operator_id: transition.operator_id.clone(),
-        role: transition.role.clone(),
         reason: transition.reason.clone(),
         request_id: transition.request_id.clone(),
         trace_id: transition.trace_id.clone(),
@@ -423,7 +418,6 @@ fn transition_lifecycle_record(
         dedupe_key: transition.dedupe_key.clone(),
         status: OperationAlertLifecycleStatus::Open,
         operator_id: None,
-        role: None,
         reason: None,
         request_id: transition.request_id.clone(),
         trace_id: transition.trace_id.clone(),
@@ -432,7 +426,6 @@ fn transition_lifecycle_record(
     });
     record.status = transition.status;
     record.operator_id = Some(transition.operator_id);
-    record.role = transition.role;
     record.reason = transition.reason;
     record.request_id = transition.request_id;
     record.trace_id = transition.trace_id;

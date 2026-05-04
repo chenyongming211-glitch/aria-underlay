@@ -161,8 +161,6 @@ fn ops_cli_acknowledges_alert_and_enriches_alert_list() {
             "critical-key",
             "--operator",
             "netops-a",
-            "--role",
-            "Operator",
             "--reason",
             "investigating current operation alert",
         ])
@@ -266,8 +264,6 @@ fn ops_cli_changes_worker_schedule_with_audit() {
                 .expect("product audit path should be utf-8"),
             "--operator",
             "admin-a",
-            "--role",
-            "Admin",
             "--reason",
             "slow down local alert delivery",
             "--target",

@@ -14,7 +14,7 @@ use crate::api::product_ops::{
     ProductStatusBundleResponse,
 };
 use crate::api::worker_config_admin::WorkerConfigAdminResponse;
-use crate::authz::{RbacRole, StaticAuthorizationPolicy};
+use crate::authz::PermitAllAuthorizationPolicy;
 use crate::telemetry::{OperationSummaryStore, ProductAuditStore};
 use crate::worker::daemon::WorkerReloadCheckpoint;
 use crate::{UnderlayError, UnderlayResult};
@@ -33,7 +33,6 @@ pub struct ProductApiResponse<T> {
     pub request_id: String,
     pub trace_id: String,
     pub operator_id: String,
-    pub role: RbacRole,
     pub body: T,
 }
 
@@ -47,7 +46,6 @@ pub struct ProductApiRequestMetadata {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductSession {
     pub operator_id: String,
-    pub role: RbacRole,
 }
 
 pub trait ProductSessionExtractor: std::fmt::Debug + Send + Sync {
@@ -57,14 +55,12 @@ pub trait ProductSessionExtractor: std::fmt::Debug + Send + Sync {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeaderProductSessionExtractor {
     operator_header: String,
-    role_header: String,
 }
 
 impl Default for HeaderProductSessionExtractor {
     fn default() -> Self {
         Self {
             operator_header: "x-aria-operator-id".into(),
-            role_header: "x-aria-role".into(),
         }
     }
 }
@@ -183,12 +179,9 @@ impl ProductOpsApi {
         Ok(api_response(metadata, session, trace_id, body))
     }
 
-    fn manager_for_session(&self, session: &ProductSession) -> ProductOpsManager {
+    fn manager_for_session(&self, _session: &ProductSession) -> ProductOpsManager {
         ProductOpsManager::new(
-            Arc::new(
-                StaticAuthorizationPolicy::new()
-                    .with_role(session.operator_id.clone(), session.role.clone()),
-            ),
+            Arc::new(PermitAllAuthorizationPolicy),
             self.operation_summary_store.clone(),
             self.product_audit_store.clone(),
         )
@@ -206,13 +199,9 @@ impl<T> ProductApiRequest<T> {
 }
 
 impl HeaderProductSessionExtractor {
-    pub fn new(
-        operator_header: impl Into<String>,
-        role_header: impl Into<String>,
-    ) -> Self {
+    pub fn new(operator_header: impl Into<String>) -> Self {
         Self {
             operator_header: operator_header.into(),
-            role_header: role_header.into(),
         }
     }
 }
@@ -222,10 +211,7 @@ impl ProductSessionExtractor for HeaderProductSessionExtractor {
         validate_non_empty("product api request_id", &metadata.request_id)?;
         let operator_id = header_value(&metadata.headers, &self.operator_header)
             .ok_or_else(|| missing_header_error(&self.operator_header))?;
-        let role = header_value(&metadata.headers, &self.role_header)
-            .ok_or_else(|| missing_header_error(&self.role_header))
-            .and_then(|value| parse_role(&self.role_header, &value))?;
-        Ok(ProductSession { operator_id, role })
+        Ok(ProductSession { operator_id })
     }
 }
 
@@ -250,7 +236,6 @@ fn api_response<T>(
         request_id: metadata.request_id,
         trace_id,
         operator_id: session.operator_id,
-        role: session.role,
         body,
     }
 }
@@ -268,21 +253,6 @@ fn header_value(headers: &BTreeMap<String, String>, name: &str) -> Option<String
         .find(|(key, _)| key.eq_ignore_ascii_case(name))
         .map(|(_, value)| value.trim().to_string())
         .filter(|value| !value.is_empty())
-}
-
-fn parse_role(header: &str, value: &str) -> UnderlayResult<RbacRole> {
-    match value {
-        "Viewer" | "viewer" => Ok(RbacRole::Viewer),
-        "Operator" | "operator" => Ok(RbacRole::Operator),
-        "BreakGlassOperator" | "break-glass-operator" | "break_glass_operator" => {
-            Ok(RbacRole::BreakGlassOperator)
-        }
-        "Admin" | "admin" => Ok(RbacRole::Admin),
-        "Auditor" | "auditor" => Ok(RbacRole::Auditor),
-        _ => Err(UnderlayError::InvalidIntent(format!(
-            "{header} must be Viewer, Operator, BreakGlassOperator, Admin, or Auditor"
-        ))),
-    }
 }
 
 fn missing_header_error(header: &str) -> UnderlayError {

@@ -10,7 +10,6 @@ use aria_underlay::api::product_identity::{
     BearerTokenProductSessionExtractor, ProductAuthenticatedPrincipal,
     StaticProductIdentityVerifier,
 };
-use aria_underlay::authz::RbacRole;
 use aria_underlay::telemetry::{
     InMemoryOperationSummaryStore, InMemoryProductAuditStore, UnderlayEvent,
 };
@@ -141,7 +140,7 @@ fn product_server_router() -> aria_underlay::api::product_http::ProductHttpRoute
         .expect("summary event should be recorded");
     let verifier = StaticProductIdentityVerifier::new().with_token(
         "viewer-token",
-        ProductAuthenticatedPrincipal::new("viewer-a", RbacRole::Viewer),
+        ProductAuthenticatedPrincipal::new("viewer-a"),
     );
     aria_underlay::api::product_http::ProductHttpRouter::new(ProductOpsApi::new(
         Arc::new(BearerTokenProductSessionExtractor::new(Arc::new(verifier))),

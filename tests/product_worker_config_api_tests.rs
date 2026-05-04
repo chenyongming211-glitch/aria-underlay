@@ -5,14 +5,12 @@ use aria_underlay::api::product_api::{
     HeaderProductSessionExtractor, ProductApiResponse, ProductOpsApi,
 };
 use aria_underlay::api::product_http::{
-    ProductHttpErrorResponse, ProductHttpMethod, ProductHttpRequest, ProductHttpRouter,
-    WORKER_CONFIG_SCHEDULE_CHANGE_PATH,
+    ProductHttpMethod, ProductHttpRequest, ProductHttpRouter, WORKER_CONFIG_SCHEDULE_CHANGE_PATH,
 };
 use aria_underlay::api::product_ops::ProductChangeWorkerScheduleRequest;
 use aria_underlay::api::worker_config_admin::{
     WorkerConfigAdminResponse, WorkerScheduleTarget,
 };
-use aria_underlay::authz::RbacRole;
 use aria_underlay::telemetry::{
     InMemoryOperationSummaryStore, InMemoryProductAuditStore, OperationSummaryRetentionPolicy,
 };
@@ -23,7 +21,7 @@ use aria_underlay::worker::daemon::{
 use aria_underlay::worker::gc::RetentionPolicy;
 
 #[test]
-fn product_http_admin_changes_worker_schedule_with_product_audit() {
+fn product_http_operator_changes_worker_schedule_with_product_audit() {
     let temp = temp_test_dir("schedule-admin");
     let config_path = temp.join("worker.json");
     worker_config(&temp)
@@ -38,8 +36,7 @@ fn product_http_admin_changes_worker_schedule_with_product_audit() {
         headers: product_headers(
             "req-product-schedule",
             Some("trace-product-schedule"),
-            "admin-a",
-            "Admin",
+            "netops-a",
         ),
         body: json_body(&ProductChangeWorkerScheduleRequest {
             config_path: config_path.clone(),
@@ -54,8 +51,7 @@ fn product_http_admin_changes_worker_schedule_with_product_audit() {
 
     assert_eq!(response.status, 200);
     let body: ProductApiResponse<WorkerConfigAdminResponse> = response_json(&response.body);
-    assert_eq!(body.operator_id, "admin-a");
-    assert_eq!(body.role, RbacRole::Admin);
+    assert_eq!(body.operator_id, "netops-a");
     assert_eq!(body.body.target, "drift_audit");
     let updated = UnderlayWorkerDaemonConfig::from_path(&config_path)
         .expect("updated config should parse");
@@ -70,50 +66,7 @@ fn product_http_admin_changes_worker_schedule_with_product_audit() {
     let records = audit_store.records();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].action, "daemon.schedule_change_requested");
-    assert_eq!(records[0].operator_id.as_deref(), Some("admin-a"));
-
-    fs::remove_dir_all(temp).ok();
-}
-
-#[test]
-fn product_http_viewer_cannot_change_worker_schedule() {
-    let temp = temp_test_dir("schedule-viewer-denied");
-    let config_path = temp.join("worker.json");
-    worker_config(&temp)
-        .write_to_path(&config_path)
-        .expect("worker config should be written");
-    let audit_store = Arc::new(InMemoryProductAuditStore::default());
-    let router = product_router(audit_store.clone());
-
-    let response = router.handle(ProductHttpRequest {
-        method: ProductHttpMethod::Post,
-        path: WORKER_CONFIG_SCHEDULE_CHANGE_PATH.into(),
-        headers: product_headers("req-viewer-schedule", None, "viewer-a", "Viewer"),
-        body: json_body(&ProductChangeWorkerScheduleRequest {
-            config_path: config_path.clone(),
-            reason: "viewer should not mutate daemon config".into(),
-            target: WorkerScheduleTarget::JournalGc,
-            schedule: WorkerScheduleConfig {
-                interval_secs: 900,
-                run_immediately: false,
-            },
-        }),
-    });
-
-    assert_eq!(response.status, 403);
-    let body: ProductHttpErrorResponse = response_json(&response.body);
-    assert_eq!(body.error_code, "authorization_denied");
-    let unchanged = UnderlayWorkerDaemonConfig::from_path(&config_path)
-        .expect("worker config should still parse");
-    assert_eq!(
-        unchanged
-            .journal_gc
-            .expect("journal_gc should exist")
-            .schedule
-            .interval_secs,
-        60
-    );
-    assert!(audit_store.records().is_empty());
+    assert_eq!(records[0].operator_id.as_deref(), Some("netops-a"));
 
     fs::remove_dir_all(temp).ok();
 }
@@ -130,7 +83,6 @@ fn product_headers(
     request_id: &str,
     trace_id: Option<&str>,
     operator_id: &str,
-    role: &str,
 ) -> std::collections::BTreeMap<String, String> {
     let mut headers = std::collections::BTreeMap::new();
     headers.insert("x-aria-request-id".into(), request_id.into());
@@ -138,7 +90,6 @@ fn product_headers(
         headers.insert("x-aria-trace-id".into(), trace_id.into());
     }
     headers.insert("x-aria-operator-id".into(), operator_id.into());
-    headers.insert("x-aria-role".into(), role.into());
     headers
 }
 

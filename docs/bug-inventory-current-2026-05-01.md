@@ -2,7 +2,7 @@
 
 ## 当前基线
 
-最新有效基线以 `main` 上的 CI 绿色提交为准。当前产品方向已经收敛为内部系统：不做 SSO/OIDC/JWT/JWKS，不做产品 UI，不做外部告警投递，不在仓库内实现 ingress/TLS，不生成安装包。
+最新有效基线以 `main` 上的 CI 绿色提交为准。当前产品方向已经收敛为内部系统：不做 SSO/OIDC/JWT/JWKS，不做 RBAC，不做产品 UI，不做外部告警投递，不在仓库内实现 ingress/TLS，不生成安装包。
 
 ## 已收敛完成的历史问题
 
@@ -22,6 +22,7 @@
 - Python placeholder 后端 改为明确 unsupported。
 - Rust 死 渲染器骨架 清理。
 - 轻量 operation 审计 log：append-only JSONL、关键字段、retention/rotation 和写失败可观测性。
+- product API 身份收敛：静态 token 只映射 `operator_id`，已移除 role、issuer、subject、session_id、expiry 和 production ingress 模式。
 
 ## 当前仍需要做
 
@@ -38,7 +39,7 @@
 ## 明确不做
 
 - product 审计 database。
-- 扩展 RBAC 平台。
+- RBAC。
 - token 创建、轮换、撤销工具。
 - SSO/OIDC/JWT/JWKS。
 - 产品 UI。

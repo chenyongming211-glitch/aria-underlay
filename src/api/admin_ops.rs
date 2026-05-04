@@ -157,7 +157,6 @@ impl AdminOps {
                 trace_id.clone(),
                 record.tx_id.clone(),
                 authorization.operator_id,
-                authorization.role,
                 request.reason.clone(),
             ))
             .map_err(product_audit_error)?;

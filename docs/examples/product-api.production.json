@@ -1,25 +1,14 @@
 {
-  "deployment_mode": "production_ingress",
   "bind_addr": "127.0.0.1:8088",
   "max_body_bytes": 1048576,
   "operation_summary_path": "/var/lib/aria-underlay/ops/operation-summaries.jsonl",
   "product_audit_path": "/var/lib/aria-underlay/ops/product-audit.jsonl",
   "static_tokens": {
     "replace-with-internal-viewer-token": {
-      "operator_id": "internal-viewer",
-      "role": "Viewer",
-      "issuer": "internal-product-config",
-      "subject": "internal-viewer",
-      "session_id": "internal-viewer-session",
-      "expires_at_unix_secs": null
+      "operator_id": "internal-viewer"
     },
     "replace-with-internal-admin-token": {
-      "operator_id": "internal-admin",
-      "role": "Admin",
-      "issuer": "internal-product-config",
-      "subject": "internal-admin",
-      "session_id": "internal-admin-session",
-      "expires_at_unix_secs": null
+      "operator_id": "internal-admin"
     }
   }
 }

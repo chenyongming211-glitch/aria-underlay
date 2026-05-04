@@ -6,7 +6,6 @@ use aria_underlay::api::product_api::{
     HeaderProductSessionExtractor, ProductApiRequest, ProductOpsApi,
 };
 use aria_underlay::api::product_ops::ExportProductAuditRequest;
-use aria_underlay::authz::RbacRole;
 use aria_underlay::telemetry::{
     InMemoryOperationSummaryStore, InMemoryProductAuditStore, ProductAuditRecord,
     ProductAuditStore, UnderlayEvent,
@@ -40,7 +39,7 @@ fn product_api_lists_operation_summaries_with_mock_viewer_session() {
         .list_operation_summaries(ProductApiRequest {
             request_id: "req-list".into(),
             trace_id: Some("trace-list".into()),
-            headers: session_headers("viewer-a", "Viewer"),
+            headers: session_headers("viewer-a"),
             body: ListOperationSummariesRequest {
                 attention_required_only: true,
                 limit: Some(10),
@@ -52,7 +51,6 @@ fn product_api_lists_operation_summaries_with_mock_viewer_session() {
     assert_eq!(response.request_id, "req-list");
     assert_eq!(response.trace_id, "trace-list");
     assert_eq!(response.operator_id, "viewer-a");
-    assert_eq!(response.role, RbacRole::Viewer);
     assert_eq!(response.body.overview.matched_records, 1);
     assert_eq!(response.body.summaries[0].action, "recovery.completed");
 }
@@ -65,7 +63,6 @@ fn product_api_rejects_missing_operator_header() {
         Arc::new(InMemoryProductAuditStore::default()),
     );
     let mut headers = BTreeMap::new();
-    headers.insert("x-aria-role".into(), "Viewer".into());
 
     let err = api
         .list_operation_summaries(ProductApiRequest {
@@ -95,7 +92,7 @@ fn product_api_exports_product_audit_with_mock_auditor_session() {
         .export_product_audit(ProductApiRequest {
             request_id: "req-export".into(),
             trace_id: Some("trace-export".into()),
-            headers: session_headers("auditor-a", "Auditor"),
+            headers: session_headers("auditor-a"),
             body: ExportProductAuditRequest {
                 reason: "quarterly audit review".into(),
                 action: None,
@@ -107,7 +104,6 @@ fn product_api_exports_product_audit_with_mock_auditor_session() {
         .expect("mock auditor session should export product audit");
 
     assert_eq!(response.operator_id, "auditor-a");
-    assert_eq!(response.role, RbacRole::Auditor);
     assert_eq!(response.body.overview.matched_records, 2);
     assert_eq!(response.body.records[0].request_id, "req-existing");
     assert_eq!(response.body.records[1].request_id, "req-export");
@@ -118,33 +114,6 @@ fn product_api_exports_product_audit_with_mock_auditor_session() {
 }
 
 #[test]
-fn product_api_denies_audit_export_for_mock_operator_session() {
-    let audit_store = Arc::new(InMemoryProductAuditStore::default());
-    let api = ProductOpsApi::new(
-        Arc::new(HeaderProductSessionExtractor::default()),
-        Arc::new(InMemoryOperationSummaryStore::default()),
-        audit_store.clone(),
-    );
-
-    let err = api
-        .export_product_audit(ProductApiRequest {
-            request_id: "req-denied".into(),
-            trace_id: Some("trace-denied".into()),
-            headers: session_headers("operator-a", "Operator"),
-            body: ExportProductAuditRequest {
-                reason: "curious operator".into(),
-                action: None,
-                result: None,
-                operator_id: None,
-                limit: None,
-            },
-        })
-        .expect_err("operator should not export product audit");
-
-    assert!(matches!(err, UnderlayError::AuthorizationDenied(_)));
-    assert!(audit_store.list().expect("audit list should work").is_empty());
-}
-
 #[test]
 fn product_api_audit_export_fails_closed_when_audit_append_fails() {
     let api = ProductOpsApi::new(
@@ -157,7 +126,7 @@ fn product_api_audit_export_fails_closed_when_audit_append_fails() {
         .export_product_audit(ProductApiRequest {
             request_id: "req-audit-failed".into(),
             trace_id: Some("trace-audit-failed".into()),
-            headers: session_headers("admin-a", "Admin"),
+            headers: session_headers("admin-a"),
             body: ExportProductAuditRequest {
                 reason: "incident review".into(),
                 action: None,
@@ -186,10 +155,9 @@ impl ProductAuditStore for FailingProductAuditStore {
     }
 }
 
-fn session_headers(operator_id: &str, role: &str) -> BTreeMap<String, String> {
+fn session_headers(operator_id: &str) -> BTreeMap<String, String> {
     let mut headers = BTreeMap::new();
     headers.insert("x-aria-operator-id".into(), operator_id.into());
-    headers.insert("x-aria-role".into(), role.into());
     headers
 }
 
@@ -202,7 +170,6 @@ fn seed_audit_record(request_id: &str, operator: &str) -> ProductAuditRecord {
         tx_id: None,
         device_id: None,
         operator_id: Some(operator.into()),
-        role: Some(RbacRole::Admin),
         reason: Some("seed record".into()),
         attention_required: false,
         error_code: None,

@@ -228,7 +228,6 @@ impl ProductOpsManager {
                 context.request_id.clone(),
                 trace_id,
                 decision.operator_id,
-                decision.role,
                 request.reason.clone(),
                 export_filter_fields(&request),
             ))
