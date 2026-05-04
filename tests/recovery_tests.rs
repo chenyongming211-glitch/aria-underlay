@@ -10,14 +10,15 @@ use aria_underlay::engine::diff::{ChangeOp, ChangeSet};
 use aria_underlay::model::{DeviceId, DeviceRole, Vendor, VlanConfig};
 use aria_underlay::planner::device_plan::DeviceDesiredState;
 use aria_underlay::proto::adapter;
+use aria_underlay::state::{DeviceShadowState, ShadowStateStore};
+use aria_underlay::tx::recovery::{
+    classify_recovery, in_doubt_records_for_devices, RecoveryAction, RecoveryReport,
+};
 use aria_underlay::tx::{
     InMemoryTxJournalStore, JsonFileTxJournalStore, TxContext, TxJournalRecord, TxJournalStore,
     TransactionStrategy, TxPhase,
 };
-use aria_underlay::UnderlayError;
-use aria_underlay::tx::recovery::{
-    classify_recovery, in_doubt_records_for_devices, RecoveryAction, RecoveryReport,
-};
+use aria_underlay::{UnderlayError, UnderlayResult};
 
 mod common;
 
@@ -355,6 +356,124 @@ async fn file_backed_force_resolved_record_stays_terminal_after_service_recreati
 }
 
 #[tokio::test]
+async fn file_backed_terminal_records_stay_terminal_after_service_recreation() {
+    let root = temp_journal_dir("restart-terminal-records");
+    let initial_journal = JsonFileTxJournalStore::new(&root);
+    for (tx_id, phase) in [
+        ("tx-committed", TxPhase::Committed),
+        ("tx-failed", TxPhase::Failed),
+        ("tx-rolled-back", TxPhase::RolledBack),
+    ] {
+        initial_journal
+            .put(&journal_record(tx_id, phase, "leaf-a"))
+            .expect("terminal file journal record should be stored before restart");
+    }
+
+    let restarted_journal = Arc::new(JsonFileTxJournalStore::new(&root));
+    let restarted_service =
+        AriaUnderlayService::new_with_journal(DeviceInventory::default(), restarted_journal.clone());
+
+    let report = restarted_service
+        .recover_pending_transactions()
+        .await
+        .expect("recovery scan should ignore terminal file journal records");
+
+    assert_eq!(report.recovered, 0);
+    assert_eq!(report.in_doubt, 0);
+    assert_eq!(report.pending, 0);
+    assert!(report.tx_ids.is_empty());
+    for (tx_id, phase) in [
+        ("tx-committed", TxPhase::Committed),
+        ("tx-failed", TxPhase::Failed),
+        ("tx-rolled-back", TxPhase::RolledBack),
+    ] {
+        let record = restarted_journal
+            .get(tx_id)
+            .expect("terminal file journal should still be readable")
+            .expect("terminal file journal record should still exist");
+        assert_eq!(record.phase, phase);
+    }
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[tokio::test]
+async fn file_backed_journal_ignores_atomic_tmp_residue_after_service_recreation() {
+    let root = temp_journal_dir("restart-tmp-residue");
+    let journal = JsonFileTxJournalStore::new(&root);
+    journal
+        .put(&journal_record("tx-prepared", TxPhase::Prepared, "leaf-a"))
+        .expect("recoverable file journal should be stored before restart");
+    std::fs::write(
+        root.join(".tx-prepared.json.crash-leftover.tmp"),
+        br#"{"tx_id":"tx-tmp","phase":"Started"}"#,
+    )
+    .expect("tmp residue should be written");
+
+    let restarted_journal = Arc::new(JsonFileTxJournalStore::new(&root));
+    let recoverable = restarted_journal
+        .list_recoverable()
+        .expect("file journal scan should ignore tmp residue");
+
+    assert_eq!(recoverable.len(), 1);
+    assert_eq!(recoverable[0].tx_id, "tx-prepared");
+    assert_eq!(recoverable[0].phase, TxPhase::Prepared);
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[tokio::test]
+async fn file_backed_recovery_keeps_committed_adapter_result_in_doubt_when_shadow_persistence_fails() {
+    let endpoint = start_recovery_adapter(adapter::AdapterOperationStatus::Committed).await;
+    let root = temp_journal_dir("restart-shadow-failure");
+    let journal = Arc::new(JsonFileTxJournalStore::new(&root));
+    journal
+        .put(
+            &journal_record("tx-shadow-fails", TxPhase::Committing, "leaf-a")
+                .with_desired_states(vec![desired_vlan_state("leaf-a", 200, "tenant-200")]),
+        )
+        .expect("committing file journal should be stored before restart");
+
+    let restarted_journal = Arc::new(JsonFileTxJournalStore::new(&root));
+    let service = AriaUnderlayService::new_with_shadow_store(
+        inventory_with_recovery_endpoint("leaf-a", endpoint),
+        restarted_journal.clone(),
+        Default::default(),
+        Default::default(),
+        Arc::new(aria_underlay::device::InMemorySecretStore::default()),
+        Arc::new(FailingRecoveryShadowStore),
+    );
+
+    let report = service
+        .recover_pending_transactions()
+        .await
+        .expect("recovery scan should fail closed on shadow persistence failure");
+
+    assert_eq!(report.recovered, 0);
+    assert_eq!(report.in_doubt, 1);
+    assert_eq!(report.pending, 1);
+    assert_eq!(report.tx_ids, vec!["tx-shadow-fails"]);
+
+    let record = restarted_journal
+        .get("tx-shadow-fails")
+        .expect("file journal get should succeed after failed shadow persistence")
+        .expect("file journal record should still exist");
+    assert_eq!(record.phase, TxPhase::InDoubt);
+    assert_eq!(record.error_code.as_deref(), Some("INTERNAL"));
+    assert!(
+        record
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("shadow store unavailable"),
+        "unexpected shadow failure message: {:?}",
+        record.error_message
+    );
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[tokio::test]
 async fn force_resolve_transaction_marks_in_doubt_record_terminal() {
     let journal = Arc::new(InMemoryTxJournalStore::default());
     journal
@@ -663,4 +782,25 @@ async fn start_recovery_adapter(status: adapter::AdapterOperationStatus) -> Stri
         ..Default::default()
     })
     .await
+}
+
+#[derive(Debug)]
+struct FailingRecoveryShadowStore;
+
+impl ShadowStateStore for FailingRecoveryShadowStore {
+    fn get(&self, _device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
+        Ok(None)
+    }
+
+    fn put(&self, _state: DeviceShadowState) -> UnderlayResult<DeviceShadowState> {
+        Err(UnderlayError::Internal("shadow store unavailable".into()))
+    }
+
+    fn remove(&self, _device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
+        Ok(None)
+    }
+
+    fn list(&self) -> UnderlayResult<Vec<DeviceShadowState>> {
+        Ok(Vec::new())
+    }
 }
