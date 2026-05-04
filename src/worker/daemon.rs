@@ -134,6 +134,24 @@ pub struct WorkerReloadCheckpoint {
     pub error: Option<String>,
 }
 
+impl WorkerReloadCheckpoint {
+    pub fn from_path(path: impl AsRef<Path>) -> UnderlayResult<Self> {
+        let path = path.as_ref();
+        let payload = fs::read(path).map_err(|err| {
+            UnderlayError::InvalidIntent(format!(
+                "read worker reload checkpoint {:?}: {err}",
+                path
+            ))
+        })?;
+        serde_json::from_slice(&payload).map_err(|err| {
+            UnderlayError::InvalidIntent(format!(
+                "parse worker reload checkpoint {:?}: {err}",
+                path
+            ))
+        })
+    }
+}
+
 #[derive(Debug)]
 struct ShadowStoreObservationSource {
     observed_store: Arc<dyn ShadowStateStore>,

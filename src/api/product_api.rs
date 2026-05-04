@@ -8,12 +8,14 @@ use crate::api::operations::{
 };
 use crate::api::product_ops::{
     ExportProductAuditRequest, ExportProductAuditResponse,
+    ProductGetWorkerReloadStatusRequest,
     ProductChangeJournalGcRetentionRequest, ProductChangeSummaryRetentionRequest,
     ProductChangeWorkerScheduleRequest, ProductOperatorContext, ProductOpsManager,
 };
 use crate::api::worker_config_admin::WorkerConfigAdminResponse;
 use crate::authz::{RbacRole, StaticAuthorizationPolicy};
 use crate::telemetry::{OperationSummaryStore, ProductAuditStore};
+use crate::worker::daemon::WorkerReloadCheckpoint;
 use crate::{UnderlayError, UnderlayResult};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,6 +153,19 @@ impl ProductOpsApi {
         let body = self
             .manager_for_session(&session)
             .change_worker_schedule(operator_context(&metadata, &session), request.body)?;
+        Ok(api_response(metadata, session, trace_id, body))
+    }
+
+    pub fn get_worker_reload_status(
+        &self,
+        request: ProductApiRequest<ProductGetWorkerReloadStatusRequest>,
+    ) -> UnderlayResult<ProductApiResponse<WorkerReloadCheckpoint>> {
+        let metadata = request.metadata();
+        let session = self.session_extractor.extract(&metadata)?;
+        let trace_id = trace_id_or_request_id(&metadata);
+        let body = self
+            .manager_for_session(&session)
+            .get_worker_reload_status(operator_context(&metadata, &session), request.body)?;
         Ok(api_response(metadata, session, trace_id, body))
     }
 

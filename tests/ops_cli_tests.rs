@@ -12,7 +12,8 @@ use aria_underlay::tx::recovery::RecoveryReport;
 use aria_underlay::tx::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase};
 use aria_underlay::worker::daemon::{
     DriftAuditDaemonConfig, JournalGcDaemonConfig, OperationAlertDaemonConfig,
-    OperationSummaryDaemonConfig, UnderlayWorkerDaemonConfig, WorkerScheduleConfig,
+    OperationSummaryDaemonConfig, UnderlayWorkerDaemonConfig, WorkerConfigReloadStatus,
+    WorkerReloadCheckpoint, WorkerScheduleConfig,
 };
 use aria_underlay::worker::gc::RetentionPolicy;
 
@@ -214,6 +215,38 @@ fn ops_cli_acknowledges_alert_and_enriches_alert_list() {
 }
 
 #[test]
+fn ops_cli_prints_worker_reload_status_checkpoint() {
+    let temp = temp_test_dir("worker-reload-status");
+    let checkpoint_path = temp.join("worker-reload-checkpoint.json");
+    fs::create_dir_all(&temp).expect("temp dir should be created");
+    write_reload_checkpoint(&checkpoint_path, WorkerConfigReloadStatus::Applied, 2, None);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_aria-underlay-ops"))
+        .args([
+            "worker-reload-status",
+            "--checkpoint-path",
+            checkpoint_path
+                .to_str()
+                .expect("checkpoint path should be utf-8"),
+        ])
+        .output()
+        .expect("aria-underlay-ops should run");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("reload status should be JSON");
+    assert_eq!(payload["status"], "applied");
+    assert_eq!(payload["generation"], 2);
+    assert_eq!(payload["error"], serde_json::Value::Null);
+
+    fs::remove_dir_all(temp).ok();
+}
+
+#[test]
 fn ops_cli_changes_worker_schedule_with_audit() {
     let temp = temp_test_dir("worker-schedule");
     let config_path = temp.join("worker.json");
@@ -399,6 +432,27 @@ fn alert(
         device_id: Some(DeviceId("leaf-a".into())),
         fields: BTreeMap::new(),
     }
+}
+
+fn write_reload_checkpoint(
+    path: &std::path::Path,
+    status: WorkerConfigReloadStatus,
+    generation: u64,
+    error: Option<String>,
+) {
+    let checkpoint = WorkerReloadCheckpoint {
+        config_path: path.with_file_name("worker.json"),
+        generation,
+        fingerprint: format!("fingerprint-{generation}"),
+        status,
+        updated_at_unix_secs: 1_800_000_000,
+        error,
+    };
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(&checkpoint).expect("checkpoint should serialize"),
+    )
+    .expect("checkpoint should be written");
 }
 
 fn temp_test_dir(name: &str) -> std::path::PathBuf {

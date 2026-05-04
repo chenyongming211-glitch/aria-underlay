@@ -7,6 +7,7 @@ use crate::api::operations::ListOperationSummariesRequest;
 use crate::api::product_api::{ProductApiRequest, ProductOpsApi};
 use crate::api::product_ops::{
     ExportProductAuditRequest, ProductChangeJournalGcRetentionRequest,
+    ProductGetWorkerReloadStatusRequest,
     ProductChangeSummaryRetentionRequest, ProductChangeWorkerScheduleRequest,
 };
 use crate::UnderlayError;
@@ -19,6 +20,8 @@ pub const WORKER_CONFIG_JOURNAL_GC_RETENTION_CHANGE_PATH: &str =
     "/product/v1/worker-config/journal-gc-retention:change";
 pub const WORKER_CONFIG_SCHEDULE_CHANGE_PATH: &str =
     "/product/v1/worker-config/schedule:change";
+pub const WORKER_RELOAD_STATUS_GET_PATH: &str =
+    "/product/v1/worker-reload/status:get";
 
 const REQUEST_ID_HEADER: &str = "x-aria-request-id";
 const TRACE_ID_HEADER: &str = "x-aria-trace-id";
@@ -85,13 +88,17 @@ impl ProductHttpRouter {
             (ProductHttpMethod::Post, WORKER_CONFIG_SCHEDULE_CHANGE_PATH) => {
                 self.handle_worker_schedule_change(request)
             }
+            (ProductHttpMethod::Post, WORKER_RELOAD_STATUS_GET_PATH) => {
+                self.handle_worker_reload_status_get(request)
+            }
             (
                 _,
                 OPERATION_SUMMARIES_QUERY_PATH
                 | PRODUCT_AUDIT_EXPORT_PATH
                 | WORKER_CONFIG_SUMMARY_RETENTION_CHANGE_PATH
                 | WORKER_CONFIG_JOURNAL_GC_RETENTION_CHANGE_PATH
-                | WORKER_CONFIG_SCHEDULE_CHANGE_PATH,
+                | WORKER_CONFIG_SCHEDULE_CHANGE_PATH
+                | WORKER_RELOAD_STATUS_GET_PATH,
             ) => method_not_allowed_response(&request, "POST"),
             _ => not_found_response(&request),
         }
@@ -153,6 +160,19 @@ impl ProductHttpRouter {
         match decode_body::<ProductChangeWorkerScheduleRequest>(&request)
             .and_then(|body| product_api_request(&request, body))
             .and_then(|api_request| self.api.change_worker_schedule(api_request))
+        {
+            Ok(response) => json_response(200, &response),
+            Err(error) => underlay_error_response(&request, error),
+        }
+    }
+
+    fn handle_worker_reload_status_get(
+        &self,
+        request: ProductHttpRequest,
+    ) -> ProductHttpResponse {
+        match decode_body::<ProductGetWorkerReloadStatusRequest>(&request)
+            .and_then(|body| product_api_request(&request, body))
+            .and_then(|api_request| self.api.get_worker_reload_status(api_request))
         {
             Ok(response) => json_response(200, &response),
             Err(error) => underlay_error_response(&request, error),

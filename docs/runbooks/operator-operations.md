@@ -363,6 +363,22 @@ Reload supervisor settings are process-lifecycle settings. Changing
 `reload.poll_interval_secs` or `reload.checkpoint_path` in the config should be
 treated as a restart-required deployment change.
 
+Read the current checkpoint through the local ops CLI:
+
+```bash
+cargo run --bin aria-underlay-ops -- worker-reload-status \
+  --checkpoint-path var/aria-underlay/ops/worker-reload-checkpoint.json
+```
+
+The same checkpoint is available through the product HTTP route
+`POST /product/v1/worker-reload/status:get` with body:
+
+```json
+{
+  "checkpoint_path": "var/aria-underlay/ops/worker-reload-checkpoint.json"
+}
+```
+
 ## Triage GC
 
 GC completion summaries use:
@@ -507,6 +523,7 @@ The header extractor and static verifier are not production identity models. The
 | `POST` | `/product/v1/worker-config/operation-summary-retention:change` | `ProductChangeSummaryRetentionRequest` JSON | `ProductApiResponse<WorkerConfigAdminResponse>` |
 | `POST` | `/product/v1/worker-config/journal-gc-retention:change` | `ProductChangeJournalGcRetentionRequest` JSON | `ProductApiResponse<WorkerConfigAdminResponse>` |
 | `POST` | `/product/v1/worker-config/schedule:change` | `ProductChangeWorkerScheduleRequest` JSON | `ProductApiResponse<WorkerConfigAdminResponse>` |
+| `POST` | `/product/v1/worker-reload/status:get` | `ProductGetWorkerReloadStatusRequest` JSON | `ProductApiResponse<WorkerReloadCheckpoint>` |
 
 Required HTTP headers:
 
@@ -551,6 +568,7 @@ Current product boundary behavior:
 | Operation | RBAC action | Audit behavior |
 | --- | --- | --- |
 | List operation summaries | `ListOperationSummaries` | Read-only; no product audit record in this package. |
+| Get worker reload status | `GetWorkerReloadStatus` | Read-only; no product audit record in this package. |
 | Export product audit history | `ExportAuditHistory` | Writes `product_audit.export_requested` before returning records. |
 | Change worker retention policy | `ChangeRetentionPolicy` | Writes `daemon.retention_change_requested` before changing config. |
 | Change worker schedule | `ChangeDaemonSchedule` | Writes `daemon.schedule_change_requested` before changing config. |
@@ -564,7 +582,6 @@ Still missing from the product layer:
 - Online identity provider integration.
 - OIDC discovery / JWKS refresh or internal SSO session validation.
 - production TLS/ingress selection.
-- product UI.
 - product UI.
 
 The design boundary is recorded in:

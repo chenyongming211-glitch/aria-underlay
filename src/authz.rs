@@ -26,6 +26,7 @@ pub enum AdminAction {
     ForceUnlockSession,
     ChangeRetentionPolicy,
     ChangeDaemonSchedule,
+    GetWorkerReloadStatus,
     ExportAuditHistory,
 }
 
@@ -127,7 +128,8 @@ fn role_allows_action(role: &RbacRole, action: &AdminAction) -> bool {
     match action {
         AdminAction::ListOperationSummaries
         | AdminAction::ListAlerts
-        | AdminAction::ListInDoubtTransactions => true,
+        | AdminAction::ListInDoubtTransactions
+        | AdminAction::GetWorkerReloadStatus => true,
         AdminAction::AcknowledgeAlert => {
             matches!(
                 role,

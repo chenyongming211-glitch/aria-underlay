@@ -1,9 +1,11 @@
+use std::fs;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use aria_underlay::api::operations::ListOperationSummariesRequest;
 use aria_underlay::api::product_ops::{
-    ExportProductAuditRequest, ProductOperatorContext, ProductOpsManager,
+    ExportProductAuditRequest, ProductGetWorkerReloadStatusRequest,
+    ProductOperatorContext, ProductOpsManager,
 };
 use aria_underlay::authz::{RbacRole, StaticAuthorizationPolicy};
 use aria_underlay::telemetry::{
@@ -11,6 +13,9 @@ use aria_underlay::telemetry::{
     ProductAuditRecord, ProductAuditStore, UnderlayEvent,
 };
 use aria_underlay::tx::recovery::RecoveryReport;
+use aria_underlay::worker::daemon::{
+    WorkerConfigReloadStatus, WorkerReloadCheckpoint,
+};
 use aria_underlay::{UnderlayError, UnderlayResult};
 
 #[test]
@@ -159,6 +164,60 @@ fn product_audit_write_failure_blocks_audit_export() {
     assert!(matches!(err, UnderlayError::ProductAuditWriteFailed(_)));
 }
 
+#[test]
+fn viewer_can_read_worker_reload_status_through_product_boundary() {
+    let temp = temp_test_dir("product-reload-status");
+    let checkpoint_path = temp.join("worker-reload-checkpoint.json");
+    fs::create_dir_all(&temp).expect("temp dir should be created");
+    write_reload_checkpoint(&checkpoint_path, WorkerConfigReloadStatus::Applied, 4, None);
+    let manager = ProductOpsManager::new(
+        Arc::new(StaticAuthorizationPolicy::new().with_role("viewer-a", RbacRole::Viewer)),
+        Arc::new(InMemoryOperationSummaryStore::default()),
+        Arc::new(InMemoryProductAuditStore::default()),
+    );
+
+    let checkpoint = manager
+        .get_worker_reload_status(
+            context("req-reload-status", "viewer-a"),
+            ProductGetWorkerReloadStatusRequest {
+                checkpoint_path: checkpoint_path.clone(),
+            },
+        )
+        .expect("assigned viewer should read worker reload status");
+
+    assert_eq!(checkpoint.status, WorkerConfigReloadStatus::Applied);
+    assert_eq!(checkpoint.generation, 4);
+    assert_eq!(checkpoint.error, None);
+
+    fs::remove_dir_all(temp).ok();
+}
+
+#[test]
+fn unassigned_operator_cannot_read_worker_reload_status() {
+    let temp = temp_test_dir("product-reload-status-denied");
+    let checkpoint_path = temp.join("worker-reload-checkpoint.json");
+    fs::create_dir_all(&temp).expect("temp dir should be created");
+    write_reload_checkpoint(&checkpoint_path, WorkerConfigReloadStatus::Started, 1, None);
+    let manager = ProductOpsManager::new(
+        Arc::new(StaticAuthorizationPolicy::new()),
+        Arc::new(InMemoryOperationSummaryStore::default()),
+        Arc::new(InMemoryProductAuditStore::default()),
+    );
+
+    let err = manager
+        .get_worker_reload_status(
+            context("req-reload-status-denied", "unknown-user"),
+            ProductGetWorkerReloadStatusRequest {
+                checkpoint_path: checkpoint_path.clone(),
+            },
+        )
+        .expect_err("unassigned product operator should fail closed");
+
+    assert!(matches!(err, UnderlayError::AuthorizationDenied(_)));
+
+    fs::remove_dir_all(temp).ok();
+}
+
 #[derive(Debug)]
 struct FailingProductAuditStore;
 
@@ -199,4 +258,32 @@ fn seed_audit_record(request_id: &str, operator: &str) -> ProductAuditRecord {
         fields: BTreeMap::new(),
         appended_at_unix_secs: 1,
     }
+}
+
+fn write_reload_checkpoint(
+    path: &std::path::Path,
+    status: WorkerConfigReloadStatus,
+    generation: u64,
+    error: Option<String>,
+) {
+    let checkpoint = WorkerReloadCheckpoint {
+        config_path: path.with_file_name("worker.json"),
+        generation,
+        fingerprint: format!("fingerprint-{generation}"),
+        status,
+        updated_at_unix_secs: 1_800_000_000,
+        error,
+    };
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(&checkpoint).expect("checkpoint should serialize"),
+    )
+    .expect("checkpoint should be written");
+}
+
+fn temp_test_dir(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "aria-underlay-product-ops-{name}-{}",
+        uuid::Uuid::new_v4()
+    ))
 }

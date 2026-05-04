@@ -18,7 +18,7 @@ use crate::telemetry::{
     OperationSummary, OperationSummaryRetentionPolicy, OperationSummaryStore,
     ProductAuditRecord, ProductAuditStore,
 };
-use crate::worker::daemon::WorkerScheduleConfig;
+use crate::worker::daemon::{WorkerReloadCheckpoint, WorkerScheduleConfig};
 use crate::worker::gc::RetentionPolicy;
 use crate::{UnderlayError, UnderlayResult};
 
@@ -74,6 +74,11 @@ pub struct ProductChangeWorkerScheduleRequest {
     pub reason: String,
     pub target: WorkerScheduleTarget,
     pub schedule: WorkerScheduleConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductGetWorkerReloadStatusRequest {
+    pub checkpoint_path: std::path::PathBuf,
 }
 
 impl Default for ProductChangeSummaryRetentionRequest {
@@ -243,6 +248,20 @@ impl ProductOpsManager {
             })
     }
 
+    pub fn get_worker_reload_status(
+        &self,
+        context: ProductOperatorContext,
+        request: ProductGetWorkerReloadStatusRequest,
+    ) -> UnderlayResult<WorkerReloadCheckpoint> {
+        validate_path("worker reload checkpoint path", &request.checkpoint_path)?;
+        let (_trace_id, _decision) = self.authorize_context(
+            &context,
+            AdminAction::GetWorkerReloadStatus,
+            "product ops get worker reload status",
+        )?;
+        WorkerReloadCheckpoint::from_path(request.checkpoint_path)
+    }
+
     fn worker_config_admin(&self) -> WorkerConfigAdminManager {
         WorkerConfigAdminManager::new(
             self.authorization_policy.clone(),
@@ -358,6 +377,15 @@ fn limit_newest<T: Clone>(items: Vec<T>, limit: usize) -> Vec<T> {
 
 fn validate_non_empty(field: &str, value: &str) -> UnderlayResult<()> {
     if value.trim().is_empty() {
+        return Err(UnderlayError::InvalidIntent(format!(
+            "{field} must not be empty"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_path(field: &str, value: &std::path::Path) -> UnderlayResult<()> {
+    if value.as_os_str().is_empty() {
         return Err(UnderlayError::InvalidIntent(format!(
             "{field} must not be empty"
         )));

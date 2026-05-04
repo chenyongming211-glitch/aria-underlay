@@ -24,7 +24,7 @@ use crate::telemetry::{
     OperationAlertSeverity, OperationSummaryRetentionPolicy,
 };
 use crate::tx::JsonFileTxJournalStore;
-use crate::worker::daemon::WorkerScheduleConfig;
+use crate::worker::daemon::{WorkerReloadCheckpoint, WorkerScheduleConfig};
 use crate::worker::deployment::WorkerDeploymentPreflight;
 use crate::worker::gc::RetentionPolicy;
 
@@ -61,6 +61,7 @@ where
         "set-gc-retention" => set_gc_retention(&args[1..]).await,
         "set-worker-schedule" => set_worker_schedule(&args[1..]).await,
         "check-worker-config" => check_worker_config(&args[1..]).await,
+        "worker-reload-status" => worker_reload_status(&args[1..]).await,
         "-h" | "--help" | "help" => {
             print_usage();
             Ok(())
@@ -267,6 +268,14 @@ async fn check_worker_config(args: &[String]) -> Result<(), Box<dyn Error>> {
     } else {
         Err(invalid_input("worker config preflight failed").into())
     }
+}
+
+async fn worker_reload_status(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let checkpoint_path = required_option(args, "--checkpoint-path")?;
+    let checkpoint = WorkerReloadCheckpoint::from_path(checkpoint_path.as_str())?;
+
+    println!("{}", serde_json::to_string_pretty(&checkpoint)?);
+    Ok(())
 }
 
 fn worker_config_admin_manager(
@@ -554,6 +563,6 @@ fn invalid_input(message: impl Into<String>) -> io::Error {
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  aria-underlay-ops list-in-doubt --journal-root <dir> [--device-id <id>]\n  aria-underlay-ops force-resolve --journal-root <dir> --operation-summary-path <file> --tx-id <tx> --operator <name> --reason <text> --break-glass [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops list-operations --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]\n  aria-underlay-ops operation-summary --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]\n  aria-underlay-ops list-alerts --operation-alert-path <file> [--alert-state-path <file>] [--severity Critical|Warning] [--limit <n>]\n  aria-underlay-ops alert-summary --operation-alert-path <file> [--alert-state-path <file>] [--severity Critical|Warning]\n  aria-underlay-ops ack-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops resolve-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops suppress-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops expire-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops set-summary-retention --worker-config-path <file> --product-audit-path <file> --operator <name> --role Admin --reason <text> [--max-records <n>] [--max-bytes <n>] [--max-rotated-files <n>] [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops set-gc-retention --worker-config-path <file> --product-audit-path <file> --operator <name> --role Admin --reason <text> --committed-days <n> --rolled-back-days <n> --failed-days <n> --rollback-artifact-days <n> --max-artifacts-per-device <n> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops set-worker-schedule --worker-config-path <file> --product-audit-path <file> --operator <name> --role Admin --reason <text> --target <target> --interval-secs <n> --run-immediately true|false [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops check-worker-config --worker-config-path <file> [--strict-paths]"
+        "usage:\n  aria-underlay-ops list-in-doubt --journal-root <dir> [--device-id <id>]\n  aria-underlay-ops force-resolve --journal-root <dir> --operation-summary-path <file> --tx-id <tx> --operator <name> --reason <text> --break-glass [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops list-operations --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]\n  aria-underlay-ops operation-summary --operation-summary-path <file> [--attention-required] [--action <name>] [--result <result>] [--device-id <id>] [--tx-id <tx>] [--limit <n>]\n  aria-underlay-ops list-alerts --operation-alert-path <file> [--alert-state-path <file>] [--severity Critical|Warning] [--limit <n>]\n  aria-underlay-ops alert-summary --operation-alert-path <file> [--alert-state-path <file>] [--severity Critical|Warning]\n  aria-underlay-ops ack-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops resolve-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops suppress-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops expire-alert --alert-state-path <file> --product-audit-path <file> --dedupe-key <key> --operator <name> --role <role> --reason <text> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops set-summary-retention --worker-config-path <file> --product-audit-path <file> --operator <name> --role Admin --reason <text> [--max-records <n>] [--max-bytes <n>] [--max-rotated-files <n>] [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops set-gc-retention --worker-config-path <file> --product-audit-path <file> --operator <name> --role Admin --reason <text> --committed-days <n> --rolled-back-days <n> --failed-days <n> --rollback-artifact-days <n> --max-artifacts-per-device <n> [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops set-worker-schedule --worker-config-path <file> --product-audit-path <file> --operator <name> --role Admin --reason <text> --target <target> --interval-secs <n> --run-immediately true|false [--request-id <id>] [--trace-id <id>]\n  aria-underlay-ops check-worker-config --worker-config-path <file> [--strict-paths]\n  aria-underlay-ops worker-reload-status --checkpoint-path <file>"
     );
 }
