@@ -6,12 +6,20 @@ use serde::{Deserialize, Serialize};
 use crate::api::operations::{
     ListOperationSummariesRequest, ListOperationSummariesResponse, OperationSummaryOverview,
 };
+use crate::api::worker_config_admin::{
+    ChangeJournalGcRetentionRequest, ChangeSummaryRetentionRequest,
+    ChangeWorkerScheduleRequest, WorkerConfigAdminManager, WorkerConfigAdminResponse,
+    WorkerScheduleTarget,
+};
 use crate::authz::{
     AdminAction, AuthorizationDecision, AuthorizationPolicy, AuthorizationRequest,
 };
 use crate::telemetry::{
-    OperationSummary, ProductAuditRecord, ProductAuditStore, OperationSummaryStore,
+    OperationSummary, OperationSummaryRetentionPolicy, OperationSummaryStore,
+    ProductAuditRecord, ProductAuditStore,
 };
+use crate::worker::daemon::WorkerScheduleConfig;
+use crate::worker::gc::RetentionPolicy;
 use crate::{UnderlayError, UnderlayResult};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +52,59 @@ pub struct ProductAuditExportOverview {
 pub struct ExportProductAuditResponse {
     pub records: Vec<ProductAuditRecord>,
     pub overview: ProductAuditExportOverview,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductChangeSummaryRetentionRequest {
+    pub config_path: std::path::PathBuf,
+    pub reason: String,
+    pub retention: OperationSummaryRetentionPolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductChangeJournalGcRetentionRequest {
+    pub config_path: std::path::PathBuf,
+    pub reason: String,
+    pub retention: RetentionPolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductChangeWorkerScheduleRequest {
+    pub config_path: std::path::PathBuf,
+    pub reason: String,
+    pub target: WorkerScheduleTarget,
+    pub schedule: WorkerScheduleConfig,
+}
+
+impl Default for ProductChangeSummaryRetentionRequest {
+    fn default() -> Self {
+        Self {
+            config_path: std::path::PathBuf::new(),
+            reason: String::new(),
+            retention: OperationSummaryRetentionPolicy::default(),
+        }
+    }
+}
+
+impl Default for ProductChangeJournalGcRetentionRequest {
+    fn default() -> Self {
+        Self {
+            config_path: std::path::PathBuf::new(),
+            reason: String::new(),
+            retention: RetentionPolicy::default(),
+        }
+    }
+}
+
+impl Default for ProductChangeWorkerScheduleRequest {
+    fn default() -> Self {
+        Self {
+            config_path: std::path::PathBuf::new(),
+            reason: String::new(),
+            target: WorkerScheduleTarget::OperationSummaryRetention,
+            schedule: WorkerScheduleConfig::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +192,62 @@ impl ProductOpsManager {
             records: returned_records,
             overview,
         })
+    }
+
+    pub fn change_summary_retention(
+        &self,
+        context: ProductOperatorContext,
+        request: ProductChangeSummaryRetentionRequest,
+    ) -> UnderlayResult<WorkerConfigAdminResponse> {
+        self.worker_config_admin()
+            .change_summary_retention(ChangeSummaryRetentionRequest {
+                request_id: context.request_id,
+                trace_id: context.trace_id,
+                config_path: request.config_path,
+                operator: context.operator,
+                reason: request.reason,
+                retention: request.retention,
+            })
+    }
+
+    pub fn change_journal_gc_retention(
+        &self,
+        context: ProductOperatorContext,
+        request: ProductChangeJournalGcRetentionRequest,
+    ) -> UnderlayResult<WorkerConfigAdminResponse> {
+        self.worker_config_admin()
+            .change_journal_gc_retention(ChangeJournalGcRetentionRequest {
+                request_id: context.request_id,
+                trace_id: context.trace_id,
+                config_path: request.config_path,
+                operator: context.operator,
+                reason: request.reason,
+                retention: request.retention,
+            })
+    }
+
+    pub fn change_worker_schedule(
+        &self,
+        context: ProductOperatorContext,
+        request: ProductChangeWorkerScheduleRequest,
+    ) -> UnderlayResult<WorkerConfigAdminResponse> {
+        self.worker_config_admin()
+            .change_worker_schedule(ChangeWorkerScheduleRequest {
+                request_id: context.request_id,
+                trace_id: context.trace_id,
+                config_path: request.config_path,
+                operator: context.operator,
+                reason: request.reason,
+                target: request.target,
+                schedule: request.schedule,
+            })
+    }
+
+    fn worker_config_admin(&self) -> WorkerConfigAdminManager {
+        WorkerConfigAdminManager::new(
+            self.authorization_policy.clone(),
+            self.product_audit_store.clone(),
+        )
     }
 
     fn authorize_context(

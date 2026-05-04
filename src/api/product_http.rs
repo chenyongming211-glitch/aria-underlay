@@ -5,11 +5,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::operations::ListOperationSummariesRequest;
 use crate::api::product_api::{ProductApiRequest, ProductOpsApi};
-use crate::api::product_ops::ExportProductAuditRequest;
+use crate::api::product_ops::{
+    ExportProductAuditRequest, ProductChangeJournalGcRetentionRequest,
+    ProductChangeSummaryRetentionRequest, ProductChangeWorkerScheduleRequest,
+};
 use crate::UnderlayError;
 
 pub const OPERATION_SUMMARIES_QUERY_PATH: &str = "/product/v1/operations/summaries:query";
 pub const PRODUCT_AUDIT_EXPORT_PATH: &str = "/product/v1/product-audit:export";
+pub const WORKER_CONFIG_SUMMARY_RETENTION_CHANGE_PATH: &str =
+    "/product/v1/worker-config/operation-summary-retention:change";
+pub const WORKER_CONFIG_JOURNAL_GC_RETENTION_CHANGE_PATH: &str =
+    "/product/v1/worker-config/journal-gc-retention:change";
+pub const WORKER_CONFIG_SCHEDULE_CHANGE_PATH: &str =
+    "/product/v1/worker-config/schedule:change";
 
 const REQUEST_ID_HEADER: &str = "x-aria-request-id";
 const TRACE_ID_HEADER: &str = "x-aria-trace-id";
@@ -67,9 +76,23 @@ impl ProductHttpRouter {
             (ProductHttpMethod::Post, PRODUCT_AUDIT_EXPORT_PATH) => {
                 self.handle_product_audit_export(request)
             }
-            (_, OPERATION_SUMMARIES_QUERY_PATH | PRODUCT_AUDIT_EXPORT_PATH) => {
-                method_not_allowed_response(&request, "POST")
+            (ProductHttpMethod::Post, WORKER_CONFIG_SUMMARY_RETENTION_CHANGE_PATH) => {
+                self.handle_summary_retention_change(request)
             }
+            (ProductHttpMethod::Post, WORKER_CONFIG_JOURNAL_GC_RETENTION_CHANGE_PATH) => {
+                self.handle_journal_gc_retention_change(request)
+            }
+            (ProductHttpMethod::Post, WORKER_CONFIG_SCHEDULE_CHANGE_PATH) => {
+                self.handle_worker_schedule_change(request)
+            }
+            (
+                _,
+                OPERATION_SUMMARIES_QUERY_PATH
+                | PRODUCT_AUDIT_EXPORT_PATH
+                | WORKER_CONFIG_SUMMARY_RETENTION_CHANGE_PATH
+                | WORKER_CONFIG_JOURNAL_GC_RETENTION_CHANGE_PATH
+                | WORKER_CONFIG_SCHEDULE_CHANGE_PATH,
+            ) => method_not_allowed_response(&request, "POST"),
             _ => not_found_response(&request),
         }
     }
@@ -91,6 +114,45 @@ impl ProductHttpRouter {
         match decode_body::<ExportProductAuditRequest>(&request)
             .and_then(|body| product_api_request(&request, body))
             .and_then(|api_request| self.api.export_product_audit(api_request))
+        {
+            Ok(response) => json_response(200, &response),
+            Err(error) => underlay_error_response(&request, error),
+        }
+    }
+
+    fn handle_summary_retention_change(
+        &self,
+        request: ProductHttpRequest,
+    ) -> ProductHttpResponse {
+        match decode_body::<ProductChangeSummaryRetentionRequest>(&request)
+            .and_then(|body| product_api_request(&request, body))
+            .and_then(|api_request| self.api.change_summary_retention(api_request))
+        {
+            Ok(response) => json_response(200, &response),
+            Err(error) => underlay_error_response(&request, error),
+        }
+    }
+
+    fn handle_journal_gc_retention_change(
+        &self,
+        request: ProductHttpRequest,
+    ) -> ProductHttpResponse {
+        match decode_body::<ProductChangeJournalGcRetentionRequest>(&request)
+            .and_then(|body| product_api_request(&request, body))
+            .and_then(|api_request| self.api.change_journal_gc_retention(api_request))
+        {
+            Ok(response) => json_response(200, &response),
+            Err(error) => underlay_error_response(&request, error),
+        }
+    }
+
+    fn handle_worker_schedule_change(
+        &self,
+        request: ProductHttpRequest,
+    ) -> ProductHttpResponse {
+        match decode_body::<ProductChangeWorkerScheduleRequest>(&request)
+            .and_then(|body| product_api_request(&request, body))
+            .and_then(|api_request| self.api.change_worker_schedule(api_request))
         {
             Ok(response) => json_response(200, &response),
             Err(error) => underlay_error_response(&request, error),

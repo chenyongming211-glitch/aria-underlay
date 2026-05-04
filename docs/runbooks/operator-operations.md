@@ -469,6 +469,9 @@ The header extractor and static verifier are not production identity models. The
 | --- | --- | --- | --- |
 | `POST` | `/product/v1/operations/summaries:query` | `ListOperationSummariesRequest` JSON | `ProductApiResponse<ListOperationSummariesResponse>` |
 | `POST` | `/product/v1/product-audit:export` | `ExportProductAuditRequest` JSON | `ProductApiResponse<ExportProductAuditResponse>` |
+| `POST` | `/product/v1/worker-config/operation-summary-retention:change` | `ProductChangeSummaryRetentionRequest` JSON | `ProductApiResponse<WorkerConfigAdminResponse>` |
+| `POST` | `/product/v1/worker-config/journal-gc-retention:change` | `ProductChangeJournalGcRetentionRequest` JSON | `ProductApiResponse<WorkerConfigAdminResponse>` |
+| `POST` | `/product/v1/worker-config/schedule:change` | `ProductChangeWorkerScheduleRequest` JSON | `ProductApiResponse<WorkerConfigAdminResponse>` |
 
 Required HTTP headers:
 
@@ -514,8 +517,12 @@ Current product boundary behavior:
 | --- | --- | --- |
 | List operation summaries | `ListOperationSummaries` | Read-only; no product audit record in this package. |
 | Export product audit history | `ExportAuditHistory` | Writes `product_audit.export_requested` before returning records. |
+| Change worker retention policy | `ChangeRetentionPolicy` | Writes `daemon.retention_change_requested` before changing config. |
+| Change worker schedule | `ChangeDaemonSchedule` | Writes `daemon.schedule_change_requested` before changing config. |
 
 Audit export is fail-closed. If the export action cannot be appended to product audit, no audit records are returned.
+
+Worker config mutation is also fail-closed. If audit append, authorization, validation, or config parsing fails, the config file is not changed. These routes update the configured worker JSON file only; they do not hot-reload a running daemon.
 
 Still missing from the product layer:
 
@@ -535,4 +542,5 @@ docs/superpowers/specs/2026-05-03-product-http-routing-design.md
 docs/superpowers/specs/2026-05-04-product-session-identity-boundary-design.md
 docs/superpowers/specs/2026-05-04-product-http-listener-design.md
 docs/superpowers/specs/2026-05-04-product-jwt-jwks-identity-design.md
+docs/superpowers/specs/2026-05-04-product-worker-config-admin-design.md
 ```

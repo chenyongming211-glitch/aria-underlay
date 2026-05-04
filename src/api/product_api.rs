@@ -7,9 +7,11 @@ use crate::api::operations::{
     ListOperationSummariesRequest, ListOperationSummariesResponse,
 };
 use crate::api::product_ops::{
-    ExportProductAuditRequest, ExportProductAuditResponse, ProductOperatorContext,
-    ProductOpsManager,
+    ExportProductAuditRequest, ExportProductAuditResponse,
+    ProductChangeJournalGcRetentionRequest, ProductChangeSummaryRetentionRequest,
+    ProductChangeWorkerScheduleRequest, ProductOperatorContext, ProductOpsManager,
 };
+use crate::api::worker_config_admin::WorkerConfigAdminResponse;
 use crate::authz::{RbacRole, StaticAuthorizationPolicy};
 use crate::telemetry::{OperationSummaryStore, ProductAuditStore};
 use crate::{UnderlayError, UnderlayResult};
@@ -110,6 +112,45 @@ impl ProductOpsApi {
         let body = self
             .manager_for_session(&session)
             .export_product_audit(operator_context(&metadata, &session), request.body)?;
+        Ok(api_response(metadata, session, trace_id, body))
+    }
+
+    pub fn change_summary_retention(
+        &self,
+        request: ProductApiRequest<ProductChangeSummaryRetentionRequest>,
+    ) -> UnderlayResult<ProductApiResponse<WorkerConfigAdminResponse>> {
+        let metadata = request.metadata();
+        let session = self.session_extractor.extract(&metadata)?;
+        let trace_id = trace_id_or_request_id(&metadata);
+        let body = self
+            .manager_for_session(&session)
+            .change_summary_retention(operator_context(&metadata, &session), request.body)?;
+        Ok(api_response(metadata, session, trace_id, body))
+    }
+
+    pub fn change_journal_gc_retention(
+        &self,
+        request: ProductApiRequest<ProductChangeJournalGcRetentionRequest>,
+    ) -> UnderlayResult<ProductApiResponse<WorkerConfigAdminResponse>> {
+        let metadata = request.metadata();
+        let session = self.session_extractor.extract(&metadata)?;
+        let trace_id = trace_id_or_request_id(&metadata);
+        let body = self
+            .manager_for_session(&session)
+            .change_journal_gc_retention(operator_context(&metadata, &session), request.body)?;
+        Ok(api_response(metadata, session, trace_id, body))
+    }
+
+    pub fn change_worker_schedule(
+        &self,
+        request: ProductApiRequest<ProductChangeWorkerScheduleRequest>,
+    ) -> UnderlayResult<ProductApiResponse<WorkerConfigAdminResponse>> {
+        let metadata = request.metadata();
+        let session = self.session_extractor.extract(&metadata)?;
+        let trace_id = trace_id_or_request_id(&metadata);
+        let body = self
+            .manager_for_session(&session)
+            .change_worker_schedule(operator_context(&metadata, &session), request.body)?;
         Ok(api_response(metadata, session, trace_id, body))
     }
 
