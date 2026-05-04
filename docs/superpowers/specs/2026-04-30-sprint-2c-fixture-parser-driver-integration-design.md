@@ -1,42 +1,38 @@
-# Sprint 2C Fixture Parser Driver Integration Design
+# Sprint 2C 样本解析器驱动集成设计文档
 
-## Goal
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-Exercise the fixture-verified Huawei/H3C running-state parsers through the NETCONF-backed driver and backend, without making fixture parsers production-ready or depending on live switches.
+## 设计目标
 
-## Scope
+让 样本验证 解析器 通过 NETCONF-backed 驱动 测试路径运行，但不标记 生产就绪。
 
-This phase proves the adapter can read fixture XML from a NETCONF session, parse it into the standard observed-state shape, expose that shape through `GetCurrentState`, and use it for `Verify`.
+## 设计原则
 
-The default production path stays fail-closed:
+- 复用现有架构边界，不为单个需求新造大平台。
+- 读写路径要可测试、可审计、失败语义清晰。
+- 本地/样本/骨架 能力只证明开发边界，不代表生产可用。
+- 涉及真实交换机、真实 ingress、安装包、外部系统的内容默认不在当前范围。
 
-- `NetconfBackedDriver` without an explicit fixture flag still rejects Huawei/H3C parser selection before any device read.
-- unknown vendors still return `STATE_PARSER_VENDOR_UNSUPPORTED`.
-- fixture-verified parsers remain `production_ready=False`.
+## 行为边界
 
-## Driver Policy
+- 对外暴露的 API 或 CLI 必须有明确输入、输出和错误码。
+- 高风险操作必须保留 request_id、trace_id、operator、reason 等可追踪字段。
+- 文件写入采用原子写或 append-only 语义，避免半写入状态。
+- 配置无效时拒绝启动或拒绝采用新配置，不静默降级。
 
-Add an opt-in constructor flag on `NetconfBackedDriver` for tests and offline fixture validation:
+## 测试要求
 
-```python
-NetconfBackedDriver(backend, allow_fixture_verified_parser=True)
-```
+- 覆盖成功路径。
+- 覆盖权限/输入/配置错误。
+- 覆盖写失败或外部依赖失败时的 失败关闭 行为。
+- 没有真实交换机时，只允许 模拟适配器、样本、快照 和离线 校验器 验证。
 
-When the flag is false, driver parser injection keeps using the default registry gate. When true, driver parser injection calls `state_parser_for_vendor(..., allow_fixture_verified=True)`.
 
-This keeps production behavior conservative while allowing integration tests to cover the real parser code path through the same driver/backend boundary.
+## 当前收敛边界
 
-## Test Coverage
-
-Add focused tests under `adapter-python/tests/test_netconf_backend.py`:
-
-- driver `GetCurrentState` returns normalized Huawei fixture state.
-- driver `Verify` succeeds when desired state matches fixture state.
-- driver `Verify` returns `VERIFY_FAILED` when desired differs from fixture state.
-- scoped VLAN/interface reads produce scoped observed state and scoped NETCONF filter.
-- empty scope returns an empty state and performs no device read.
-- default driver path still rejects fixture parser selection before device read.
-
-## Documentation
-
-Update project progress docs to mark Sprint 2C as local fixture integration complete, while clearly stating that fixture-verified is not production-ready and real device XML validation remains open.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

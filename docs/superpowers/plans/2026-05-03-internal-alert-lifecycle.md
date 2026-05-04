@@ -1,57 +1,37 @@
-# Internal Alert Lifecycle Implementation Plan
+# 内部告警生命周期实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Add an internal, auditable operation-alert lifecycle so operators can acknowledge, resolve, suppress, and expire alerts without external delivery adapters.
+## 目标
 
-**Architecture:** Keep `OperationAlert` as immutable generated evidence in the existing JSONL alert sink. Add a separate lifecycle state store keyed by `dedupe_key`, a small API manager that enforces RBAC and writes product audit before changing state, then expose it through `aria-underlay-ops` commands and enriched alert listing.
+支持告警 acknowledge、resolve、suppress、expire，并记录状态历史。
 
-**Tech Stack:** Rust, serde JSON/JSONL file stores, existing `AuthorizationPolicy`, existing `ProductAuditStore`, CLI integration tests.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: Lifecycle Store And API Tests
+## 主要任务
 
-**Files:**
-- Create: `tests/alert_lifecycle_tests.rs`
-- Modify: `src/telemetry/alerts.rs`
-- Modify: `src/telemetry/audit.rs`
-- Modify: `src/telemetry/mod.rs`
-- Modify: `src/authz.rs`
-- Create: `src/api/alert_lifecycle.rs`
-- Modify: `src/api/mod.rs`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [x] Write tests that prove `Operator` can acknowledge an alert, product audit is written first, lifecycle history is preserved, terminal states reject later transitions, and audit-write failure leaves lifecycle state unchanged.
-- [x] Run `cargo test --test alert_lifecycle_tests` and confirm the new tests fail because the lifecycle types and manager do not exist yet. Local Rust toolchain is unavailable in this workspace; GitHub Actions is the Rust verification gate.
-- [x] Implement `OperationAlertLifecycleStatus`, lifecycle records/events, in-memory and JSON-file lifecycle stores.
-- [x] Add alert lifecycle `AdminAction` values and fail-closed role rules.
-- [x] Add `ProductAuditRecord::alert_lifecycle_transition` and a JSONL `JsonFileProductAuditStore`.
-- [x] Add `AlertLifecycleManager` that validates input, authorizes, writes product audit, then transitions lifecycle state.
-- [x] Run `cargo test --test alert_lifecycle_tests` and confirm the lifecycle tests pass. Local Rust toolchain is unavailable in this workspace; GitHub Actions is the Rust verification gate.
+## 验证要求
 
-### Task 2: CLI Lifecycle Commands
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-**Files:**
-- Modify: `src/ops_cli.rs`
-- Modify: `tests/ops_cli_tests.rs`
 
-- [x] Add a CLI test that seeds an alert, runs `ack-alert`, then verifies `list-alerts` includes `lifecycle.status = Acknowledged` and product audit contains `alert.acknowledged`.
-- [x] Run `cargo test --test ops_cli_tests` and confirm the new CLI test fails before implementation. Local Rust toolchain is unavailable in this workspace; GitHub Actions is the Rust verification gate.
-- [x] Add `ack-alert`, `resolve-alert`, `suppress-alert`, and `expire-alert` commands.
-- [x] Require `--alert-state-path`, `--product-audit-path`, `--dedupe-key`, `--operator`, `--role`, and `--reason` for lifecycle writes.
-- [x] Enrich `list-alerts` and `alert-summary` with optional `--alert-state-path` lifecycle status counts while keeping existing top-level alert fields stable.
-- [x] Run `cargo test --test ops_cli_tests` and confirm the CLI tests pass. Local Rust toolchain is unavailable in this workspace; GitHub Actions is the Rust verification gate.
+## 当前收敛边界
 
-### Task 3: Documentation And Verification
-
-**Files:**
-- Modify: `docs/runbooks/operator-operations.md`
-- Modify: `docs/progress-2026-04-26.md`
-- Modify: `docs/bug-inventory-current-2026-05-01.md`
-- Modify: `docs/superpowers/specs/2026-05-03-product-audit-rbac-design.md`
-
-- [x] Document lifecycle commands, required files, status meanings, RBAC rules, and product-audit behavior.
-- [x] Update current progress and bug inventory so internal alert lifecycle is no longer listed as fully open.
-- [x] Run `git diff --check`.
-- [x] Run the local test commands available in this checkout.
-- [ ] Commit only the lifecycle-related files, push, and wait for GitHub Actions to pass before starting the next package.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

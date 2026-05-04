@@ -1,110 +1,37 @@
-# Sprint 2I Transaction Ops Entry Implementation Plan
+# Sprint 2I 事务运维入口实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Make unresolved `InDoubt` transactions discoverable and manually resolvable through an auditable, offline ops entry that does not require real switches.
+## 目标
 
-**Architecture:** Add a read-only `list_in_doubt_transactions` service API backed by the transaction journal, then expose both list and `force_resolve_transaction` through a small example command that operates on a JSON journal directory. Keep the existing force-resolve safety gates: only `InDoubt` can be resolved, `operator` and `reason` are required, and `break_glass_enabled` must be explicit.
+提供不触碰设备的事务运维入口，用于查看和解除 InDoubt。
 
-**Tech Stack:** Rust 2021, serde/serde_json, existing `TxJournalStore`, existing `AriaUnderlayService`, existing integration tests.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: List In-Doubt Transactions API
+## 主要任务
 
-**Files:**
-- Create: `src/api/transactions.rs`
-- Modify: `src/api/mod.rs`
-- Modify: `src/api/underlay_service.rs`
-- Modify: `src/api/service.rs`
-- Test: `tests/recovery_tests.rs`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [x] **Step 1: Write the failing test**
+## 验证要求
 
-Add a service test that stores one `InDoubt`, one `Prepared`, and one `ForceResolved` record, calls `list_in_doubt_transactions`, and expects only the `InDoubt` record with its error history.
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-- [x] **Step 2: Run test to verify it fails**
 
-Run: `cargo test list_in_doubt_transactions_returns_only_in_doubt_records`
+## 当前收敛边界
 
-Expected if Rust is installed: FAIL because the API does not exist yet.
-
-Local note: this shell returned `zsh:1: command not found: cargo`, so Rust RED/GREEN verification is deferred to GitHub Actions.
-
-- [x] **Step 3: Write minimal implementation**
-
-Add request/response structs, export the module, add the trait method, and implement the method by filtering `journal.list_recoverable()` for `TxPhase::InDoubt`.
-
-- [x] **Step 4: Run test to verify it passes**
-
-Run: `cargo test list_in_doubt_transactions_returns_only_in_doubt_records`
-
-Expected if Rust is installed: PASS.
-
-Local note: this shell returned `zsh:1: command not found: cargo`, so Rust pass/fail is verified by CI.
-
-### Task 2: Journal-Directory Ops Example
-
-**Files:**
-- Create: `examples/transaction_ops.rs`
-- Modify: `docs/progress-2026-04-26.md`
-- Test: GitHub Actions Rust example compilation
-
-- [x] **Step 1: Add the example command**
-
-Create `transaction_ops` with two commands:
-
-```text
-cargo run --example transaction_ops -- list-in-doubt --journal-root /path/to/journal
-cargo run --example transaction_ops -- force-resolve --journal-root /path/to/journal --tx-id tx-123 --operator alice --reason "verified out of band" --break-glass
-```
-
-- [x] **Step 2: Preserve fail-closed behavior**
-
-The example must call service methods instead of editing journal JSON directly, so the existing validation and audit metadata remain the only mutation path.
-
-- [x] **Step 3: Update progress docs**
-
-Document that Sprint 2I provides a non-device-touching ops entry for listing and resolving `InDoubt` transactions, but does not add a production RPC server or UI.
-
-### Task 3: Verification
-
-**Files:**
-- Existing test and docs files from Tasks 1-2
-
-- [x] **Step 1: Local checks**
-
-Run:
-
-```bash
-python3 -m pytest adapter-python/tests -q
-git diff --check
-```
-
-Result: `python3 -m pytest adapter-python/tests -q` passed with `188 passed`; `git diff --check` exited cleanly.
-
-- [x] **Step 2: Rust checks**
-
-Run locally if available:
-
-```bash
-cargo test list_in_doubt_transactions_returns_only_in_doubt_records
-cargo test recovery
-cargo check --examples
-```
-
-If local Rust is unavailable, push and use GitHub Actions as the Rust verification gate.
-
-Result: local Rust was unavailable. GitHub Actions run `25167543318` passed Rust `cargo check --all-targets`, Rust `cargo test`, Python adapter tests, and fake-adapter integration jobs.
-
-- [x] **Step 3: Commit and push**
-
-Commit message:
-
-```text
-feat: add transaction ops entry
-```
-
-Watch GitHub Actions until the pushed commit is green.
-
-Result: committed and pushed `7377be2 feat: add transaction ops entry`; CI run `25167543318` completed successfully.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

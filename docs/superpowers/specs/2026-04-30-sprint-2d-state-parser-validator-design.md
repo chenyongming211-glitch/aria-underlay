@@ -1,54 +1,38 @@
-# Sprint 2D State Parser Validator Design
+# Sprint 2D 状态解析器校验器设计文档
 
-## Goal
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-Add an offline validator for NETCONF running-state XML samples so Huawei/H3C real `get-config` captures can be checked locally before any parser is marked production-ready.
+## 设计目标
 
-## Scope
+提供离线 XML 校验器，真实样本进入前先验证 解析器 输出和错误边界。
 
-This phase adds a Python adapter CLI entrypoint:
+## 设计原则
 
-```bash
-aria-underlay-state-parse --vendor huawei --xml sample.xml
-```
+- 复用现有架构边界，不为单个需求新造大平台。
+- 读写路径要可测试、可审计、失败语义清晰。
+- 本地/样本/骨架 能力只证明开发边界，不代表生产可用。
+- 涉及真实交换机、真实 ingress、安装包、外部系统的内容默认不在当前范围。
 
-The command reads XML from a file, selects a fixture-verified parser with `allow_fixture_verified=True`, parses the XML, and prints the normalized observed-state JSON shape used by the adapter.
+## 行为边界
 
-The CLI is intentionally offline:
+- 对外暴露的 API 或 CLI 必须有明确输入、输出和错误码。
+- 高风险操作必须保留 request_id、trace_id、operator、reason 等可追踪字段。
+- 文件写入采用原子写或 append-only 语义，避免半写入状态。
+- 配置无效时拒绝启动或拒绝采用新配置，不静默降级。
 
-- it does not connect to a switch;
-- it does not call `NetconfBackedDriver`;
-- it does not change production parser selection;
-- it does not mark parser profiles as production-ready.
+## 测试要求
 
-## Behavior
+- 覆盖成功路径。
+- 覆盖权限/输入/配置错误。
+- 覆盖写失败或外部依赖失败时的 失败关闭 行为。
+- 没有真实交换机时，只允许 模拟适配器、样本、快照 和离线 校验器 验证。
 
-Successful parsing prints deterministic JSON to stdout:
 
-```json
-{
-  "interfaces": [],
-  "vlans": []
-}
-```
+## 当前收敛边界
 
-The command supports optional scope flags:
-
-- `--vlan 100`, repeatable.
-- `--interface GE1/0/1`, repeatable.
-- `--full`, default when no scope flags are provided.
-
-Parser or registry failures return a non-zero exit code and print a compact JSON error to stderr containing the adapter error code and raw summary.
-
-## Testing
-
-Tests exercise the CLI through direct `main(argv)` calls:
-
-- Huawei fixture parses and returns normalized JSON.
-- scope flags filter VLAN/interface output.
-- unsupported vendor fails with `STATE_PARSER_VENDOR_UNSUPPORTED`.
-- invalid XML fails with `NETCONF_STATE_PARSE_FAILED`.
-
-## Production Boundary
-
-The validator is a sample qualification tool only. It gives the team a repeatable way to evaluate real XML captures, but parser promotion still requires separate evidence and a deliberate `production_ready=True` change.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

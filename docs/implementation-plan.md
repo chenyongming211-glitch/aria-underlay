@@ -31,9 +31,9 @@ Rust 负责：
 - 标准 intent。
 - 单 endpoint 事务状态机。
 - 多 endpoint 批量编排。
-- transaction journal。
-- drift auditor。
-- lock strategy。
+- 事务日志。
+- 漂移审计器。
+- 锁策略。
 - GC。
 - RFC-002 事件。
 - RFC-015 审计。
@@ -41,34 +41,34 @@ Rust 负责：
 Python 负责：
 
 - 设备连接。
-- capability probe。
-- 厂商 driver。
+- 能力 probe。
+- 厂商 驱动。
 - NETCONF / NAPALM / Netmiko 后端。
 - 设备级 diff。
-- rollback artifact。
+- 回滚工件。
 - 单设备 prepare / commit / rollback / verify。
 
 第一阶段只实现：
 
 - 小规模 underlay 管控域，通常 1 到 2 个管理 endpoint，后续自然扩展到少量多 endpoint 场景。
 - VLAN。
-- interface description。
-- access port。
-- trunk port。
+- 接口 description。
+- access 端口。
+- trunk 端口。
 - confirmed-commit，如果设备支持。
 - CLI / running fallback 的 best-effort rollback。
-- drift auditor。
+- 漂移审计器。
 - lock retry。
 - force unlock，默认关闭。
 - journal / artifact GC。
 
 当前代码仍保留 `SwitchPairIntent` 作为 MLAG 双管理 IP 场景的兼容入口。后续主模型应演进为 `UnderlayDomainIntent`，详见：
 
-- [Underlay Domain 模型演进计划](./underlay-domain-model-plan.md)
+- [Underlay 管控域模型演进计划](./underlay-domain-model-plan.md)
 
 ## 2. 开发原则
 
-### 2.1 Contract First
+### 2.1 契约先行
 
 先稳定 `proto/aria_underlay_adapter.proto`，再写 Rust/Python 实现。
 
@@ -92,9 +92,9 @@ AdapterError
 "<vlan><id>100</id></vlan>"
 ```
 
-### 2.2 Transaction Owned by Rust
+### 2.2 事务由 Rust 负责
 
-Python Adapter 可以执行单设备动作，但不能决定最终 operation 状态。
+Python 适配器 可以执行单设备动作，但不能决定最终 operation 状态。
 
 Rust 决定：
 
@@ -105,25 +105,25 @@ Rust 决定：
 - 是否进入 `InDoubt`。
 - 最终 operation 状态。
 
-### 2.3 Adapter Must Be Recoverable
+### 2.3 适配器必须可恢复
 
-Python Adapter 可以进程无状态，但事务产物不能无状态。
+Python 适配器 可以进程无状态，但事务产物不能无状态。
 
 必须持久化：
 
-- rollback artifact。
-- running config backup。
+- 回滚工件。
+- 运行配置备份。
 - prepared tx metadata。
-- backend result summary。
+- 后端 result summary。
 
-恢复 RPC 不能只传 `tx_id`。Rust journal 是恢复决策的唯一权威来源，调用 Adapter `Recover` 时必须同时传：
+恢复 RPC 不能只传 `tx_id`。Rust journal 是恢复决策的唯一权威来源，调用 适配器 `Recover` 时必须同时传：
 
 - `strategy`：原事务使用的下发策略，例如 confirmed-commit 或 candidate commit。
 - `action`：Rust 根据 journal phase 得出的恢复动作，例如 discard prepared changes 或 adapter recover。
 
-Adapter 只能执行该动作，不能自行推断最终事务语义。无法证明最终状态时必须返回 `InDoubt` 或结构化失败，不能返回成功。
+适配器 只能执行该动作，不能自行推断最终事务语义。无法证明最终状态时必须返回 `InDoubt` 或结构化失败，不能返回成功。
 
-### 2.4 Degraded Must Be Explicit
+### 2.4 降级必须显式
 
 任何非 candidate / confirmed-commit 路径都必须显式标记 degraded。
 
@@ -131,19 +131,19 @@ Adapter 只能执行该动作，不能自行推断最终事务语义。无法证
 
 - warning。
 - degrade reason。
-- backend kind。
-- rollback artifact reference。
+- 后端 kind。
+- 回滚工件 reference。
 
-### 2.5 ACID Must Be Preserved
+### 2.5 必须保持 ACID 语义
 
 产品开发阶段必须把事务性作为硬要求，单 management endpoint 的配置下发必须满足 ACID 四个特性。
 
 开发检查表：
 
 - Atomicity：单 endpoint 内 prepare、commit、verify、finalize 不能半成功；失败必须 rollback / recover / InDoubt。
-- Consistency：事务前后必须满足 intent validation、capability check、structured diff 和 post-commit verify。
+- Consistency：事务前后必须满足 intent validation、能力 check、structured diff 和 post-commit verify。
 - Isolation：同一 endpoint 只能有一个 writer；必须有 Rust 本地锁和设备侧 lock / 后端锁。
-- Durability：事务开始后必须写 journal；rollback artifact、running backup、confirmed commit 恢复信息必须可恢复。
+- Durability：事务开始后必须写 journal；回滚工件、running backup、confirmed commit 恢复信息必须可恢复。
 
 实现约束：
 
@@ -243,12 +243,12 @@ aria-underlay/
 │   │   │   ├── cisco.py
 │   │   │   ├── ruijie.py
 │   │   │   └── legacy_cli.py
-│   │   ├── backends/
+│   │   ├── 后端s/
 │   │   │   ├── __init__.py
 │   │   │   ├── base.py
 │   │   │   ├── netconf.py
-│   │   │   ├── napalm_backend.py
-│   │   │   └── netmiko_backend.py
+│   │   │   ├── napalm_后端.py
+│   │   │   └── netmiko_后端.py
 │   │   ├── state.py
 │   │   ├── normalize.py
 │   │   ├── diff.py
@@ -275,7 +275,7 @@ aria-underlay/
 
 第一版 proto 只覆盖 VLAN 和接口基础能力。
 
-### 4.1 Service
+### 4.1 服务接口
 
 ```proto
 service UnderlayAdapter {
@@ -338,7 +338,7 @@ enum RecoveryAction {
 }
 ```
 
-### 4.3 关键 message
+### 4.3 关键消息
 
 ```proto
 message RequestContext {
@@ -370,7 +370,7 @@ message DeviceCapability {
   bool supports_persist_id = 9;
   bool supports_rollback_on_error = 10;
   bool supports_writable_running = 11;
-  repeated BackendKind supported_backends = 12;
+  repeated BackendKind supported_后端s = 12;
 }
 
 message VlanConfig {
@@ -418,7 +418,7 @@ message RecoverRequest {
 
 字段编号在第一版确定后不要随意重排。后续新增字段只追加。
 
-## 5. Rust Core 第一批模块
+## 5. Rust 核心第一批模块
 
 ### 5.1 `api`
 
@@ -496,7 +496,7 @@ Ready -> Maintenance
 
 - 封装 tonic gRPC client。
 - 把 Rust model 映射到 Protobuf。
-- 把 Adapter result 映射回 Rust result。
+- 把 适配器 result 映射回 Rust result。
 - 统一 timeout。
 - 统一 retry。
 - 统一 tracing fields。
@@ -522,7 +522,7 @@ Ready -> Maintenance
 - `journal.rs`
 - `lock_strategy.rs`
 
-先不要直接写完整 confirmed-commit。先把状态机和 Adapter 调用链打通。
+先不要直接写完整 confirmed-commit。先把状态机和 适配器 调用链打通。
 
 第一版状态流：
 
@@ -548,7 +548,7 @@ InDoubt
 
 可以先不做常驻 runtime，先实现可被测试调用的 `run_once()`。
 
-## 6. Python Adapter 第一批模块
+## 6. Python 适配器第一批模块
 
 ### 6.1 `server.py`
 
@@ -557,7 +557,7 @@ InDoubt
 - 启动 gRPC server。
 - 加载配置。
 - 注册 service。
-- 注入 driver registry。
+- 注入 驱动 registry。
 - 注入 artifact store。
 
 第一版可通过环境变量配置：
@@ -584,12 +584,12 @@ class DeviceDriver:
     def force_unlock(self, device, lock_owner, reason): ...
 ```
 
-### 6.3 `backends/netconf.py`
+### 6.3 `后端s/netconf.py`
 
 第一批实现：
 
 - connect。
-- get server hello / capabilities。
+- get server hello / 能力。
 - get-config。
 - lock。
 - unlock。
@@ -611,8 +611,8 @@ ncclient
 
 职责：
 
-- 保存 rollback artifact。
-- 读取 rollback artifact。
+- 保存 回滚工件。
+- 读取 回滚工件。
 - 删除 artifact。
 - 计算 checksum。
 - 按 tx_id / device_id 查询 artifact。
@@ -634,7 +634,7 @@ ncclient
 第一版只支持：
 
 - VLAN。
-- interface description。
+- 接口 description。
 - access。
 - trunk。
 
@@ -709,7 +709,7 @@ tonic-build = "0.12"
 - `onboard_device(device_id)`。
 - 状态切换 `Pending -> Probing`。
 - 调用 adapter `GetCapabilities`。
-- 根据结果写入 capability profile。
+- 根据结果写入 能力 配置档案。
 - 进入 `Ready` / `Degraded` / `Unsupported` / `Unreachable` / `AuthFailed`。
 
 #### 7.1.6 `src/adapter_client/client.rs`
@@ -748,11 +748,11 @@ NAPALM / Netmiko 可以 Sprint 1 加。
 - 先支持 fake mode。
 - 如果配置了真实设备，则调用 `NetconfBackend.get_capabilities`。
 
-#### 7.1.9 `adapter-python/aria_underlay_adapter/backends/netconf.py`
+#### 7.1.9 `adapter-python/aria_underlay_adapter/后端s/netconf.py`
 
-实现最小 capability probe。
+实现最小 能力 probe。
 
-真实设备不可用时，测试使用 fake backend。
+真实设备不可用时，测试使用 fake 后端。
 
 #### 7.1.10 `examples/register_device.rs`
 
@@ -768,7 +768,7 @@ NAPALM / Netmiko 可以 Sprint 1 加。
 
 - 注册设备。
 - 触发 onboarding。
-- 打印 capability profile。
+- 打印 能力 配置档案。
 
 ### 7.2 Sprint 0 验收命令
 
@@ -803,12 +803,12 @@ cargo run --example capability_probe
 
 - Rust 能生成 proto stub。
 - Python 能生成 proto stub。
-- Python Adapter 能启动。
-- Rust 能连上 Python Adapter。
-- `GetCapabilities` fake backend 返回成功。
+- Python 适配器 能启动。
+- Rust 能连上 Python 适配器。
+- `GetCapabilities` fake 后端 返回成功。
 - 注册设备后状态为 `Pending`。
 - onboarding 后状态为 `Ready` 或 `Degraded`。
-- capability profile 被写入 inventory。
+- 能力 配置档案 被写入 inventory。
 
 ## 8. Sprint 1 详细任务
 
@@ -819,12 +819,12 @@ Python Adapter 打通 NETCONF 基础 RPC
 Rust 能通过 Adapter 完成真实设备 capability probe
 ```
 
-### 8.1 Python NETCONF backend
+### 8.1 Python NETCONF 后端
 
 实现：
 
 - SSH / NETCONF connect。
-- get capabilities。
+- get 能力。
 - get-config。
 - lock。
 - unlock。
@@ -841,7 +841,7 @@ Rust 能通过 Adapter 完成真实设备 capability probe
 - 不把原始 XML 作为主要成功结果。
 - raw error 只进入 `raw_error_summary`。
 
-### 8.2 Capability Classification
+### 8.2 能力分类
 
 Rust 侧实现策略选择：
 
@@ -855,10 +855,10 @@ otherwise -> Unsupported
 
 ### 8.3 验收标准
 
-- 真实或 mock NETCONF 设备上 `GetCapabilities` 成功。
-- 真实或 mock NETCONF 设备上 `get-config` 成功。
+- 真实或 模拟 NETCONF 设备上 `GetCapabilities` 成功。
+- 真实或 模拟 NETCONF 设备上 `get-config` 成功。
 - lock / unlock 成功。
-- capability classification 正确。
+- 能力 classification 正确。
 - 不支持 NETCONF 的 fake 设备返回 degraded fallback。
 
 ## 9. Sprint 2 详细任务
@@ -874,7 +874,7 @@ Adapter 能接收 DesiredDeviceState
 
 - 定义 Rust `SwitchPairIntent`。
 - 定义 Rust `DeviceDesiredState`。
-- 定义 VLAN / interface model。
+- 定义 VLAN / 接口 model。
 - 定义 Protobuf mapping。
 - 实现 planner。
 - 实现 intent validation。
@@ -883,8 +883,8 @@ Adapter 能接收 DesiredDeviceState
 验收：
 
 - Rust 可以从 `SwitchPairIntent` 生成两台设备的 `DeviceDesiredState`。
-- Rust 可以调用 Adapter `DryRun`。
-- Adapter fake driver 返回 `NoChange` / `NeedChange`。
+- Rust 可以调用 适配器 `DryRun`。
+- 适配器 fake 驱动 返回 `NoChange` / `NeedChange`。
 
 ## 10. Sprint 3 详细任务
 
@@ -896,22 +896,22 @@ Python Driver 完成 VLAN / interface 的设备级 diff 和 renderer
 
 任务：
 
-- 实现 driver registry。
-- 实现 Huawei 或 H3C 的第一个真实 driver。
-- 实现 fake driver。
+- 实现 驱动 registry。
+- 实现 Huawei 或 H3C 的第一个真实 驱动。
+- 实现 fake 驱动。
 - 实现 VLAN normalize。
-- 实现 interface normalize。
+- 实现 接口 normalize。
 - 实现 dry-run diff。
-- 实现 rollback artifact 生成。
-- 实现 XML renderer 或 CLI renderer。
+- 实现 回滚工件 生成。
+- 实现 XML 渲染器 或 CLI 渲染器。
 
 验收：
 
 - 同一 desired state 重复 dry-run，第二次返回 `NoChange`。
 - VLAN create/update/delete 能生成 change summary。
-- interface description/access/trunk 能生成 change summary。
+- 接口 description/access/trunk 能生成 change summary。
 - 特殊字符能正确 escape。
-- rollback artifact 能保存到本地。
+- 回滚工件 能保存到本地。
 
 ## 11. Sprint 4 详细任务
 
@@ -952,8 +952,8 @@ ConfirmedCommit、Verify、FinalConfirm 和 InDoubt 处理跑通
 
 任务：
 
-- Adapter 实现 confirmed-commit。
-- Adapter 实现 cancel-commit。
+- 适配器 实现 confirmed-commit。
+- 适配器 实现 cancel-commit。
 - Rust 实现 ConfirmedCommit。
 - Rust 实现 post-commit verify。
 - Rust 实现 final confirm。
@@ -977,10 +977,10 @@ ConfirmedCommit、Verify、FinalConfirm 和 InDoubt 处理跑通
 | 顺序 | 任务 | 交付物 | 验收 |
 | --- | --- | --- | --- |
 | 1 | Protobuf 增加 `StateScope` | `GetCurrentStateRequest.scope`、`VerifyRequest.scope` | Rust/Python proto 均生成通过 |
-| 2 | Rust 派生 scope | `DeviceDesiredState` / `ChangeSet` -> `StateScope` | VLAN ID、interface name 精确传递 |
-| 3 | Adapter scoped state | Python Adapter 接收 scope | 先用于 verify；preflight 在没有 ownership index 前保持 full/authoritative refresh |
+| 2 | Rust 派生 scope | `DeviceDesiredState` / `ChangeSet` -> `StateScope` | VLAN ID、接口 name 精确传递 |
+| 3 | 适配器 scoped state | Python 适配器 接收 scope | 先用于 verify；预检 在没有 ownership index 前保持 full/authoritative refresh |
 | 4 | scoped verify | Verify 按 `ChangeSet` scope 校验 touched subtree | verify 不做全量状态读取 |
-| 5 | 单次 edit-config | renderer 输出一次 candidate XML | 一次 prepare 只调用一次 `edit_config` |
+| 5 | 单次 edit-config | 渲染器 输出一次 candidate XML | 一次 prepare 只调用一次 `edit_config` |
 
 `Normal v1` 固定路径：
 
@@ -994,11 +994,11 @@ apply intent
   -> Verify(change-set scope)
 ```
 
-注意：preflight diff 不能仅按 desired scope 读取 current。delete 类变更的对象已经不在 desired 中，若只查 desired scope 会漏掉待删除资源。后续引入资源 ownership index 后，preflight 可从“Aria 管理过的资源集合”派生更小 scope。
+注意：预检 diff 不能仅按 desired scope 读取 current。delete 类变更的对象已经不在 desired 中，若只查 desired scope 会漏掉待删除资源。后续引入资源 ownership index 后，预检 可从“Aria 管理过的资源集合”派生更小 scope。
 
-第一阶段开始引入 `ShadowStateStore`，用于保存每个 endpoint 最近一次 refresh / preflight / successful apply 后的结构化状态。它的定位是：
+第一阶段开始引入 `ShadowStateStore`，用于保存每个 endpoint 最近一次 refresh / 预检 / successful apply 后的结构化状态。它的定位是：
 
-- 给 drift auditor 提供 expected shadow。
+- 给 漂移审计器 提供 expected shadow。
 - 给后续 ownership index / Fast NoOp 提供基础。
 - 记录 revision，方便后续判断 shadow freshness。
 
@@ -1014,7 +1014,7 @@ confirmed-commit 能力按恢复能力分层：
 | `ConfirmedCommitSession` | confirmed-commit:1.0 | 可使用自动回滚窗口，但 session 断开后可能 InDoubt |
 | `CandidateCommit` | candidate + validate | 仅在允许降级时使用 |
 
-当前代码如果暂时只有统一 `ConfirmedCommit`，实现时必须至少保留 capability 字段，后续拆分策略枚举时不得破坏 journal 和 recovery 语义。
+当前代码如果暂时只有统一 `ConfirmedCommit`，实现时必须至少保留 能力 字段，后续拆分策略枚举时不得破坏 journal 和 recovery 语义。
 
 ## 13. Sprint 6 详细任务
 
@@ -1026,18 +1026,18 @@ Running / CLI fallback 可控降级
 
 任务：
 
-- Adapter 实现 NAPALM backend 骨架。
-- Adapter 实现 Netmiko backend 骨架。
-- Adapter 在 Commit 前保存 running backup。
-- Adapter 实现 reverse diff rollback。
-- Adapter 实现 replace rollback，如果设备支持。
+- 适配器 实现 NAPALM 后端 骨架。
+- 适配器 实现 Netmiko 后端 骨架。
+- 适配器 在 Commit 前保存 running backup。
+- 适配器 实现 reverse diff rollback。
+- 适配器 实现 replace rollback，如果设备支持。
 - Rust 对 degraded 策略做显式授权检查。
 
 验收：
 
 - 未授权 degraded 时直接失败。
 - 授权 degraded 时返回 warning。
-- Commit 前生成 rollback artifact。
+- Commit 前生成 回滚工件。
 - Commit 失败后可 best-effort rollback。
 - 无法判断状态时返回 `InDoubt`。
 
@@ -1053,26 +1053,26 @@ Sprint 7 目标：
 
 - 实现 Periodic Drift Auditor。
 - 实现 `ShadowStateStore`，先提供内存实现，后续可替换为 Aria metadata store。
-- `DriftAuditor` 支持两种输入：测试用 snapshot 列表，以及生产 worker 可接入的 `ShadowStateStore + DriftObservationSource`。
+- `DriftAuditor` 支持两种输入：测试用 快照 列表，以及生产 worker 可接入的 `ShadowStateStore + DriftObservationSource`。
 - 实现结构化 `DriftReport`，至少包含 drift type、path、expected、actual、warnings。
 - 实现 `BlockNewTransaction`。
 - 实现 lock exponential backoff。
 - 实现 force unlock API。
-- 实现 force unlock audit。
+- 实现 force unlock 审计。
 - 实现 journal GC。
-- 实现 rollback artifact GC。
+- 实现 回滚工件 GC。
 - 接入 RFC-002 event mapper。
-- 接入 RFC-015 audit mapper。
+- 接入 RFC-015 审计 mapper。
 - 第一阶段先落地本地结构化 telemetry 载体：`UnderlayEvent`、`AuditRecord`、`MetricSample`。
 - `UnderlayEvent` 提供从单设备 apply result 和 `DriftReport` 构造事件的统一入口，避免 service 层散落拼 telemetry 字段。
 
 验收：
 
-- 带外 VLAN / interface 修改可被发现。
-- refresh / preflight / successful apply 能更新 shadow state。
-- expected shadow 与 observed running 的 VLAN / interface 差异能生成结构化 finding。
+- 带外 VLAN / 接口 修改可被发现。
+- refresh / 预检 / successful apply 能更新 shadow state。
+- expected shadow 与 observed running 的 VLAN / 接口 差异能生成结构化 finding。
 - `ApplyOptions.drift_policy = BlockNewTransaction` 时，`DeviceLifecycleState::Drifted` 的设备可阻断新事务。
-- `AutoReconcile` 在第一阶段必须 fail-closed，不能在未实现自动修复时假成功。
+- `AutoReconcile` 在第一阶段必须 失败关闭，不能在未实现自动修复时假成功。
 - lock 占用时按退避策略重试。
 - force unlock 默认关闭。
 - force unlock 开启后必须带 reason。
@@ -1101,28 +1101,28 @@ Sprint 7 目标：
 
 必须覆盖：
 
-- driver registry。
-- fake backend。
+- 驱动 registry。
+- fake 后端。
 - netconf error mapping。
 - normalize。
 - dry-run diff。
-- rollback artifact store。
+- 回滚工件 store。
 - force unlock disabled。
 
 ### 15.3 集成测试
 
-第一阶段先用 fake adapter。
+第一阶段先用 模拟适配器。
 
 测试场景：
 
-- 两台设备 capability probe。
+- 两台设备 能力 probe。
 - 一台 Ready，一台 Unsupported。
 - dry-run NoChange。
 - prepare failure。
 - commit failure。
 - verify failure。
 - final confirm timeout。
-- rollback artifact missing。
+- 回滚工件 missing。
 - drift detected。
 
 ### 15.4 真实设备测试
@@ -1134,17 +1134,17 @@ Sprint 7 目标：
 - secret_ref。
 - NETCONF enabled。
 - 已知测试 VLAN 范围。
-- 已知测试 interface。
+- 已知测试 接口。
 - 明确回滚窗口。
 
 测试顺序：
 
-1. capability probe。
+1. 能力 probe。
 2. get-config。
 3. lock / unlock。
 4. VLAN create。
 5. VLAN delete。
-6. interface description。
+6. 接口 description。
 7. access mode。
 8. trunk mode。
 9. repeat apply 10 次。
@@ -1169,16 +1169,16 @@ Sprint 7 目标：
 ### 16.2 高风险点
 
 - 厂商 YANG / XML namespace 不一致。
-- NETCONF capability 声明支持但实际行为不完整。
+- NETCONF 能力 声明支持但实际行为不完整。
 - 设备 lock owner 无法识别。
 - CLI rollback 不能强保证。
 - 手工带外变更和 Aria desired state 冲突。
-- Python Adapter 重启时 artifact 未落盘。
+- Python 适配器 重启时 artifact 未落盘。
 - gRPC 契约频繁变更导致两端不同步。
 
 ### 16.3 风险控制
 
-- Sprint 0 必须先打通 capability。
+- Sprint 0 必须先打通 能力。
 - Sprint 1 必须真实设备验证 get-config。
 - 所有 degraded 路径必须显式 warning。
 - `InDoubt` 不自动恢复、不自动 GC。
@@ -1187,7 +1187,7 @@ Sprint 7 目标：
 
 ### 16.4 gRPC 事务通道演进决策
 
-当前阶段不直接上 gRPC 双向流。第一阶段仍以 unary RPC 为主，先把单 endpoint ACID、幂等、fail-closed、journal 和 recovery 做正确。
+当前阶段不直接上 gRPC 双向流。第一阶段仍以 unary RPC 为主，先把单 endpoint ACID、幂等、失败关闭、journal 和 recovery 做正确。
 
 最终形态预留为：
 
@@ -1241,15 +1241,15 @@ Committed
 RolledBack
 InDoubt
 Failed
-Progress
+进度
 AuditEvent
 ```
 
 进入阶段 3 前必须满足：
 
 - 真实设备 NETCONF prepare / commit / verify 已联调。
-- Adapter recovery 和 `InDoubt` 处理已经成熟。
-- telemetry / audit 事件字段已经稳定。
+- 适配器 recovery 和 `InDoubt` 处理已经成熟。
+- telemetry / 审计 事件字段已经稳定。
 - Protobuf command/event 状态机已经文档化。
 - stream 断开、重复 command、乱序 command、超时和重连都有测试。
 
@@ -1264,7 +1264,7 @@ AuditEvent
 4. 配置 Rust tonic-build
 5. 配置 Python grpcio-tools
 6. 实现 Python fake GetCapabilities
-7. 实现 Rust AdapterClient.get_capabilities
+7. 实现 Rust 适配器客户端.get_capabilities
 8. 实现 DeviceRegistration
 9. 实现 DeviceOnboarding
 10. 跑通 examples/capability_probe.rs

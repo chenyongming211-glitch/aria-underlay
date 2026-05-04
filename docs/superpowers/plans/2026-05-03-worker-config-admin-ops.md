@@ -1,57 +1,37 @@
-# Worker Config Admin Ops Implementation Plan
+# 工作进程配置管理命令实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Add audited RBAC-protected local CLI operations for daemon retention and schedule config changes.
+## 目标
 
-**Architecture:** Add a `WorkerConfigAdminManager` under `src/api` that validates, authorizes, writes product audit, and atomically updates `UnderlayWorkerDaemonConfig`. Expose it through `aria-underlay-ops` commands while keeping running daemon reload out of scope.
+通过本地 CLI 修改 worker retention/schedule JSON，并保持校验和审计记录。
 
-**Tech Stack:** Rust, serde JSON config, existing `AuthorizationPolicy`, existing `ProductAuditStore`, local CLI integration tests.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: API Manager And Unit Tests
+## 主要任务
 
-**Files:**
-- Create: `tests/worker_config_admin_tests.rs`
-- Create: `src/api/worker_config_admin.rs`
-- Modify: `src/api/mod.rs`
-- Modify: `src/telemetry/audit.rs`
-- Modify: `src/worker/daemon.rs`
-- Modify: `src/telemetry/ops.rs`
-- Modify: `src/worker/gc.rs`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [x] Write tests for admin summary-retention update, viewer denial, audit write failure blocking config mutation, and invalid schedule rejection.
-- [x] Run `cargo test --test worker_config_admin_tests` and confirm the new tests fail before implementation. Local Rust toolchain is unavailable in this workspace; GitHub Actions is the Rust verification gate.
-- [x] Implement config load/write helpers on `UnderlayWorkerDaemonConfig` using atomic write.
-- [x] Make operation summary and journal GC retention validation callable by the manager.
-- [x] Add product audit constructor for worker config admin requests.
-- [x] Implement `WorkerConfigAdminManager` request/response types and mutation methods.
-- [x] Run `cargo test --test worker_config_admin_tests` and confirm tests pass on an environment with Rust. Local Rust toolchain is unavailable in this workspace; GitHub Actions is the Rust verification gate.
+## 验证要求
 
-### Task 2: CLI Commands
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-**Files:**
-- Modify: `src/ops_cli.rs`
-- Modify: `tests/ops_cli_tests.rs`
 
-- [x] Add a CLI test for `set-worker-schedule` that verifies config mutation and product audit.
-- [x] Run `cargo test --test ops_cli_tests` and confirm the new test fails before implementation. Local Rust toolchain is unavailable in this workspace; GitHub Actions is the Rust verification gate.
-- [x] Add `set-summary-retention`, `set-gc-retention`, and `set-worker-schedule` commands.
-- [x] Parse role, reason, request IDs, schedule target, retention values, and boolean `--run-immediately`.
-- [x] Print JSON responses with changed target and config path.
-- [x] Run `cargo test --test ops_cli_tests`. Local Rust toolchain is unavailable in this workspace; GitHub Actions is the Rust verification gate.
+## 当前收敛边界
 
-### Task 3: Documentation And Verification
-
-**Files:**
-- Modify: `docs/runbooks/operator-operations.md`
-- Modify: `docs/progress-2026-04-26.md`
-- Modify: `docs/bug-inventory-current-2026-05-01.md`
-- Modify: `docs/superpowers/specs/2026-05-03-product-audit-rbac-design.md`
-
-- [x] Document the new commands, RBAC rules, audit behavior, and no-hot-reload boundary.
-- [x] Update progress and current bug inventory to remove retention/schedule RBAC from the fully open list.
-- [x] Run `git diff --check`.
-- [x] Run local runnable tests.
-- [ ] Commit only worker-config-admin related files, push, and wait for GitHub Actions to pass.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

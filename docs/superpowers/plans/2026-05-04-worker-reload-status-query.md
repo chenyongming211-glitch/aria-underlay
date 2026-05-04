@@ -1,67 +1,37 @@
-# Worker Reload Status Query Implementation Plan
+# 工作进程热加载状态查询实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Add local and product-facing read APIs for worker reload checkpoint status.
+## 目标
 
-**Architecture:** Keep the daemon checkpoint as the source of truth. Add thin read-only adapters in CLI, product manager, product API, and product HTTP router. Product reads are RBAC-gated but do not write product audit records.
+提供本地和 product-facing 的 reload checkpoint 只读查询。
 
-**Tech Stack:** Rust, serde JSON, existing product API/HTTP route skeleton, existing `WorkerReloadCheckpoint`.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: Tests
+## 主要任务
 
-**Files:**
-- Modify: `tests/ops_cli_tests.rs`
-- Modify: `tests/product_http_route_tests.rs`
-- Modify: `tests/product_ops_rbac_tests.rs`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [ ] Add a CLI test that writes a `WorkerReloadCheckpoint`, runs `aria-underlay-ops worker-reload-status --checkpoint-path <file>`, and asserts status/generation.
-- [ ] Add a product HTTP test that a Viewer can read the checkpoint through `/product/v1/worker-reload/status:get`.
-- [ ] Add a product manager test that an unassigned operator cannot read the checkpoint.
+## 验证要求
 
-### Task 2: Core Read Helper and RBAC
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-**Files:**
-- Modify: `src/worker/daemon.rs`
-- Modify: `src/authz.rs`
-- Modify: `src/api/product_ops.rs`
 
-- [ ] Add `WorkerReloadCheckpoint::from_path`.
-- [ ] Add `AdminAction::GetWorkerReloadStatus`.
-- [ ] Allow all assigned roles to perform `GetWorkerReloadStatus`.
-- [ ] Add `ProductGetWorkerReloadStatusRequest`.
-- [ ] Add `ProductOpsManager::get_worker_reload_status`.
+## 当前收敛边界
 
-### Task 3: Product API, HTTP, and CLI
-
-**Files:**
-- Modify: `src/api/product_api.rs`
-- Modify: `src/api/product_http.rs`
-- Modify: `src/ops_cli.rs`
-
-- [ ] Add `ProductOpsApi::get_worker_reload_status`.
-- [ ] Add `WORKER_RELOAD_STATUS_GET_PATH`.
-- [ ] Route `POST /product/v1/worker-reload/status:get`.
-- [ ] Add CLI command `worker-reload-status --checkpoint-path <file>`.
-
-### Task 4: Docs
-
-**Files:**
-- Modify: `docs/runbooks/operator-operations.md`
-- Modify: `docs/bug-inventory-current-2026-05-01.md`
-- Modify: `docs/progress-2026-04-26.md`
-
-- [ ] Document local CLI and product HTTP query.
-- [ ] Move checkpoint query from open operational gap to implemented local/product query surface.
-
-### Task 5: Verification and Publish
-
-**Files:**
-- All modified files
-
-- [ ] Run `git diff --check`.
-- [ ] Run `python3 -m pytest adapter-python/tests -q`.
-- [ ] Try `cargo test --test ops_cli_tests --test product_http_route_tests --test product_ops_rbac_tests`; record local cargo limitation if unavailable.
-- [ ] Commit, push, and wait for GitHub Actions to pass.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

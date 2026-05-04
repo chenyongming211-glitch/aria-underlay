@@ -1,99 +1,37 @@
-# Worker Deployment Ops Implementation Plan
+# 工作进程部署样例实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Add deployment samples and an offline worker config preflight command.
+## 目标
 
-**Architecture:** Keep deployment checks in `src/worker/deployment.rs`, wire a read-only `check-worker-config` command into `src/ops_cli.rs`, and keep systemd/tmpfiles/config samples under `docs/examples`. The command returns a JSON report and fails closed on invalid config.
+提供 systemd/tmpfiles/config/预检 样例，不生成安装包。
 
-**Tech Stack:** Rust, serde JSON, existing worker daemon config types, existing CLI binary tests.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: Deployment Preflight Tests
+## 主要任务
 
-**Files:**
-- Create: `tests/worker_deployment_tests.rs`
-- Modify: `tests/ops_cli_tests.rs`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [ ] **Step 1: Write failing tests**
+## 验证要求
 
-Add tests for checked-in deployment samples, strict path success, invalid schedule rejection, missing strict path rejection, and CLI `check-worker-config`.
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-- [ ] **Step 2: Run focused tests to verify red**
 
-Run:
+## 当前收敛边界
 
-```bash
-cargo test --test worker_deployment_tests --test ops_cli_tests
-```
-
-Expected locally if `cargo` exists: compile failure because `worker::deployment` and `check-worker-config` do not exist yet. If `cargo` is unavailable, record that local Rust execution is blocked and rely on GitHub Actions after implementation.
-
-### Task 2: Preflight Implementation
-
-**Files:**
-- Create: `src/worker/deployment.rs`
-- Modify: `src/worker/mod.rs`
-
-- [ ] **Step 1: Implement report and checker types**
-
-Create `WorkerDeploymentPreflightReport`, `WorkerDeploymentPathCheck`, and `WorkerDeploymentPreflight`.
-
-- [ ] **Step 2: Implement semantic checks**
-
-Validate alert summary dependency, schedules, summary retention, and journal GC retention without starting workers.
-
-- [ ] **Step 3: Implement strict filesystem checks**
-
-Check required parent directories and roots, with temporary write probes for existing directories.
-
-### Task 3: CLI Wiring
-
-**Files:**
-- Modify: `src/ops_cli.rs`
-
-- [ ] **Step 1: Add command dispatch**
-
-Add `check-worker-config` and usage text.
-
-- [ ] **Step 2: Print report and fail closed**
-
-Print pretty JSON in all cases and return non-zero when `report.valid=false`.
-
-### Task 4: Deployment Samples and Docs
-
-**Files:**
-- Create: `docs/examples/underlay-worker-daemon.production.json`
-- Create: `docs/examples/systemd/aria-underlay-worker.service`
-- Create: `docs/examples/tmpfiles.d/aria-underlay.conf`
-- Modify: `docs/runbooks/operator-operations.md`
-- Modify: `docs/progress-2026-04-26.md`
-- Modify: `docs/bug-inventory-current-2026-05-01.md`
-
-- [ ] **Step 1: Add checked-in samples**
-
-Add production JSON config, systemd unit, and tmpfiles.d directories.
-
-- [ ] **Step 2: Update operator docs**
-
-Document preflight, install paths, strict path checks, and the remaining packaging boundary.
-
-### Task 5: Verification and Release Gate
-
-**Files:**
-- All changed files
-
-- [ ] **Step 1: Run local runnable checks**
-
-Run:
-
-```bash
-git diff --check
-python3 -m pytest adapter-python/tests -q
-cargo test --test worker_deployment_tests --test ops_cli_tests
-```
-
-- [ ] **Step 2: Commit and push**
-
-Stage only relevant files, commit, push to `origin main`, and wait for GitHub Actions to pass before moving to the next package.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

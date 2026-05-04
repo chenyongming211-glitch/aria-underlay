@@ -1,111 +1,37 @@
-# Transaction Reliability Hardening Implementation Plan
+# 事务可靠性加固实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Close the highest-risk transaction reliability gaps that do not require real switches.
+## 目标
 
-**Architecture:** Keep the existing journal, endpoint lock, shadow store, and NETCONF adapter boundaries. Fix behavior with fail-closed status handling, safer journal finalization, recovery revalidation under lock, and adapter diagnostics that preserve original failure context.
+修复事务状态汇总、shadow finalization、恢复重校验和 adapter 错误上下文。
 
-**Tech Stack:** Rust service core, Tokio, in-memory/file journal stores, Python NETCONF adapter, pytest, cargo test.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-## Scope
+## 主要任务
 
-Confirmed defects to fix now:
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- `src/api/service.rs`: terminal `Committed` journal is written before shadow state persistence.
-- `src/api/service.rs`: mixed device success and failure aggregates to `SuccessWithWarning`.
-- `src/api/service.rs`: `recover_pending_transactions()` classifies records before endpoint locks are held.
-- `src/tx/journal.rs`: journal error fields overwrite previous failure context.
-- `adapter-python/aria_underlay_adapter/backends/netconf.py`: discard failure can hide the original prepare error.
-- `adapter-python/aria_underlay_adapter/backends/netconf.py`: auth classification uses an overly broad `"auth"` substring.
-- `adapter-python/aria_underlay_adapter/backends/mock_netconf.py`: unknown port mode normalizes to access.
+## 验证要求
 
-Confirmed non-defect or deferred items:
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-- `src/tx/endpoint_lock.rs` already uses `tokio::sync::Mutex`, not `std::sync::Mutex`.
-- Empty public intents are already rejected by intent validation, but internal empty desired-state handling should still fail closed.
-- Renderer/parser `production_ready=False` is intentional fail-closed behavior until real-device evidence exists.
-- gRPC connection pooling is a reliability optimization, not an ACID protocol fix for this sprint.
-- Durable production wiring for `JsonFileTxJournalStore` remains a later deployment/config task.
 
-## Tasks
+## 当前收敛边界
 
-### Task 1: Rust Transaction Status And Shadow Finalization
-
-**Files:**
-- Modify: `src/api/service.rs`
-- Test: `src/api/service.rs`
-
-- [x] Add unit coverage for aggregate status:
-  - empty device result list returns `Failed`.
-  - success plus failed returns `Failed`.
-  - success plus in-doubt returns `InDoubt`.
-  - all success with warning still returns `SuccessWithWarning`.
-- [x] Change `aggregate_apply_status()` so partial failure is never reported as `SuccessWithWarning`.
-- [x] In the successful single-endpoint apply path, write shadow state before terminal `Committed`.
-- [x] If shadow write fails after adapter success, write the journal as `InDoubt` with the shadow error and return `ApplyStatus::InDoubt`.
-
-### Task 2: Recovery Revalidation Under Endpoint Lock
-
-**Files:**
-- Modify: `src/api/service.rs`
-- Test: `tests/recovery_tests.rs`
-
-- [x] Add a test showing a recoverable candidate that becomes `Committed` before locked recovery is not recovered again.
-- [ ] Add a test showing empty-device recoverable records are marked `InDoubt` instead of looping silently.
-- [x] Refactor recovery so each candidate is locked by device before the journal record is re-read and classified.
-- [x] Mark `Recovering` only after the locked, reloaded record is still recoverable.
-
-### Task 3: Journal Error History
-
-**Files:**
-- Modify: `src/tx/journal.rs`
-- Test: `tests/transaction_tests.rs`
-
-- [x] Add `TxJournalErrorEvent` with `phase`, `code`, `message`, and `created_at_unix_secs`.
-- [x] Add `error_history: Vec<TxJournalErrorEvent>` to `TxJournalRecord` with serde default for backward compatibility.
-- [x] Make `with_error()` keep current `error_code/error_message` and append an error event.
-- [x] Add round-trip tests proving multiple errors are preserved.
-
-### Task 4: Python NETCONF Adapter Fail-Closed Behavior
-
-**Files:**
-- Modify: `adapter-python/aria_underlay_adapter/backends/netconf.py`
-- Modify: `adapter-python/aria_underlay_adapter/backends/mock_netconf.py`
-- Test: `adapter-python/tests/test_netconf_backend.py`
-- Test: `adapter-python/tests/test_mock_netconf_backend.py`
-
-- [x] Add pytest coverage proving prepare errors are preserved when discard also fails.
-- [x] Add pytest coverage proving authorization text is not classified as authentication failure.
-- [x] Add pytest coverage proving unknown mock port mode fails verification instead of becoming access.
-- [x] Preserve the original prepare error and append discard failure details to the raw summary.
-- [x] Replace broad auth substring matching with exact class names and bounded authentication phrases.
-- [x] Make mock mode normalization fail closed for unknown kinds.
-
-### Task 5: Verification
-
-**Files:**
-- Existing tests only.
-
-- [ ] Run targeted Rust tests:
-  - `cargo test aggregate`
-  - `cargo test recovery`
-  - `cargo test transaction`
-- [x] Run targeted Python tests:
-  - `python3 -m pytest adapter-python/tests/test_netconf_backend.py adapter-python/tests/test_mock_netconf_backend.py -q`
-- [ ] Run full available suites:
-  - `cargo test`
-  - `python3 -m pytest adapter-python/tests -q`
-- [ ] Run formatting/diff checks:
-  - `cargo fmt`
-  - `git diff --check`
-
-Current local verification note:
-
-- `python3 -m pytest adapter-python/tests/test_netconf_backend.py adapter-python/tests/test_mock_netconf_backend.py -q`: passed, 74 tests.
-- `python3 -m pytest adapter-python/tests -q`: passed, 188 tests.
-- `git diff --check`: passed.
-- Rust verification is blocked locally because `cargo` and `rustc` are not installed in this shell.
-- GitHub Actions run `25165739879`: passed Rust `cargo check`, Rust `cargo test`, Python adapter tests, and integration matrix.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

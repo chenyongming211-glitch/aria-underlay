@@ -1,78 +1,38 @@
-# Product HTTP Routing Design
+# 产品 HTTP 路由契约设计文档
 
-## Goal
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-Add a product-facing HTTP route contract on top of `ProductOpsApi` so future HTTP handlers can reuse a single RBAC/audit-safe routing layer without calling product operations directly.
+## 设计目标
 
-## Scope
+定义 framework-neutral method/path/status/body JSON 语义，避免 handler 绕过业务边界。
 
-This package adds method/path/status/body JSON semantics. It does not start a listener, add a web framework, add external identity integration, add UI, or require a real switch.
+## 设计原则
 
-## Route Contract
+- 复用现有架构边界，不为单个需求新造大平台。
+- 读写路径要可测试、可审计、失败语义清晰。
+- 本地/样本/骨架 能力只证明开发边界，不代表生产可用。
+- 涉及真实交换机、真实 ingress、安装包、外部系统的内容默认不在当前范围。
 
-The first routes are:
+## 行为边界
 
-| Method | Path | Request body | Response body |
-|---|---|---|---|
-| `POST` | `/product/v1/operations/summaries:query` | `ListOperationSummariesRequest` JSON | `ProductApiResponse<ListOperationSummariesResponse>` JSON |
-| `POST` | `/product/v1/product-audit:export` | `ExportProductAuditRequest` JSON | `ProductApiResponse<ExportProductAuditResponse>` JSON |
+- 对外暴露的 API 或 CLI 必须有明确输入、输出和错误码。
+- 高风险操作必须保留 request_id、trace_id、operator、reason 等可追踪字段。
+- 文件写入采用原子写或 append-only 语义，避免半写入状态。
+- 配置无效时拒绝启动或拒绝采用新配置，不静默降级。
 
-HTTP metadata is carried in headers:
+## 测试要求
 
-| Header | Required | Purpose |
-|---|---:|---|
-| `x-aria-request-id` | yes | Operator-visible request ID. |
-| `x-aria-trace-id` | no | Cross-service trace ID; defaults to request ID when omitted. |
-| `x-aria-operator-id` | yes | Local/mock operator identity. |
-| `x-aria-role` | yes | Local/mock RBAC role. |
+- 覆盖成功路径。
+- 覆盖权限/输入/配置错误。
+- 覆盖写失败或外部依赖失败时的 失败关闭 行为。
+- 没有真实交换机时，只允许 模拟适配器、样本、快照 和离线 校验器 验证。
 
-Header names are matched case-insensitively. Empty required headers are rejected.
 
-## Architecture
+## 当前收敛边界
 
-Add `src/api/product_http.rs` with a small framework-neutral router:
-
-- `ProductHttpRequest`: method, path, headers, raw JSON body.
-- `ProductHttpResponse`: status code, JSON headers, raw JSON body.
-- `ProductHttpRouter`: owns a `ProductOpsApi`, converts HTTP metadata into `ProductApiRequest<T>`, dispatches to the correct API method, and maps errors to stable HTTP error responses.
-
-The router is intentionally independent of axum, hyper, or tonic. A future server can adapt its native request type into `ProductHttpRequest` and pass the result through this router. That keeps route behavior and tests stable while leaving the final runtime/server choice open.
-
-## Error Handling
-
-All failures return JSON:
-
-```json
-{
-  "request_id": "req-123",
-  "trace_id": "trace-123",
-  "error_code": "invalid_request",
-  "message": "missing required product HTTP header x-aria-request-id"
-}
-```
-
-Status mapping:
-
-| Condition | Status |
-|---|---:|
-| Invalid JSON, missing required header, invalid route body | `400` |
-| Unknown path | `404` |
-| Known path with unsupported method | `405` |
-| RBAC denial | `403` |
-| Product audit write failure or internal serialization/storage failure | `500` |
-
-The `allow` response header is set on `405`.
-
-## Testing
-
-Add Rust contract tests for:
-
-- operation summary HTTP route succeeds with mock viewer session;
-- product audit export HTTP route succeeds with mock auditor session and writes audit export evidence;
-- operator role is denied audit export with `403`;
-- missing request ID returns `400`;
-- unknown path returns `404`;
-- wrong method on a known route returns `405` with `allow: POST`;
-- malformed JSON returns `400`.
-
-Local Rust tooling is unavailable in this workspace, so GitHub Actions remains the Rust compile/test gate.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

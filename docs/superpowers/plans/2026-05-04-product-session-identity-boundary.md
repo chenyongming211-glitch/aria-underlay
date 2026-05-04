@@ -1,99 +1,37 @@
-# Product Session Identity Boundary Implementation Plan
+# 产品会话身份边界实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Add a fail-closed product session identity boundary with bearer-token verification abstractions.
+## 目标
 
-**Architecture:** Create `src/api/product_identity.rs` with a verifier trait, static verifier, authenticated principal, and bearer-token session extractor. Keep `ProductOpsApi` and RBAC unchanged by adapting verified principals into the existing `ProductSession`. Extend product HTTP error mapping so authentication failures become `401` while RBAC denials remain `403`.
+把 模拟 header 身份入口收敛为 bearer token verifier 抽象。
 
-**Tech Stack:** Rust, serde, existing `ProductSessionExtractor`, existing `RbacRole`, existing `ProductHttpRouter`.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: Identity Contract Tests
+## 主要任务
 
-**Files:**
-- Create: `tests/product_identity_tests.rs`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [ ] **Step 1: Write tests first**
+## 验证要求
 
-Add tests for bearer success, missing bearer token, unknown token, expired token, and HTTP `401` mapping.
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-- [ ] **Step 2: Run focused test**
 
-Run: `cargo test --test product_identity_tests`
+## 当前收敛边界
 
-Expected locally: unavailable because `cargo` is not installed. Expected in GitHub Actions before implementation: compile failure because `product_identity` does not exist.
-
-### Task 2: Identity Boundary Implementation
-
-**Files:**
-- Create: `src/api/product_identity.rs`
-- Modify: `src/api/mod.rs`
-- Modify: `src/error.rs`
-
-- [ ] **Step 1: Add `AuthenticationFailed` error**
-
-Add `UnderlayError::AuthenticationFailed(String)`.
-
-- [ ] **Step 2: Add verifier and principal types**
-
-Implement `ProductAuthenticatedPrincipal`, `ProductIdentityVerifier`, and `StaticProductIdentityVerifier`.
-
-- [ ] **Step 3: Add bearer token extractor**
-
-Implement `BearerTokenProductSessionExtractor` as a `ProductSessionExtractor`.
-
-### Task 3: HTTP Error Mapping
-
-**Files:**
-- Modify: `src/api/product_http.rs`
-- Modify: `src/api/apply.rs`
-
-- [ ] **Step 1: Map auth errors**
-
-Map `AuthenticationFailed` to HTTP `401`, JSON error code `authentication_failed`, and `www-authenticate: Bearer`.
-
-- [ ] **Step 2: Update exhaustive internal error mapping**
-
-Map authentication failures to `AUTHENTICATION_FAILED` in journal/error fields for completeness.
-
-### Task 4: Docs
-
-**Files:**
-- Modify: `docs/runbooks/operator-operations.md`
-- Modify: `docs/progress-2026-04-26.md`
-- Modify: `docs/bug-inventory-current-2026-05-01.md`
-
-- [ ] **Step 1: Document identity boundary**
-
-Record the distinction between local mock headers, bearer-token verifier abstraction, RBAC, and the internal identity boundary.
-
-- [ ] **Step 2: Update current open debt**
-
-Move identity/session validation from fully open to abstraction complete; keep SSO/OIDC/JWT/JWKS out of scope and leave listener exposure open.
-
-### Task 5: Verification and CI
-
-**Files:**
-- All package files above.
-
-- [ ] **Step 1: Run local checks**
-
-Run:
-
-```bash
-git diff --check
-python3 -m pytest adapter-python/tests -q
-cargo test --test product_identity_tests
-```
-
-Expected: diff and Python pass locally; cargo is unavailable locally.
-
-- [ ] **Step 2: Commit and push**
-
-Commit message: `feat: add product session identity boundary`
-
-- [ ] **Step 3: Wait for GitHub Actions**
-
-Wait for the CI run for the pushed commit. If it fails, inspect logs, fix, and repeat.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

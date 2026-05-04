@@ -1,70 +1,37 @@
-# Operator Operations Entrypoint Implementation Plan
+# 运维 CLI 入口实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Make the current local operation summary, alert, GC, and drift capabilities usable by an operator without reading source code or JSONL internals.
+## 目标
 
-**Architecture:** Keep the existing JSONL stores and worker daemon traits as the local/offline operations backend. Add a formal `aria-underlay-ops` binary for read-only operator inspection, keep `transaction_ops` as an example wrapper, and document product audit/RBAC as the future backend boundary rather than mixing it into local files.
+提供 aria-underlay-ops，让运维查看 summary、告警、GC、drift 和 reload 状态。
 
-**Tech Stack:** Rust CLI binary, serde JSON output, existing `JsonFileOperationSummaryStore`, `JsonFileOperationAlertSink`, `UnderlayWorkerDaemonConfig`, Markdown runbooks, GitHub Actions CI.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: Daemon Config Sample
+## 主要任务
 
-**Files:**
-- Create: `docs/examples/underlay-worker-daemon.local.json`
-- Modify: `tests/worker_daemon_tests.rs`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [x] Add a sample worker config using relative local paths under `var/aria-underlay`.
-- [x] Add a test that parses the sample config with `UnderlayWorkerDaemonConfig::from_path()`.
-- [x] Assert the sample enables operation summary, operation alert, journal GC, and drift audit sections.
+## 验证要求
 
-### Task 2: Formal Ops CLI
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-**Files:**
-- Modify: `Cargo.toml`
-- Create: `src/bin/aria_underlay_ops.rs`
-- Modify: `examples/transaction_ops.rs`
-- Create: `tests/ops_cli_tests.rs`
 
-- [x] Add the `aria-underlay-ops` binary.
-- [x] Support existing `list-in-doubt`, `force-resolve`, `list-operations`, and `operation-summary` commands.
-- [x] Add `list-alerts --operation-alert-path <file> [--severity Warning|Critical] [--limit <n>]`.
-- [x] Add `alert-summary --operation-alert-path <file> [--severity Warning|Critical]`.
-- [x] Keep JSON output stable for scripts.
-- [x] Keep `examples/transaction_ops.rs` as a compatibility wrapper that points users at the binary.
+## 当前收敛边界
 
-### Task 3: Operator Runbook
-
-**Files:**
-- Create: `docs/runbooks/operator-operations.md`
-- Modify: `docs/progress-2026-04-26.md`
-- Modify: `docs/bug-inventory-current-2026-05-01.md`
-
-- [x] Document how to start `aria-underlay-worker` with the sample config.
-- [x] Document how to inspect operation summaries, attention-required records, alerts, GC, drift, recovery, and force-resolve.
-- [x] Document what each local file does and how retention/checkpointing affects output.
-- [x] Record that this is the local/offline operations entrypoint, not the final product audit backend.
-
-### Task 4: Product Audit Backend and RBAC Design
-
-**Files:**
-- Create: `docs/superpowers/specs/2026-05-03-product-audit-rbac-design.md`
-- Modify: `docs/aria-underlay-development-plan.md`
-
-- [x] Define the production audit backend boundary behind the current operation summary traits.
-- [x] Define operator roles and permissions for read-only summary, alert read, force-resolve, force-unlock, retention, and config changes.
-- [x] Define fail-closed requirements when audit or authorization writes fail.
-- [x] Define migration from JSONL local mode to product-backed mode.
-
-### Task 5: Verification and Commit
-
-**Files:**
-- Verify all changed files.
-
-- [ ] Run `git diff --check`.
-- [ ] Run `python3 -m pytest adapter-python/tests -q`.
-- [ ] Run Rust checks in GitHub Actions because local `cargo` is unavailable.
-- [ ] Commit and push the package.
-- [ ] Wait for GitHub Actions to pass before reporting completion.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

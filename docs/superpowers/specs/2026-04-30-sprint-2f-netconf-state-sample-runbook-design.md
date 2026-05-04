@@ -1,46 +1,38 @@
-# Sprint 2F NETCONF State Sample Runbook Design
+# Sprint 2F NETCONF 样本采集操作手册设计文档
 
-## Goal
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-Make real Huawei/H3C NETCONF running XML collection repeatable, safe to share after redaction, and directly usable with `aria-underlay-state-parse`.
+## 设计目标
 
-## Scope
+记录真实设备 running XML 采集、脱敏、裁剪和验证流程。
 
-This phase adds documentation only:
+## 设计原则
 
-- a runbook for capturing NETCONF `get-config` running XML;
-- a fixture README that defines where redacted real samples live and what metadata must accompany them;
-- a progress update that keeps parser production readiness blocked on real sample evidence.
+- 复用现有架构边界，不为单个需求新造大平台。
+- 读写路径要可测试、可审计、失败语义清晰。
+- 本地/样本/骨架 能力只证明开发边界，不代表生产可用。
+- 涉及真实交换机、真实 ingress、安装包、外部系统的内容默认不在当前范围。
 
-The runbook does not add device credentials, does not introduce live-device test automation, and does not change parser behavior.
+## 行为边界
 
-## Capture Flow
+- 对外暴露的 API 或 CLI 必须有明确输入、输出和错误码。
+- 高风险操作必须保留 request_id、trace_id、operator、reason 等可追踪字段。
+- 文件写入采用原子写或 append-only 语义，避免半写入状态。
+- 配置无效时拒绝启动或拒绝采用新配置，不静默降级。
 
-The preferred capture flow is:
+## 测试要求
 
-1. capture raw running XML from a lab or field switch;
-2. store the raw file outside git;
-3. redact sensitive values;
-4. validate the redacted file with `aria-underlay-state-parse --summary`;
-5. if parser behavior differs from fixture expectations, reduce the XML into a minimal redacted fixture and add a parser test.
+- 覆盖成功路径。
+- 覆盖权限/输入/配置错误。
+- 覆盖写失败或外部依赖失败时的 失败关闭 行为。
+- 没有真实交换机时，只允许 模拟适配器、样本、快照 和离线 校验器 验证。
 
-## Safety Rules
 
-Raw captures must not be committed. Redaction must remove or neutralize:
+## 当前收敛边界
 
-- management IP addresses and hostnames;
-- usernames, secrets, keys, SNMP communities, AAA configuration, and certificate material;
-- serial numbers, MAC addresses, asset tags, and site identifiers;
-- customer-facing interface descriptions and VLAN names;
-- routing peers, public addresses, and tenant names.
-
-Redacted samples should preserve XML structure, namespaces, field names, and parser-relevant values such as VLAN IDs and interface mode structure.
-
-## Success Criteria
-
-A captured sample is ready to inform parser development only when:
-
-- it has a metadata block with vendor, model, OS version, source, capture date, and redaction notes;
-- `aria-underlay-state-parse --summary` succeeds, or the failure is captured as a parser gap;
-- the sample is reduced to the smallest XML needed to reproduce the parser behavior;
-- a test exists before parser behavior changes.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

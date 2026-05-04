@@ -1,54 +1,38 @@
-# Product Internal Identity Scope Design — 2026-05-04
+# 产品内部身份范围设计文档
 
-## Goal
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-Correct the product API identity direction for an internal-only deployment.
-The product API must not implement SSO, OIDC, JWT, JWKS, refresh tokens, browser
-sessions, or external identity-provider discovery in this repository.
+## 设计目标
 
-## Design
+明确 static_tokens 足够，外部身份和 token 生命周期 不在范围内。
 
-Keep the existing `ProductIdentityVerifier` abstraction because it separates
-authentication from RBAC and product audit. The packaged verifier is
-`StaticProductIdentityVerifier`, wired through
-`BearerTokenProductSessionExtractor` and `ProductApiServerConfig.static_tokens`.
+## 设计原则
 
-`ProductApiServerConfig` should be strict about its JSON shape. Unknown fields
-fail at parse time, so historical identity fields such as `jwt_jwks` and
-`jwt_jwks_file` cannot be silently ignored.
+- 复用现有架构边界，不为单个需求新造大平台。
+- 读写路径要可测试、可审计、失败语义清晰。
+- 本地/样本/骨架 能力只证明开发边界，不代表生产可用。
+- 涉及真实交换机、真实 ingress、安装包、外部系统的内容默认不在当前范围。
 
-Production deployments still run behind an internal ingress or host policy for:
+## 行为边界
 
-- TLS termination
-- client authentication, if the site requires it
-- rate limiting
-- proxy/header policy
-- operator-network restrictions
+- 对外暴露的 API 或 CLI 必须有明确输入、输出和错误码。
+- 高风险操作必须保留 request_id、trace_id、operator、reason 等可追踪字段。
+- 文件写入采用原子写或 append-only 语义，避免半写入状态。
+- 配置无效时拒绝启动或拒绝采用新配置，不静默降级。
 
-Those controls are deployment boundaries, not product API identity features in
-this repo.
+## 测试要求
 
-## Operational Semantics
+- 覆盖成功路径。
+- 覆盖权限/输入/配置错误。
+- 覆盖写失败或外部依赖失败时的 失败关闭 行为。
+- 没有真实交换机时，只允许 模拟适配器、样本、快照 和离线 校验器 验证。
 
-Internal bearer tokens map to normalized principals:
 
-- `operator_id`
-- role
-- optional issuer
-- optional subject
-- optional session ID
-- optional expiry
+## 当前收敛边界
 
-Token lifecycle, rotation, revocation, and audit-friendly replacement of
-`static_tokens` are separate internal operations work and should be designed
-before treating this as a long-term production identity store.
-
-## Out Of Scope
-
-- SSO
-- OIDC discovery
-- JWT signature verification
-- JWKS storage or refresh
-- browser sessions
-- refresh tokens
-- external enterprise IM or paging delivery
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

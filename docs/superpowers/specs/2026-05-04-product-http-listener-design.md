@@ -1,74 +1,38 @@
-# Product HTTP Listener Design — 2026-05-04
+# 产品 HTTP 监听器设计文档
 
-## Goal
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-Bind the existing framework-neutral `ProductHttpRouter` to a real local HTTP
-listener without introducing a real switch dependency or external identity
-provider dependency.
+## 设计目标
 
-## Design Choice
+定义窄 HTTP/1.1 loopback listener，保持可替换且不过度产品化。
 
-Use a narrow Tokio TCP HTTP/1.1 adapter in `src/api/product_http_server.rs`.
-The adapter is intentionally small and replaceable:
+## 设计原则
 
-- It parses one HTTP/1.1 request per connection.
-- It requires `Content-Length` semantics and rejects unsupported transfer
-  encodings.
-- It enforces a configurable request body limit before dispatching to the
-  router.
-- It always closes the connection after the response.
-- It delegates all product route behavior to `ProductHttpRouter`.
+- 复用现有架构边界，不为单个需求新造大平台。
+- 读写路径要可测试、可审计、失败语义清晰。
+- 本地/样本/骨架 能力只证明开发边界，不代表生产可用。
+- 涉及真实交换机、真实 ingress、安装包、外部系统的内容默认不在当前范围。
 
-This is not a general web framework. It is a stable product API runtime seam
-that keeps product routing, RBAC, identity extraction, and audit behavior in the
-existing tested layers. If the deployment later selects axum, hyper, or an
-internal gateway, that server can adapt native request objects into
-`ProductHttpRequest` and keep route behavior unchanged.
+## 行为边界
 
-## Runtime Entry
+- 对外暴露的 API 或 CLI 必须有明确输入、输出和错误码。
+- 高风险操作必须保留 request_id、trace_id、operator、reason 等可追踪字段。
+- 文件写入采用原子写或 append-only 语义，避免半写入状态。
+- 配置无效时拒绝启动或拒绝采用新配置，不静默降级。
 
-Add `aria-underlay-product-api` as a standalone binary. The binary reads a JSON
-config path from the first CLI argument or `ARIA_UNDERLAY_PRODUCT_API_CONFIG`.
-The local config includes:
+## 测试要求
 
-- bind address
-- max body bytes
-- operation summary JSONL path
-- product audit JSONL path
-- static bearer-token principals for offline/local operation
+- 覆盖成功路径。
+- 覆盖权限/输入/配置错误。
+- 覆盖写失败或外部依赖失败时的 失败关闭 行为。
+- 没有真实交换机时，只允许 模拟适配器、样本、快照 和离线 校验器 验证。
 
-The checked-in sample binds to `127.0.0.1:8088`. Operators should keep this
-listener behind local access controls or an internal ingress selected by the
-deployment.
 
-## Error Handling
+## 当前收敛边界
 
-Malformed HTTP, invalid content length, unsupported transfer encoding,
-incomplete body, and oversized body fail before router dispatch. Errors are
-returned as the same JSON shape used by `ProductHttpRouter`:
-
-- `400` for malformed HTTP.
-- `413` for payloads above the configured limit.
-- router-owned status codes for product route errors.
-
-The server includes `content-length` and `connection: close` on all responses.
-
-## Tests
-
-Add focused tests for:
-
-- loopback TCP listener serving a real product summary query through
-  `ProductHttpRouter`
-- body limit enforcement before product router dispatch
-
-Local Rust tooling is currently unavailable in this workspace, so GitHub
-Actions remains the Rust compile/test gate.
-
-## Out Of Scope
-
-- TLS termination.
-- SSO/OIDC/JWT/JWKS integration.
-- product UI.
-- product audit database backend.
-- external alert delivery.
-- real switch integration.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

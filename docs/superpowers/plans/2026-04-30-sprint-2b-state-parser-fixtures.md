@@ -1,125 +1,37 @@
-# Sprint 2B State Parser Fixtures Implementation Plan
+# Sprint 2B 状态解析器样本实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Add fixture-verified Huawei/H3C NETCONF running-state parsers for VLAN and interface state while keeping production selection fail-closed.
+## 目标
 
-**Architecture:** Add XML fixtures under adapter Python tests, implement shared parser helpers in `state_parsers/common.py`, and keep vendor parser classes thin profile wrappers. Registry default behavior remains fail-closed unless tests explicitly request fixture-verified parsers.
+用 Huawei/H3C XML 样本 验证 VLAN 和接口状态解析边界，保持生产选择 失败关闭。
 
-**Tech Stack:** Python 3.10+, `xml.etree.ElementTree`, pytest, existing `AdapterError` and state parser registry.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: Huawei Fixture Parser
+## 主要任务
 
-**Files:**
-- Create: `adapter-python/tests/fixtures/state_parsers/huawei/vrp8_running.xml`
-- Create: `adapter-python/tests/test_state_parsers.py`
-- Create: `adapter-python/aria_underlay_adapter/state_parsers/common.py`
-- Modify: `adapter-python/aria_underlay_adapter/state_parsers/huawei.py`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [ ] **Step 1: Write failing Huawei parser test**
+## 验证要求
 
-Add a test that loads `vrp8_running.xml`, calls `HuaweiStateParser().parse_running(xml)`, and asserts VLAN 100 plus two interfaces: one access port and one trunk port.
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-- [ ] **Step 2: Run test to verify it fails**
 
-Run: `python3 -m pytest adapter-python/tests/test_state_parsers.py::test_huawei_parser_reads_fixture_vlan_and_interfaces -q`
+## 当前收敛边界
 
-Expected: failure because `HuaweiStateParser` still raises `NETCONF_STATE_PARSER_NOT_IMPLEMENTED`.
-
-- [ ] **Step 3: Implement minimal shared XML parsing**
-
-Create `common.py` with profile and helper functions for required text extraction, VLAN validation, duplicate detection, and port mode parsing.
-
-- [ ] **Step 4: Implement Huawei parser wrapper**
-
-Make `HuaweiStateParser` use the shared parser with Huawei fixture namespaces, set `fixture_verified=True`, and keep `production_ready=False`.
-
-- [ ] **Step 5: Run focused test**
-
-Run: `python3 -m pytest adapter-python/tests/test_state_parsers.py::test_huawei_parser_reads_fixture_vlan_and_interfaces -q`
-
-Expected: pass.
-### Task 2: H3C Fixture Parser
-
-**Files:**
-- Create: `adapter-python/tests/fixtures/state_parsers/h3c/comware7_running.xml`
-- Modify: `adapter-python/tests/test_state_parsers.py`
-- Modify: `adapter-python/aria_underlay_adapter/state_parsers/h3c.py`
-
-- [ ] **Step 1: Write failing H3C parser test**
-
-Add a test that loads `comware7_running.xml`, calls `H3cStateParser().parse_running(xml)`, and asserts the same normalized output shape.
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `python3 -m pytest adapter-python/tests/test_state_parsers.py::test_h3c_parser_reads_fixture_vlan_and_interfaces -q`
-
-Expected: failure because `H3cStateParser` still raises `NETCONF_STATE_PARSER_NOT_IMPLEMENTED`.
-
-- [ ] **Step 3: Implement H3C parser wrapper**
-
-Use the shared parser with H3C fixture namespaces, set `fixture_verified=True`, and keep `production_ready=False`.
-
-- [ ] **Step 4: Run focused test**
-
-Run: `python3 -m pytest adapter-python/tests/test_state_parsers.py::test_h3c_parser_reads_fixture_vlan_and_interfaces -q`
-
-Expected: pass.
-
-### Task 3: Fail-Closed Parser Coverage
-
-**Files:**
-- Modify: `adapter-python/tests/test_state_parsers.py`
-
-- [ ] **Step 1: Write invalid XML and duplicate tests**
-
-Add tests for missing VLAN ID, invalid VLAN 4095, duplicate interface names, and unknown port mode.
-
-- [ ] **Step 2: Run tests to verify failures before implementation if needed**
-
-Run: `python3 -m pytest adapter-python/tests/test_state_parsers.py -q`
-
-Expected: any missing validation test fails until helper logic handles it.
-
-- [ ] **Step 3: Tighten helper validation**
-
-Ensure every invalid case raises `AdapterError` with code `NETCONF_STATE_PARSE_FAILED`.
-
-- [ ] **Step 4: Run parser tests**
-
-Run: `python3 -m pytest adapter-python/tests/test_state_parsers.py -q`
-
-Expected: pass.
-
-### Task 4: Registry Fixture Verification Gate
-
-**Files:**
-- Modify: `adapter-python/aria_underlay_adapter/state_parsers/registry.py`
-- Modify: `adapter-python/tests/test_state_parser_registry.py`
-- Modify: `docs/progress-2026-04-26.md`
-
-- [ ] **Step 1: Write registry tests**
-
-Add tests showing default registry selection still rejects Huawei/H3C, while `allow_fixture_verified=True` returns fixture-verified parsers.
-
-- [ ] **Step 2: Run registry tests to verify failure**
-
-Run: `python3 -m pytest adapter-python/tests/test_state_parser_registry.py -q`
-
-Expected: failure because `allow_fixture_verified` does not exist.
-
-- [ ] **Step 3: Implement registry gate**
-
-Add `allow_fixture_verified=False` to `state_parser_for_vendor()`. If parser is not production-ready but is fixture-verified and the flag is true, return it.
-
-- [ ] **Step 4: Run focused Python tests**
-
-Run:
-
-```bash
-python3 -m pytest adapter-python/tests/test_state_parsers.py adapter-python/tests/test_state_parser_registry.py -q
-```
-
-Expected: pass.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

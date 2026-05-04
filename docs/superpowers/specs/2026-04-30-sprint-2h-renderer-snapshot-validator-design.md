@@ -1,70 +1,38 @@
-# Sprint 2H Renderer Snapshot Validator Design
+# Sprint 2H 渲染器快照校验器设计文档
 
-## Goal
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-Make Huawei/H3C renderer skeleton output easy to validate offline without a real switch.
+## 设计目标
 
-## Scope
+离线渲染 desired state，输出 骨架 渲染器 的 XML 快照 和结构化报告。
 
-This phase adds an offline renderer snapshot tool only. It does not connect to devices, does not change `NetconfBackedDriver`, and does not make skeleton renderers production-ready.
+## 设计原则
 
-Add one console script:
+- 复用现有架构边界，不为单个需求新造大平台。
+- 读写路径要可测试、可审计、失败语义清晰。
+- 本地/样本/骨架 能力只证明开发边界，不代表生产可用。
+- 涉及真实交换机、真实 ingress、安装包、外部系统的内容默认不在当前范围。
 
-- `aria-underlay-render-snapshot`
+## 行为边界
 
-The command reads a desired-state JSON file, selects a vendor renderer with `allow_skeleton=True`, renders edit-config XML, and prints a JSON snapshot report.
+- 对外暴露的 API 或 CLI 必须有明确输入、输出和错误码。
+- 高风险操作必须保留 request_id、trace_id、operator、reason 等可追踪字段。
+- 文件写入采用原子写或 append-only 语义，避免半写入状态。
+- 配置无效时拒绝启动或拒绝采用新配置，不静默降级。
 
-## Input Format
+## 测试要求
 
-The desired-state input is a JSON object:
+- 覆盖成功路径。
+- 覆盖权限/输入/配置错误。
+- 覆盖写失败或外部依赖失败时的 失败关闭 行为。
+- 没有真实交换机时，只允许 模拟适配器、样本、快照 和离线 校验器 验证。
 
-```json
-{
-  "vlans": [
-    {"vlan_id": 100, "name": "prod", "description": "production vlan"}
-  ],
-  "interfaces": [
-    {
-      "name": "GE1/0/1",
-      "admin_state": "up",
-      "description": "server uplink",
-      "mode": {"kind": "access", "access_vlan": 100}
-    }
-  ]
-}
-```
 
-This mirrors the renderer-facing shape already covered in tests. It intentionally avoids protobuf generation requirements for field triage.
+## 当前收敛边界
 
-## Output
-
-Successful output is JSON:
-
-```json
-{
-  "vendor": "huawei",
-  "profile_name": "vrp8-skeleton",
-  "production_ready": false,
-  "vlan_count": 1,
-  "interface_count": 1,
-  "xml": "<config>...</config>"
-}
-```
-
-`--pretty` pretty-prints the JSON output. Errors are compact JSON on stderr and return exit code `1`.
-
-## Error Handling
-
-The command must fail closed for:
-
-- unsupported vendors;
-- malformed desired-state JSON;
-- non-object desired-state payloads;
-- empty desired state;
-- renderer validation errors such as invalid VLAN ID, empty interface name, duplicate trunk VLANs, or unknown port mode.
-
-Renderer validation errors are mapped to structured adapter-style JSON with code `RENDER_SNAPSHOT_FAILED`.
-
-## Production Boundary
-
-The tool is offline-only and explicitly uses skeleton renderers for snapshot qualification. A successful snapshot is evidence for renderer development, not permission to enable production rendering.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

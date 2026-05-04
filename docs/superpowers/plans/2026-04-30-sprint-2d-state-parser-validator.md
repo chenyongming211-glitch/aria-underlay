@@ -1,98 +1,37 @@
-# Sprint 2D State Parser Validator Implementation Plan
+# Sprint 2D 状态解析器校验器实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Add an offline Python CLI that validates captured NETCONF running XML with fixture-verified state parsers and emits normalized observed-state JSON.
+## 目标
 
-**Architecture:** Implement a small `state_parsers/validator.py` module with an argparse-based `main(argv)` function, expose it as a console script in `adapter-python/pyproject.toml`, and test it by calling `main(argv)` with pytest `capsys`.
+提供离线 XML 校验器，真实样本进入前先验证 解析器 输出和错误边界。
 
-**Tech Stack:** Python 3.10+, argparse, json, pytest, existing `AdapterError` and state parser registry.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: Validator CLI Success Path
+## 主要任务
 
-**Files:**
-- Create: `adapter-python/tests/test_state_parser_validator.py`
-- Create: `adapter-python/aria_underlay_adapter/state_parsers/validator.py`
-- Modify: `adapter-python/pyproject.toml`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [ ] **Step 1: Write failing Huawei fixture CLI test**
+## 验证要求
 
-Create a test that calls `validator.main(["--vendor", "huawei", "--xml", "<fixture path>"])`, captures stdout, parses JSON, and asserts VLAN 100 plus interface `GE1/0/1`.
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-- [ ] **Step 2: Run test to verify it fails**
 
-Run: `python3 -m pytest adapter-python/tests/test_state_parser_validator.py::test_validator_outputs_observed_state_json_for_huawei_fixture -q`
+## 当前收敛边界
 
-Expected: fail because `state_parsers.validator` does not exist.
-
-- [ ] **Step 3: Implement minimal CLI**
-
-Add `main(argv=None)` that parses `--vendor` and `--xml`, reads the file, selects `state_parser_for_vendor(vendor, allow_fixture_verified=True)`, parses XML, prints `json.dumps(state, sort_keys=True)`, and returns `0`.
-
-- [ ] **Step 4: Add console script**
-
-Add `[project.scripts] aria-underlay-state-parse = "aria_underlay_adapter.state_parsers.validator:main"` to `pyproject.toml`.
-
-- [ ] **Step 5: Run focused test**
-
-Run: `python3 -m pytest adapter-python/tests/test_state_parser_validator.py::test_validator_outputs_observed_state_json_for_huawei_fixture -q`
-
-Expected: pass.
-
-### Task 2: Scope and Fail-Closed CLI Coverage
-
-**Files:**
-- Modify: `adapter-python/tests/test_state_parser_validator.py`
-- Modify: `adapter-python/aria_underlay_adapter/state_parsers/validator.py`
-
-- [ ] **Step 1: Write scoped output test**
-
-Call `main()` with `--vlan 100 --interface GE1/0/1` and assert only scoped state is printed.
-
-- [ ] **Step 2: Write unsupported vendor test**
-
-Call `main()` with `--vendor unknown` and assert it returns `1`, stderr JSON has code `STATE_PARSER_VENDOR_UNSUPPORTED`, and stdout is empty.
-
-- [ ] **Step 3: Write invalid XML test**
-
-Use a temporary XML file missing `vlan-id`; assert return code `1` and stderr JSON has code `NETCONF_STATE_PARSE_FAILED`.
-
-- [ ] **Step 4: Implement scope/error handling**
-
-Build a simple scope object from CLI args. Catch `AdapterError`, print JSON error to stderr, and return `1`.
-
-- [ ] **Step 5: Run validator tests**
-
-Run: `python3 -m pytest adapter-python/tests/test_state_parser_validator.py -q`
-
-Expected: pass.
-
-### Task 3: Documentation and Full Verification
-
-**Files:**
-- Modify: `adapter-python/README.md`
-- Modify: `docs/progress-2026-04-26.md`
-
-- [ ] **Step 1: Document CLI usage**
-
-Add a README section showing how to parse a captured XML sample and scope by VLAN/interface.
-
-- [ ] **Step 2: Update progress docs**
-
-Add Sprint 2D status and keep the production boundary explicit.
-
-- [ ] **Step 3: Run adapter tests**
-
-Run: `python3 -m pytest adapter-python/tests -q`
-
-Expected: all adapter tests pass.
-
-- [ ] **Step 4: Check whitespace and commit**
-
-Run: `git diff --check`
-
-Expected: no whitespace errors.
-
-Commit only Sprint 2D files; do not include unrelated `.gitignore` or `.claude/`.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

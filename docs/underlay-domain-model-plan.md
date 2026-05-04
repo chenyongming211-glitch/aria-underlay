@@ -1,4 +1,4 @@
-# Underlay Domain 模型演进计划
+# Underlay 管控域模型演进计划
 
 ## 1. 结论
 
@@ -230,7 +230,7 @@ physical switch member
 - device lock table。
 - NETCONF session pool。
 - tx journal endpoint list。
-- drift auditor scan list。
+- 漂移审计器 scan list。
 - dry-run change set 按 endpoint 输出。
 
 ## 6. 兼容策略
@@ -269,7 +269,7 @@ ApplyDomainIntentRequest { intent: UnderlayDomainIntent }
 
 ## 7. 开发顺序
 
-1. 文档更新，明确 Underlay Domain 模型。
+1. 文档更新，明确 Underlay 管控域模型。
 2. 新增 Rust domain intent structs，不替换现有 API。
 3. 新增 domain validation。
 4. 新增 domain planner。
@@ -293,7 +293,7 @@ ApplyDomainIntentRequest { intent: UnderlayDomainIntent }
 - 堆叠单 IP 无法自然表达。
 - 原子事务边界、管理 endpoint 与物理交换机数量混淆。
 - journal 记录里 `device_id` 语义不清。
-- drift auditor 不知道该按 member 还是 endpoint 扫描。
+- 漂移审计器 不知道该按 member 还是 endpoint 扫描。
 - 小规模多交换机需要重新拆 API。
 
 因此本阶段必须先补 domain 模型，再继续事务层。

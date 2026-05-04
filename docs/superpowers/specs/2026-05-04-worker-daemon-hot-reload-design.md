@@ -1,81 +1,38 @@
-# Worker Daemon Hot Reload Design
+# 工作进程守护模式热加载设计文档
 
-## Goal
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-Add an online reload contract for `aria-underlay-worker` so audited worker
-config changes can be picked up by a running daemon without requiring a full
-process restart.
+## 设计目标
 
-## Scope
+定义 supervisor、reload 配置、checkpoint 和失败处理。
 
-This package covers daemon-side reload only. It does not add external alert
-delivery, product UI, database-backed audit, or live changes to an already
-running worker loop. Reload is implemented by replacing the worker runtime.
+## 设计原则
 
-## Architecture
+- 复用现有架构边界，不为单个需求新造大平台。
+- 读写路径要可测试、可审计、失败语义清晰。
+- 本地/样本/骨架 能力只证明开发边界，不代表生产可用。
+- 涉及真实交换机、真实 ingress、安装包、外部系统的内容默认不在当前范围。
 
-Use a supervisor around `UnderlayWorkerRuntime` rather than mutating live
-worker intervals. The supervisor reads the JSON worker config, starts a
-runtime, polls the config file for content changes, and handles each change as
-an atomic candidate:
+## 行为边界
 
-1. Read the changed config file.
-2. Parse it as `UnderlayWorkerDaemonConfig`.
-3. Validate dependencies and worker schedules before touching the current
-   runtime.
-4. If valid, stop the current runtime through its shutdown channel, wait for
-   its report, build a fresh runtime from the new config, and start it.
-5. If invalid, keep the current runtime running and persist a rejected reload
-   checkpoint with the error.
+- 对外暴露的 API 或 CLI 必须有明确输入、输出和错误码。
+- 高风险操作必须保留 request_id、trace_id、operator、reason 等可追踪字段。
+- 文件写入采用原子写或 append-only 语义，避免半写入状态。
+- 配置无效时拒绝启动或拒绝采用新配置，不静默降级。
 
-This gives the daemon a stable long-term behavior: config mutation remains
-file-backed and audited, while runtime adoption is explicit, observable, and
-fail-closed.
+## 测试要求
 
-## Config
+- 覆盖成功路径。
+- 覆盖权限/输入/配置错误。
+- 覆盖写失败或外部依赖失败时的 失败关闭 行为。
+- 没有真实交换机时，只允许 模拟适配器、样本、快照 和离线 校验器 验证。
 
-Add an optional top-level `reload` section:
 
-```json
-{
-  "reload": {
-    "enabled": true,
-    "poll_interval_secs": 5,
-    "checkpoint_path": "var/aria-underlay/ops/worker-reload-checkpoint.json"
-  }
-}
-```
+## 当前收敛边界
 
-If `reload` is absent or disabled, the existing daemon behavior is unchanged.
-If enabled, `poll_interval_secs` must be greater than zero and
-`checkpoint_path` must be present.
-
-## Checkpoint
-
-The checkpoint is a small JSON file written atomically after daemon startup,
-successful reload, rejected reload, and shutdown. It includes:
-
-- config path
-- generation
-- fingerprint of the adopted config
-- status: `started`, `applied`, `rejected`, or `shutdown`
-- timestamp
-- optional error
-
-Operators can read this file to know whether the running daemon has adopted
-the latest config or rejected it.
-
-## Error Handling
-
-Initial invalid config still fails startup. Later invalid reload candidates do
-not stop the daemon; they are rejected and the last valid runtime continues.
-Checkpoint write failure is fail-closed for startup and successful reload
-because otherwise operators cannot know what the daemon adopted.
-
-## Testing
-
-Add daemon-level tests with no real switch:
-
-- reload applies a changed schedule and records a newer generation checkpoint.
-- invalid changed config is rejected while the current runtime keeps running.
-- deployment preflight rejects invalid reload config.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

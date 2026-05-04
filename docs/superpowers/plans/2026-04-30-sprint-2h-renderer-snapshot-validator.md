@@ -1,100 +1,37 @@
-# Sprint 2H Renderer Snapshot Validator Implementation Plan
+# Sprint 2H 渲染器快照校验器实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Add an offline `aria-underlay-render-snapshot` command that renders desired-state JSON through Huawei/H3C skeleton renderers and emits a stable JSON snapshot report.
+## 目标
 
-**Architecture:** Add `adapter-python/aria_underlay_adapter/renderers/snapshot.py` as the CLI entrypoint. Keep production renderer registry behavior unchanged by using `renderer_for_vendor(..., allow_skeleton=True)` only inside this offline tool.
+离线渲染 desired state，输出 骨架 渲染器 的 XML 快照 和结构化报告。
 
-**Tech Stack:** Python 3.10+, argparse, json, types.SimpleNamespace, pytest.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: Successful Snapshot Output
+## 主要任务
 
-**Files:**
-- Create: `adapter-python/aria_underlay_adapter/renderers/snapshot.py`
-- Modify: `adapter-python/tests/test_renderer_snapshot.py`
-- Modify: `adapter-python/pyproject.toml`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [ ] **Step 1: Write failing CLI success test**
+## 验证要求
 
-Add a test that writes desired-state JSON with one VLAN and one access interface, calls `snapshot.main(["--vendor", "huawei", "--desired-state", str(path)])`, and asserts stdout JSON includes `vendor`, `profile_name`, `production_ready=False`, counts, and XML containing VLAN/interface elements.
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-- [ ] **Step 2: Run test to verify failure**
 
-Run: `python3 -m pytest adapter-python/tests/test_renderer_snapshot.py::test_render_snapshot_outputs_xml_report_for_huawei -q`
+## 当前收敛边界
 
-Expected: fail because `snapshot.py` does not exist.
-
-- [ ] **Step 3: Implement minimal snapshot CLI**
-
-Implement argparse, JSON loading, conversion to `SimpleNamespace`, skeleton renderer selection, XML rendering, and JSON output.
-
-- [ ] **Step 4: Run focused test**
-
-Run: `python3 -m pytest adapter-python/tests/test_renderer_snapshot.py::test_render_snapshot_outputs_xml_report_for_huawei -q`
-
-Expected: pass.
-
-### Task 2: Pretty Output and Fail-Closed Errors
-
-**Files:**
-- Modify: `adapter-python/tests/test_renderer_snapshot.py`
-- Modify: `adapter-python/aria_underlay_adapter/renderers/snapshot.py`
-
-- [ ] **Step 1: Write pretty output test**
-
-Add a test that passes `--pretty` and asserts stdout starts with `{\n` and remains parseable JSON.
-
-- [ ] **Step 2: Write renderer validation error test**
-
-Add a test with VLAN ID `4095`, assert return code `1`, stdout empty, stderr JSON code `RENDER_SNAPSHOT_FAILED`, and raw summary mentions `range 1..4094`.
-
-- [ ] **Step 3: Write invalid JSON shape test**
-
-Add a test with a JSON array payload, assert return code `1`, stdout empty, stderr JSON code `RENDER_SNAPSHOT_INPUT_INVALID`.
-
-- [ ] **Step 4: Run snapshot tests to verify failure**
-
-Run: `python3 -m pytest adapter-python/tests/test_renderer_snapshot.py -q`
-
-Expected: new tests fail until error mapping is complete.
-
-- [ ] **Step 5: Implement errors**
-
-Map malformed input and renderer `ValueError` / `AdapterError` to structured JSON stderr.
-
-- [ ] **Step 6: Run snapshot tests**
-
-Run: `python3 -m pytest adapter-python/tests/test_renderer_snapshot.py -q`
-
-Expected: pass.
-
-### Task 3: Docs and Verification
-
-**Files:**
-- Modify: `adapter-python/README.md`
-- Modify: `docs/progress-2026-04-26.md`
-
-- [ ] **Step 1: Document renderer snapshot usage**
-
-Add an offline renderer snapshot section with desired-state JSON and command examples.
-
-- [ ] **Step 2: Update progress docs**
-
-Add Sprint 2H status and keep skeleton production-readiness boundaries explicit.
-
-- [ ] **Step 3: Run full adapter tests**
-
-Run: `python3 -m pytest adapter-python/tests -q`
-
-Expected: all adapter tests pass.
-
-- [ ] **Step 4: Check whitespace and commit**
-
-Run: `git diff --check`
-
-Expected: no whitespace errors.
-
-Commit only Sprint 2H files; do not include unrelated `.gitignore` or `.claude/`.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

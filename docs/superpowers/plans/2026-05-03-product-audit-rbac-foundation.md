@@ -1,82 +1,37 @@
-# Product Audit RBAC Foundation Implementation Plan
+# 产品审计/权限控制基础实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Add the first no-real-switch product audit and RBAC foundation for privileged operations.
+## 目标
 
-**Architecture:** Keep local JSONL operation summaries as the local operations surface, and add product audit/RBAC as separate injectable service dependencies. The first enforcement point is `force_resolve_transaction`: authorization and product-audit prewrite must succeed before the journal is mutated. External alert delivery is explicitly out of scope; alerts remain internal records.
+历史方向：为 force-resolve 等高危动作接入审计和授权；当前已收敛为轻量日志，不继续扩展。
 
-**Tech Stack:** Rust traits, in-memory test stores, existing `AriaUnderlayService`, existing transaction journal, existing operation summary/event pipeline, GitHub Actions CI.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: Record Alert Product Direction
+## 主要任务
 
-**Files:**
-- Modify: `docs/superpowers/specs/2026-05-03-product-audit-rbac-design.md`
-- Modify: `docs/bug-inventory-current-2026-05-01.md`
-- Modify: `docs/progress-2026-04-26.md`
-- Modify: `docs/runbooks/operator-operations.md`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [x] Remove external webhook, enterprise IM, PagerDuty, and email delivery from the current roadmap.
-- [x] Record that alerts stay internal and are queried through CLI/product API.
-- [x] Record internal alert lifecycle as the follow-up direction.
+## 验证要求
 
-### Task 2: Write RBAC and Audit Failing Tests
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-**Files:**
-- Create: `tests/product_audit_rbac_tests.rs`
 
-- [x] Add a test that an authorized `BreakGlassOperator` can force-resolve an `InDoubt` transaction and records a product audit prewrite.
-- [x] Add a test that a `Viewer` cannot force-resolve and the journal remains `InDoubt`.
-- [x] Add a test that a product audit write failure blocks force-resolve before the journal changes.
-- [x] Add a test for the role matrix: `BreakGlassOperator` and `Admin` can force-resolve; `Viewer`, `Operator`, and `Auditor` cannot.
+## 当前收敛边界
 
-### Task 3: Implement RBAC Foundation
-
-**Files:**
-- Create: `src/authz.rs`
-- Modify: `src/lib.rs`
-
-- [x] Add `RbacRole`.
-- [x] Add `AdminAction`.
-- [x] Add `AuthorizationRequest`.
-- [x] Add `AuthorizationPolicy`.
-- [x] Add `PermitAllAuthorizationPolicy` for local compatibility.
-- [x] Add `StaticAuthorizationPolicy` for tests and product wiring.
-
-### Task 4: Implement Product Audit Store Foundation
-
-**Files:**
-- Modify: `src/telemetry/audit.rs`
-- Modify: `src/telemetry/mod.rs`
-
-- [x] Add `ProductAuditRecord`.
-- [x] Add `ProductAuditStore`.
-- [x] Add `NoopProductAuditStore`.
-- [x] Add `InMemoryProductAuditStore`.
-- [x] Add `FailingProductAuditStore` in the integration test.
-
-### Task 5: Enforce RBAC and Audit on Force Resolve
-
-**Files:**
-- Modify: `src/api/service.rs`
-- Modify: `src/api/admin_ops.rs`
-- Modify: `src/error.rs`
-
-- [x] Add injectable authorization policy and product audit store to `AriaUnderlayService`.
-- [x] Pass those dependencies into `AdminOps`.
-- [x] Authorize `force_resolve_transaction` before journal mutation.
-- [x] Write product audit pre-record before journal mutation.
-- [x] Return fail-closed errors for authorization denial and product audit write failure.
-
-### Task 6: Verify and Ship
-
-**Files:**
-- Verify all changed files.
-
-- [x] Run `git diff --check`.
-- [x] Run `python3 -m pytest adapter-python/tests -q`.
-- [ ] Run Rust checks in GitHub Actions because local `cargo` is unavailable.
-- [ ] Commit and push the package.
-- [ ] Wait for GitHub Actions to pass before reporting completion.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

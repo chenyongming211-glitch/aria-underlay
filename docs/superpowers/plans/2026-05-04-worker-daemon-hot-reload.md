@@ -1,68 +1,37 @@
-# Worker Daemon Hot Reload Implementation Plan
+# 工作进程守护模式热加载实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Let `aria-underlay-worker` adopt audited worker config changes without a process restart.
+## 目标
 
-**Architecture:** Add a daemon supervisor that polls the worker config file, validates changed config before touching the current runtime, restarts the runtime only after successful validation, and writes an atomic reload checkpoint for operator visibility.
+让运行中的 worker 能感知有效配置变更，非法变更写入 rejected checkpoint。
 
-**Tech Stack:** Rust, Tokio, serde JSON, existing `UnderlayWorkerDaemonConfig`, existing `UnderlayWorkerRuntime`, existing atomic file helper.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: Reload Contract Tests
+## 主要任务
 
-**Files:**
-- Modify: `tests/worker_daemon_tests.rs`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [ ] Write a daemon test that starts a reload-enabled config with long intervals, edits the config schedule, waits until the reload checkpoint reaches generation 2, then asserts the checkpoint status is `applied`.
-- [ ] Write a daemon test that changes the config to an invalid zero interval, waits until the checkpoint status is `rejected`, asserts generation is unchanged, restores valid config, and shuts down cleanly.
-- [ ] Write a deployment preflight test that rejects reload enabled with `poll_interval_secs=0` or missing `checkpoint_path`.
+## 验证要求
 
-### Task 2: Config, Checkpoint, and Validation
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-**Files:**
-- Modify: `src/worker/daemon.rs`
-- Modify: `src/worker/deployment.rs`
-- Modify: `src/worker/mod.rs` if a new module is needed
 
-- [ ] Add `reload: Option<WorkerReloadDaemonConfig>` to `UnderlayWorkerDaemonConfig`.
-- [ ] Add `WorkerReloadDaemonConfig` with `enabled`, `poll_interval_secs`, and `checkpoint_path`.
-- [ ] Add `WorkerReloadCheckpoint` and `WorkerReloadStatus`.
-- [ ] Validate reload config in daemon construction and deployment preflight.
-- [ ] Use `atomic_write` for checkpoint persistence.
+## 当前收敛边界
 
-### Task 3: Runtime Supervisor
-
-**Files:**
-- Modify: `src/worker/daemon.rs`
-- Modify: `src/bin/aria_underlay_worker.rs`
-
-- [ ] Add `UnderlayWorkerDaemon::run_config_path_until_shutdown(path, shutdown)`.
-- [ ] If reload is disabled, keep the existing one-shot runtime path.
-- [ ] If reload is enabled, start a supervised runtime task, poll the config file, and apply valid changed configs by shutting down and replacing the runtime.
-- [ ] Reject invalid changed configs without stopping the current runtime.
-- [ ] Update `aria-underlay-worker` to call the config-path entrypoint.
-
-### Task 4: Docs and Samples
-
-**Files:**
-- Modify: `docs/examples/underlay-worker-daemon.local.json`
-- Modify: `docs/examples/underlay-worker-daemon.production.json`
-- Modify: `docs/runbooks/operator-operations.md`
-- Modify: `docs/bug-inventory-current-2026-05-01.md`
-- Modify: `docs/progress-2026-04-26.md`
-
-- [ ] Add reload sections to checked-in worker daemon samples.
-- [ ] Update the operator runbook to explain checkpoint states and invalid reload behavior.
-- [ ] Remove online daemon hot reload from the open gap list and record remaining limits.
-
-### Task 5: Verification and Publish
-
-**Files:**
-- All modified files
-
-- [ ] Run `git diff --check`.
-- [ ] Run `python3 -m pytest adapter-python/tests -q`.
-- [ ] Try `cargo test --test worker_daemon_tests`; if local cargo is unavailable, record the limitation and rely on GitHub Actions for Rust.
-- [ ] Commit, push, and wait for GitHub Actions to pass before moving to another package.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

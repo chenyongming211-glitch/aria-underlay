@@ -1,75 +1,38 @@
-# Product Ops RBAC Boundary Design
+# 产品运维边界设计文档
 
-## Goal
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-Add a product-facing operations boundary that applies RBAC before operator-facing reads and records product audit before exporting audit history.
+## 设计目标
 
-## Scope
+提供 product-facing 操作管理器；当前不继续扩展为复杂权限平台。
 
-Included:
+## 设计原则
 
-- A Rust `ProductOpsManager` for future product API handlers.
-- Operator context validation for product operations.
-- RBAC-gated operation summary listing.
-- RBAC-gated product audit export.
-- Audit-before-export semantics for product audit history.
-- Tests for allowed, denied, and audit-write-failure paths.
+- 复用现有架构边界，不为单个需求新造大平台。
+- 读写路径要可测试、可审计、失败语义清晰。
+- 本地/样本/骨架 能力只证明开发边界，不代表生产可用。
+- 涉及真实交换机、真实 ingress、安装包、外部系统的内容默认不在当前范围。
 
-Excluded:
+## 行为边界
 
-- HTTP routing.
-- Identity provider integration.
-- Token/session parsing.
-- UI work.
-- Real switch operations.
-- Online daemon reload.
+- 对外暴露的 API 或 CLI 必须有明确输入、输出和错误码。
+- 高风险操作必须保留 request_id、trace_id、operator、reason 等可追踪字段。
+- 文件写入采用原子写或 append-only 语义，避免半写入状态。
+- 配置无效时拒绝启动或拒绝采用新配置，不静默降级。
 
-## Design
+## 测试要求
 
-`ProductOpsManager` will live in `src/api/product_ops.rs`. It owns:
+- 覆盖成功路径。
+- 覆盖权限/输入/配置错误。
+- 覆盖写失败或外部依赖失败时的 失败关闭 行为。
+- 没有真实交换机时，只允许 模拟适配器、样本、快照 和离线 校验器 验证。
 
-- `Arc<dyn AuthorizationPolicy>`
-- `Arc<dyn OperationSummaryStore>`
-- `Arc<dyn ProductAuditStore>`
 
-Product API handlers can construct this manager with the same stores and authorization policy already used by service/admin operations.
+## 当前收敛边界
 
-The boundary exposes:
-
-- `list_operation_summaries(context, request)`
-- `export_product_audit(context, request)`
-
-`ProductOperatorContext` contains `request_id`, optional `trace_id`, and `operator`. It is required for product-facing operations even when the underlying local store query does not need it.
-
-## Authorization
-
-Operation summary listing authorizes `AdminAction::ListOperationSummaries`. The existing RBAC matrix allows any assigned role to list summaries, while unassigned operators fail closed.
-
-Product audit export authorizes `AdminAction::ExportAuditHistory`. The existing RBAC matrix allows `Admin` and `Auditor`, and denies `Viewer`, `Operator`, and `BreakGlassOperator`.
-
-## Audit Semantics
-
-Product audit export is itself sensitive, so the manager appends a `product_audit.export_requested` record before returning audit records. If appending that audit record fails, the export fails and no history is returned.
-
-Operation summary listing is read-only and not recorded as product audit in this package. It is still RBAC-gated so product handlers cannot accidentally expose summaries without operator identity.
-
-## Filtering
-
-The manager supports server-side filters needed by the first product API layer:
-
-- operation summaries: reuse `ListOperationSummariesRequest`
-- product audit export: `action`, `result`, `operator_id`, and `limit`
-
-Limit behavior keeps the newest matching records when a limit is provided, matching the existing operation summary query behavior.
-
-## Testing
-
-Tests cover:
-
-- Viewer with an assigned role can list operation summaries.
-- Unassigned operator cannot list operation summaries.
-- Auditor can export product audit and the export action is itself recorded.
-- Operator cannot export product audit.
-- Product audit write failure blocks audit export.
-
-Local Rust tests may be unavailable on this workstation because `cargo` is not installed. GitHub Actions remains the Rust compile and test gate.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

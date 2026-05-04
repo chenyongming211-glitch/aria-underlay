@@ -1,65 +1,38 @@
-# Product Session Identity Boundary Design
+# 产品会话身份边界设计文档
 
-## Goal
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-Replace the product API's implicit mock-header-only identity path with an explicit, fail-closed internal session identity boundary without changing product operations, RBAC, or audit code.
+## 设计目标
 
-## Scope
+定义 bearer token session extractor 和认证失败 HTTP 语义。
 
-This package adds identity abstraction and local/static verifier coverage. Product decision: this repository is for an internal system and does not implement SSO, OIDC, JWT signature verification, JWKS fetch, refresh tokens, browser sessions, or a public HTTP listener.
+## 设计原则
 
-## Architecture
+- 复用现有架构边界，不为单个需求新造大平台。
+- 读写路径要可测试、可审计、失败语义清晰。
+- 本地/样本/骨架 能力只证明开发边界，不代表生产可用。
+- 涉及真实交换机、真实 ingress、安装包、外部系统的内容默认不在当前范围。
 
-Add `src/api/product_identity.rs`:
+## 行为边界
 
-- `ProductAuthenticatedPrincipal`: normalized identity output from a verifier.
-- `ProductIdentityVerifier`: trait for validating bearer tokens and returning a principal.
-- `StaticProductIdentityVerifier`: deterministic in-memory verifier for tests and local/offline mode.
-- `BearerTokenProductSessionExtractor`: `ProductSessionExtractor` implementation that reads `Authorization: Bearer <token>`, validates it through a verifier, and returns the existing `ProductSession`.
+- 对外暴露的 API 或 CLI 必须有明确输入、输出和错误码。
+- 高风险操作必须保留 request_id、trace_id、operator、reason 等可追踪字段。
+- 文件写入采用原子写或 append-only 语义，避免半写入状态。
+- 配置无效时拒绝启动或拒绝采用新配置，不静默降级。
 
-The existing `HeaderProductSessionExtractor` remains for local/mock contract tests only. Product-facing HTTP wiring should use `BearerTokenProductSessionExtractor` with the internal bearer-token verifier.
+## 测试要求
 
-## Semantics
+- 覆盖成功路径。
+- 覆盖权限/输入/配置错误。
+- 覆盖写失败或外部依赖失败时的 失败关闭 行为。
+- 没有真实交换机时，只允许 模拟适配器、样本、快照 和离线 校验器 验证。
 
-Bearer token extraction:
 
-- Header name is case-insensitive.
-- Scheme is `Bearer`, case-insensitive.
-- Missing header, malformed scheme, empty token, unknown token, and expired token all fail closed.
-- Token verification returns one role for now because the existing RBAC layer currently uses a single request role.
+## 当前收敛边界
 
-Principal fields:
-
-- `operator_id`
-- `role`
-- optional `issuer`
-- optional `subject`
-- optional `session_id`
-- optional `expires_at_unix_secs`
-
-Expiry is checked by the verifier using the current Unix time. An expired token fails before any product operation or audit export runs.
-
-## Error Handling
-
-Add `UnderlayError::AuthenticationFailed(String)`.
-
-`ProductHttpRouter` maps authentication failures to:
-
-- HTTP status `401`
-- JSON error code `authentication_failed`
-- `www-authenticate: Bearer`
-
-Authorization failures remain `403`. This keeps authentication and RBAC denial separate for product operators and future HTTP handlers.
-
-## Testing
-
-Add Rust contract tests for:
-
-- bearer token session can list operation summaries without mock operator/role headers;
-- missing bearer token fails with `AuthenticationFailed`;
-- unknown token fails with `AuthenticationFailed`;
-- expired token fails with `AuthenticationFailed`;
-- product HTTP route maps authentication failure to `401` and `www-authenticate: Bearer`;
-- existing mock header extractor behavior remains available.
-
-Local Rust tooling is unavailable in this workspace, so GitHub Actions remains the Rust compile/test gate.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

@@ -6,8 +6,8 @@
 
 真实联调的核心目标只有三个：
 
-- 确认 adapter 能稳定连接真实设备并读取 NETCONF capability。
-- 确认 VLAN / interface 的结构化 desired state 能被正确渲染、下发、验证。
+- 确认 adapter 能稳定连接真实设备并读取 NETCONF 能力。
+- 确认 VLAN / 接口 的结构化 desired state 能被正确渲染、下发、验证。
 - 确认失败路径不会产生假成功，必要时进入 `RolledBack` 或 `InDoubt`。
 
 ## 2. 联调前置条件
@@ -17,7 +17,7 @@
 | 管理连通性 | adapter 所在机器能访问交换机管理 IP |
 | 协议 | 优先 NETCONF over SSH，默认端口 830 |
 | 账号 | 使用专用测试账号，不使用个人管理员账号 |
-| 凭据 | 只通过 `secret_ref` 读取，不写入 inventory / journal / audit |
+| 凭据 | 只通过 `secret_ref` 读取，不写入 inventory / journal / 审计 |
 | 测试资源 | 明确测试 VLAN 范围、测试接口、可回滚窗口 |
 | 变更窗口 | 下发类测试必须在客户允许的维护窗口执行 |
 
@@ -27,7 +27,7 @@
 
 | 用例 | 操作 | 预期 |
 | --- | --- | --- |
-| Capability Probe | 运行 `real_capability_probe` | 输出 raw capabilities 和 recommended strategy |
+| Capability Probe | 运行 `real_capability_probe` | 输出 raw 能力 和 recommended strategy |
 | 认证失败 | 使用错误 `secret_ref` | 返回标准化认证错误，不创建事务 |
 | 端口不可达 | 使用不可达 IP / 端口 | 返回 `DEVICE_UNREACHABLE` 或 `NETCONF_CONNECT_FAILED` |
 
@@ -36,7 +36,7 @@
 | 用例 | 操作 | 预期 |
 | --- | --- | --- |
 | VLAN subtree | 读取指定 VLAN | 只返回目标 VLAN 子树 |
-| Interface subtree | 读取指定接口 | 只返回目标 interface 子树 |
+| Interface subtree | 读取指定接口 | 只返回目标 接口 子树 |
 | 空结果 | 查询不存在 VLAN / 接口 | 返回空状态，不报假错误 |
 | XML 解析异常 | 设备返回非预期 XML | 返回标准化 parse error，不更新 shadow |
 
@@ -67,7 +67,7 @@
 每台设备必须补齐：
 
 - `docs/device-capability-report.md` 的一份实例。
-- `docs/vendor/<vendor>.md` 中的 capability、namespace、XML、异常行为记录。
+- `docs/vendor/<vendor>.md` 中的 能力、namespace、XML、异常行为记录。
 - 真实下发日志中的 `request_id`、`tx_id`、`trace_id`。
 - 每个失败用例的 adapter 错误码和原始错误摘要。
 
@@ -76,7 +76,7 @@
 出现以下任一情况，不允许标记真实联调通过：
 
 - adapter 返回假 `NoChange` 或假 `Committed`。
-- 未实现 driver 仍能进入生产下发路径。
+- 未实现 驱动 仍能进入生产下发路径。
 - journal 缺失事务中间相位。
 - `InDoubt` 被自动当作成功清理。
-- 设备密码出现在日志、journal、audit 或 CI 输出中。
+- 设备密码出现在日志、journal、审计 或 CI 输出中。

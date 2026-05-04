@@ -1,100 +1,37 @@
-# Sprint 2G Validator Manifest Implementation Plan
+# Sprint 2G 校验器清单实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Extend `aria-underlay-state-parse` with JSON manifest batch validation for redacted NETCONF running XML samples.
+## 目标
 
-**Architecture:** Keep the existing single-sample path intact. Add a manifest path in `adapter-python/aria_underlay_adapter/state_parsers/validator.py` that validates manifest shape, resolves relative XML paths from the manifest directory, parses each sample independently, and prints one batch report.
+支持 清单 批量校验多份 XML 样本，产出结构化汇总。
 
-**Tech Stack:** Python 3.10+, argparse, json, pathlib, pytest.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: Manifest Success Path
+## 主要任务
 
-**Files:**
-- Modify: `adapter-python/tests/test_state_parser_validator.py`
-- Modify: `adapter-python/aria_underlay_adapter/state_parsers/validator.py`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [ ] **Step 1: Write failing test for successful manifest**
+## 验证要求
 
-Add `test_validator_manifest_outputs_batch_summary_for_successful_samples`. It should create a manifest with Huawei and H3C fixture XML paths, call `validator.main(["--manifest", str(manifest)])`, and assert `ok=True`, `sample_count=2`, `passed=2`, `failed=0`, plus per-sample summaries.
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-- [ ] **Step 2: Run test to verify failure**
 
-Run: `python3 -m pytest adapter-python/tests/test_state_parser_validator.py::test_validator_manifest_outputs_batch_summary_for_successful_samples -q`
+## 当前收敛边界
 
-Expected: fail because `--manifest` is not recognized.
-
-- [ ] **Step 3: Implement manifest success path**
-
-Add `--manifest`, parse JSON, validate `samples`, resolve XML paths, reuse parser lookup and `_summary`, and print batch JSON.
-
-- [ ] **Step 4: Run focused test**
-
-Run: `python3 -m pytest adapter-python/tests/test_state_parser_validator.py::test_validator_manifest_outputs_batch_summary_for_successful_samples -q`
-
-Expected: pass.
-
-### Task 2: Manifest Failure Reporting
-
-**Files:**
-- Modify: `adapter-python/tests/test_state_parser_validator.py`
-- Modify: `adapter-python/aria_underlay_adapter/state_parsers/validator.py`
-
-- [ ] **Step 1: Write failing mixed-result test**
-
-Add `test_validator_manifest_reports_all_samples_when_one_parse_fails`. It should create one valid XML sample and one invalid XML sample, run manifest validation, assert return code `1`, stdout report `ok=False`, `passed=1`, `failed=1`, and failed sample error code `NETCONF_STATE_PARSE_FAILED`.
-
-- [ ] **Step 2: Write failing invalid-manifest test**
-
-Add `test_validator_manifest_returns_structured_error_for_invalid_shape`. It should write `{"samples": {}}`, run manifest validation, assert return code `1`, stdout empty, stderr JSON with code `STATE_PARSER_MANIFEST_INVALID`.
-
-- [ ] **Step 3: Run tests to verify failure**
-
-Run: `python3 -m pytest adapter-python/tests/test_state_parser_validator.py -q`
-
-Expected: new manifest failure tests fail until manifest error handling is implemented.
-
-- [ ] **Step 4: Implement per-sample and manifest errors**
-
-Convert `AdapterError` into result-level `error` objects for sample parser failures. Add a small validator error helper for malformed manifests that writes structured JSON to stderr.
-
-- [ ] **Step 5: Run validator tests**
-
-Run: `python3 -m pytest adapter-python/tests/test_state_parser_validator.py -q`
-
-Expected: pass.
-
-### Task 3: Docs and Verification
-
-**Files:**
-- Modify: `adapter-python/README.md`
-- Modify: `adapter-python/tests/fixtures/state_parsers/real_samples/README.md`
-- Modify: `docs/progress-2026-04-26.md`
-
-- [ ] **Step 1: Document manifest usage**
-
-Add a manifest example and command to the adapter README.
-
-- [ ] **Step 2: Update real sample fixture policy**
-
-Document optional manifest files beside real samples and the batch validation command.
-
-- [ ] **Step 3: Update progress docs**
-
-Add Sprint 2G status and keep the real-device and production-readiness boundary explicit.
-
-- [ ] **Step 4: Run full adapter tests**
-
-Run: `python3 -m pytest adapter-python/tests -q`
-
-Expected: all adapter tests pass.
-
-- [ ] **Step 5: Check whitespace and commit**
-
-Run: `git diff --check`
-
-Expected: no whitespace errors.
-
-Commit only Sprint 2G files; do not include unrelated `.gitignore` or `.claude/`.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

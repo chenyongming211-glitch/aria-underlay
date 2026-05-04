@@ -1,119 +1,38 @@
-# Worker Config Admin Ops Design
+# 工作进程配置管理设计文档
 
-## Goal
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-Add audited, RBAC-protected local operations for changing worker daemon retention and schedule settings without requiring a real switch.
+## 设计目标
 
-## Scope
+定义通过本地 CLI 安全修改 worker 配置的文件边界和失败语义。
 
-In scope:
+## 设计原则
 
-- Update the JSON worker daemon config file through `aria-underlay-ops`.
-- Change operation summary retention policy.
-- Change journal GC retention policy.
-- Change worker schedules for operation summary compaction, operation alert delivery, journal GC, and drift audit.
-- Require RBAC authorization and product audit before writing config changes.
+- 复用现有架构边界，不为单个需求新造大平台。
+- 读写路径要可测试、可审计、失败语义清晰。
+- 本地/样本/骨架 能力只证明开发边界，不代表生产可用。
+- 涉及真实交换机、真实 ingress、安装包、外部系统的内容默认不在当前范围。
 
-Out of scope:
+## 行为边界
 
-- Online daemon hot reload.
-- Product database storage.
-- Product API/UI.
-- Real switch validation.
+- 对外暴露的 API 或 CLI 必须有明确输入、输出和错误码。
+- 高风险操作必须保留 request_id、trace_id、operator、reason 等可追踪字段。
+- 文件写入采用原子写或 append-only 语义，避免半写入状态。
+- 配置无效时拒绝启动或拒绝采用新配置，不静默降级。
 
-## Design
+## 测试要求
 
-The worker daemon already reads `UnderlayWorkerDaemonConfig` from JSON and wires workers from that config. This package adds a dedicated `WorkerConfigAdminManager` that owns safe config mutation:
+- 覆盖成功路径。
+- 覆盖权限/输入/配置错误。
+- 覆盖写失败或外部依赖失败时的 失败关闭 行为。
+- 没有真实交换机时，只允许 模拟适配器、样本、快照 和离线 校验器 验证。
 
-1. Validate request fields and target-specific policy/schedule values.
-2. Authorize with existing `AuthorizationPolicy`.
-3. Append a product audit pre-record.
-4. Load the current worker config.
-5. Apply the requested patch.
-6. Persist the full config with atomic write.
 
-The manager is deliberately separate from `UnderlayWorkerDaemon` because it changes desired daemon configuration, not a running worker instance.
+## 当前收敛边界
 
-## RBAC
-
-Use existing `AdminAction` values:
-
-| Operation | `AdminAction` | Allowed role |
-| --- | --- | --- |
-| operation summary retention | `ChangeRetentionPolicy` | `Admin` |
-| journal GC retention | `ChangeRetentionPolicy` | `Admin` |
-| worker schedule | `ChangeDaemonSchedule` | `Admin` |
-
-`Viewer`, `Operator`, `BreakGlassOperator`, and `Auditor` are denied for these write operations.
-
-## Audit
-
-Product audit records are written before config mutation. If audit append fails, the config file must not change.
-
-Audit actions:
-
-- `daemon.retention_change_requested`
-- `daemon.schedule_change_requested`
-
-Records include:
-
-- `operator_id`
-- `role`
-- `reason`
-- `config_path`
-- `target`
-- changed values in `fields`
-
-## CLI
-
-Add these commands:
-
-```bash
-aria-underlay-ops set-summary-retention \
-  --worker-config-path <file> \
-  --product-audit-path <file> \
-  --operator <name> \
-  --role Admin \
-  --reason <text> \
-  [--max-records <n>] \
-  [--max-bytes <n>] \
-  [--max-rotated-files <n>]
-```
-
-```bash
-aria-underlay-ops set-gc-retention \
-  --worker-config-path <file> \
-  --product-audit-path <file> \
-  --operator <name> \
-  --role Admin \
-  --reason <text> \
-  --committed-days <n> \
-  --rolled-back-days <n> \
-  --failed-days <n> \
-  --rollback-artifact-days <n> \
-  --max-artifacts-per-device <n>
-```
-
-```bash
-aria-underlay-ops set-worker-schedule \
-  --worker-config-path <file> \
-  --product-audit-path <file> \
-  --operator <name> \
-  --role Admin \
-  --reason <text> \
-  --target operation-summary-retention|operation-alert|journal-gc|drift-audit \
-  --interval-secs <n> \
-  --run-immediately true|false
-```
-
-If the target section is missing from config, the command fails closed instead of silently creating a partial daemon config.
-
-## Testing
-
-Tests cover:
-
-- Admin can update summary retention and product audit records the request.
-- Non-admin cannot update schedule and config stays unchanged.
-- Product audit write failure blocks config mutation.
-- CLI updates worker config and writes audit.
-- Invalid schedule interval zero is rejected before file mutation.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

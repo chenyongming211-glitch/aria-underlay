@@ -1,70 +1,38 @@
-# Product API Routing Skeleton Design
+# 产品 API 门面骨架设计文档
 
-## Goal
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-Add a handler-facing product operations API skeleton so future HTTP handlers can call a single RBAC/audit-safe boundary instead of wiring product operations directly.
+## 设计目标
 
-## Scope
+在 ProductOpsManager 外提供 handler-facing facade，固定 request/session/RBAC/审计 调用链。
 
-Included:
+## 设计原则
 
-- A generic product API request envelope.
-- A generic product API response envelope.
-- A mock header-based product session extractor.
-- A `ProductOpsApi` facade for operation summary listing and product audit export.
-- Contract tests for success, missing identity, role denial, and audit-write-failure paths.
+- 复用现有架构边界，不为单个需求新造大平台。
+- 读写路径要可测试、可审计、失败语义清晰。
+- 本地/样本/骨架 能力只证明开发边界，不代表生产可用。
+- 涉及真实交换机、真实 ingress、安装包、外部系统的内容默认不在当前范围。
 
-Excluded:
+## 行为边界
 
-- Real HTTP server or router.
-- Identity provider integration.
-- Token/session cryptographic validation.
-- Product UI.
-- Real switch access.
-- Online daemon reload.
+- 对外暴露的 API 或 CLI 必须有明确输入、输出和错误码。
+- 高风险操作必须保留 request_id、trace_id、operator、reason 等可追踪字段。
+- 文件写入采用原子写或 append-only 语义，避免半写入状态。
+- 配置无效时拒绝启动或拒绝采用新配置，不静默降级。
 
-## Design
+## 测试要求
 
-`ProductOpsApi` lives in `src/api/product_api.rs`. It is a thin handler-facing facade over `ProductOpsManager`. It accepts `ProductApiRequest<T>` values with:
+- 覆盖成功路径。
+- 覆盖权限/输入/配置错误。
+- 覆盖写失败或外部依赖失败时的 失败关闭 行为。
+- 没有真实交换机时，只允许 模拟适配器、样本、快照 和离线 校验器 验证。
 
-- `request_id`
-- optional `trace_id`
-- string headers
-- typed body
 
-The API extracts a `ProductSession` from request metadata through a `ProductSessionExtractor` trait. The first implementation is `HeaderProductSessionExtractor`, which reads:
+## 当前收敛边界
 
-- `x-aria-operator-id`
-- `x-aria-role`
-
-This is explicitly a mock/local extractor for contract tests and local product integration. It is not a trusted production identity model.
-
-For each request, `ProductOpsApi` builds a request-scoped `StaticAuthorizationPolicy` from the extracted session and calls `ProductOpsManager`. This keeps the business operation path behind the same RBAC/audit rules introduced by the product ops boundary while keeping identity extraction replaceable later.
-
-## Behavior
-
-`list_operation_summaries`:
-
-- requires a valid session,
-- authorizes `ListOperationSummaries`,
-- returns `ProductApiResponse<ListOperationSummariesResponse>`,
-- does not write product audit in this package.
-
-`export_product_audit`:
-
-- requires a valid session,
-- authorizes `ExportAuditHistory`,
-- writes `product_audit.export_requested` before returning records,
-- fails closed if audit append fails.
-
-## Testing
-
-Tests cover:
-
-- summary list succeeds with a mock viewer session,
-- missing operator header is rejected,
-- audit export succeeds with a mock auditor session and records the export,
-- audit export is denied for a mock operator session,
-- audit export fails closed when product audit append fails.
-
-Local Rust tests may be unavailable on this workstation because `cargo` is not installed. GitHub Actions remains the Rust compile and test gate.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

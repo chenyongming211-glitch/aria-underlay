@@ -1,69 +1,37 @@
-# Journal GC Worker Telemetry Implementation Plan
+# 日志 GC 工作进程遥测实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Emit a structured telemetry event whenever journal/artifact GC completes successfully.
+## 目标
 
-**Architecture:** Keep `JournalGc` as the cleanup engine. Add a small `JournalGcWorker` wrapper that runs GC once and emits `UnderlayJournalGcCompleted` through the existing `EventSink` abstraction.
+为 journal/artifact 清理增加运行摘要和事件输出。
 
-**Tech Stack:** Rust, Tokio tests, existing `telemetry` event/sink types.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: Add GC Telemetry Event Builder
+## 主要任务
 
-**Files:**
-- Modify: `src/telemetry/events.rs`
-- Test: `tests/gc_tests.rs`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [ ] **Step 1: Write failing event mapping test**
+## 验证要求
 
-Add a test that calls `UnderlayEvent::journal_gc_completed("req-gc", "trace-gc", &report)` and asserts the event kind and count fields.
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-- [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test journal_gc_completed_event_includes_cleanup_counts`
+## 当前收敛边界
 
-Expected: compile failure because `journal_gc_completed` does not exist.
-
-- [ ] **Step 3: Implement event builder**
-
-Add `UnderlayEvent::journal_gc_completed()` in `src/telemetry/events.rs`. It should set `kind` to `UnderlayJournalGcCompleted`, preserve request/trace IDs, and serialize report counts into `fields`.
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `cargo test journal_gc_completed_event_includes_cleanup_counts`
-
-Expected: pass.
-
-### Task 2: Add Single-Run GC Worker
-
-**Files:**
-- Modify: `src/worker/gc.rs`
-- Test: `tests/gc_tests.rs`
-
-- [ ] **Step 1: Write failing worker test**
-
-Add a test that constructs `JournalGcWorker`, runs `run_once_and_emit()`, and checks that one event was emitted with the same cleanup counts as the report.
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `cargo test gc_worker_emits_completion_event_after_successful_run`
-
-Expected: compile failure because `JournalGcWorker` does not exist.
-
-- [ ] **Step 3: Implement worker wrapper**
-
-Add `JournalGcWorker` with `new(gc, policy, event_sink)`, optional `with_request_context()`, and async `run_once_and_emit()`.
-
-- [ ] **Step 4: Run focused and full tests**
-
-Run:
-
-```bash
-cargo test gc_worker_emits_completion_event_after_successful_run
-cargo test journal_gc_completed_event_includes_cleanup_counts
-cargo test
-```
-
-Expected: all pass in an environment with Rust installed.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

@@ -1,95 +1,37 @@
-# Sprint 2E Validator Usability Implementation Plan
+# Sprint 2E 校验器易用性实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Improve `aria-underlay-state-parse` with pretty JSON and summary output for field XML sample triage.
+## 目标
 
-**Architecture:** Extend `adapter-python/aria_underlay_adapter/state_parsers/validator.py` with output formatting and summary construction. Keep parsing, registry selection, and production readiness gates unchanged.
+给 校验器 增加 pretty/summary 等便于现场样本 triage 的输出。
 
-**Tech Stack:** Python 3.10+, argparse, json, pytest.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: Pretty Output
+## 主要任务
 
-**Files:**
-- Modify: `adapter-python/tests/test_state_parser_validator.py`
-- Modify: `adapter-python/aria_underlay_adapter/state_parsers/validator.py`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [ ] **Step 1: Write failing pretty output test**
+## 验证要求
 
-Add a test that calls `validator.main([... "--pretty"])` and asserts stdout contains indented JSON with a newline and remains parseable by `json.loads`.
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-- [ ] **Step 2: Run test to verify it fails**
 
-Run: `python3 -m pytest adapter-python/tests/test_state_parser_validator.py::test_validator_pretty_prints_observed_state_json -q`
+## 当前收敛边界
 
-Expected: fail because `--pretty` is not recognized.
-
-- [ ] **Step 3: Implement pretty flag**
-
-Add `--pretty` to argparse and print JSON with `indent=2` when enabled.
-
-- [ ] **Step 4: Run focused test**
-
-Run: `python3 -m pytest adapter-python/tests/test_state_parser_validator.py::test_validator_pretty_prints_observed_state_json -q`
-
-Expected: pass.
-
-### Task 2: Summary Output
-
-**Files:**
-- Modify: `adapter-python/tests/test_state_parser_validator.py`
-- Modify: `adapter-python/aria_underlay_adapter/state_parsers/validator.py`
-
-- [ ] **Step 1: Write failing summary test**
-
-Add a test that calls `validator.main([... "--summary"])` and asserts `profile_name`, `fixture_verified`, `production_ready`, `vlan_count`, and `interface_count`.
-
-- [ ] **Step 2: Write scoped summary test**
-
-Add a test that calls `validator.main([... "--summary", "--vlan", "100", "--interface", "GE1/0/1"])` and asserts counts are scoped to 1 and the scope payload includes requested values.
-
-- [ ] **Step 3: Run summary tests to verify failure**
-
-Run: `python3 -m pytest adapter-python/tests/test_state_parser_validator.py -q`
-
-Expected: summary tests fail because `--summary` is not implemented.
-
-- [ ] **Step 4: Implement summary payload**
-
-Build summary from `parser.profile`, parsed state, and scope. Keep error JSON unchanged.
-
-- [ ] **Step 5: Run validator tests**
-
-Run: `python3 -m pytest adapter-python/tests/test_state_parser_validator.py -q`
-
-Expected: pass.
-
-### Task 3: Docs and Verification
-
-**Files:**
-- Modify: `adapter-python/README.md`
-- Modify: `docs/progress-2026-04-26.md`
-
-- [ ] **Step 1: Document field usage**
-
-Update README with `--summary` and `--pretty` examples.
-
-- [ ] **Step 2: Update progress docs**
-
-Add Sprint 2E status and keep the production-readiness boundary explicit.
-
-- [ ] **Step 3: Run full adapter tests**
-
-Run: `python3 -m pytest adapter-python/tests -q`
-
-Expected: all adapter tests pass.
-
-- [ ] **Step 4: Check whitespace and commit**
-
-Run: `git diff --check`
-
-Expected: no whitespace errors.
-
-Commit only Sprint 2E files; do not include unrelated `.gitignore` or `.claude/`.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

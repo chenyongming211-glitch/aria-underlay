@@ -1,82 +1,37 @@
-# Confirmed Commit Recovery Hardening Implementation Plan
+# 确认提交恢复加固实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Close the `FinalConfirming` crash window where a confirmed commit can be applied on the device but recovery repeatedly tries only `cancel-commit`.
+## 目标
 
-**Architecture:** Persist recovery-safe desired device state and change-set scope in the transaction journal, then handle `FinalConfirming + ConfirmedCommit` as a roll-forward-first recovery path. Recovery first retries `final_confirm`; if that cannot prove success, it verifies the persisted desired state using the original touched-resource scope; only when success cannot be proven does it attempt the existing adapter rollback path or mark the transaction `InDoubt`.
+加固 confirmed-commit 恢复路径，避免提交成功但恢复判断不完整。
 
-**Tech Stack:** Rust transaction service, JSON transaction journal, tonic adapter client, existing fake adapter test server.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: Refresh Bug Documentation
+## 主要任务
 
-**Files:**
-- Modify: `docs/bug-inventory-2026-04-30.md`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [x] **Step 1: Mark current vs superseded findings**
+## 验证要求
 
-Add a status matrix that separates currently confirmed P0/P1/P2 findings from stale 2026-04-26 claims already fixed by later commits.
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-### Task 2: Add Regression Coverage
 
-**Files:**
-- Modify: `tests/recovery_tests.rs`
+## 当前收敛边界
 
-- [ ] **Step 1: Write the failing test**
-
-Add a recovery test that seeds a journal record in `TxPhase::FinalConfirming`, with `TransactionStrategy::ConfirmedCommit`, persisted desired state, and persisted change set. The fake adapter should fail `FinalConfirm`, fail generic `Recover`, but succeed `Verify`. Expected recovery result: terminal `Committed`.
-
-- [ ] **Step 2: Run the focused Rust test**
-
-Run: `cargo test --test recovery_tests recover_pending_transactions_confirms_final_confirming_by_verifying_desired_state`
-
-Expected before implementation: fail because current recovery never uses final-confirm retry or desired-state verify for `FinalConfirming`.
-
-### Task 3: Persist Recovery Desired State and Change Scope
-
-**Files:**
-- Modify: `src/tx/journal.rs`
-- Modify: `src/api/service.rs`
-- Modify: `tests/gc_tests.rs`
-
-- [ ] **Step 1: Add `desired_states` and `change_sets` to `TxJournalRecord`**
-
-Add `#[serde(default)] pub desired_states: Vec<DeviceDesiredState>`, `#[serde(default)] pub change_sets: Vec<ChangeSet>`, and matching builder helpers. This keeps old journal files readable.
-
-- [ ] **Step 2: Store desired state at transaction start**
-
-When creating a transaction record in `apply_single_endpoint_state`, call `with_desired_states(vec![desired.clone()])` and `with_change_sets(plan.change_sets.clone())` before the first journal write.
-
-### Task 4: Fix `FinalConfirming` Recovery
-
-**Files:**
-- Modify: `src/api/service.rs`
-
-- [ ] **Step 1: Add a dedicated `recover_final_confirming_record()` path**
-
-When `record.phase == FinalConfirming` and strategy is `ConfirmedCommit`, recover per device by:
-
-1. retrying `final_confirm_with_context`;
-2. if final-confirm cannot prove success, verifying the persisted desired state with the persisted change-set scope;
-3. if verification cannot prove success, falling back to existing adapter recover;
-4. returning an explicit `FINAL_CONFIRM_RECOVERY_IN_DOUBT` error if no path can prove `Committed` or `RolledBack`.
-
-- [ ] **Step 2: Keep other phases unchanged**
-
-`Committing` and `Verifying` continue to use the existing adapter recover path, so recovery does not blindly roll forward before verification.
-
-### Task 5: Verify and Record Result
-
-**Files:**
-- Modify: `docs/bug-inventory-2026-04-30.md`
-- Modify: `docs/progress-2026-04-26.md`
-
-- [ ] **Step 1: Run local verification**
-
-Run Python tests and any available Rust checks. If local `cargo` is unavailable, rely on GitHub Actions for Rust and state that explicitly.
-
-- [ ] **Step 2: Update docs**
-
-Mark the P0 finding fixed with the commit SHA and describe the remaining P1/P2 backlog.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

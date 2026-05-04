@@ -1,100 +1,37 @@
-# Product Ops RBAC Boundary Implementation Plan
+# 产品运维边界实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Add a reusable product operations manager that RBAC-gates product-facing reads and audit exports.
+## 目标
 
-**Architecture:** Add `src/api/product_ops.rs` as a focused facade over `AuthorizationPolicy`, `OperationSummaryStore`, and `ProductAuditStore`. Extend `ProductAuditStore` with a read method so audit export can use the same trait boundary as append.
+提供 product-facing 操作管理器；当前不继续扩展为复杂权限平台。
 
-**Tech Stack:** Rust, serde, existing authz, telemetry, and operation summary store traits.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: Product Ops Tests
+## 主要任务
 
-**Files:**
-- Create: `tests/product_ops_rbac_tests.rs`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [ ] **Step 1: Write failing tests**
+## 验证要求
 
-Add tests for summary list authorization, audit export authorization, export audit recording, and audit-write-failure fail-closed behavior.
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-- [ ] **Step 2: Run focused tests to verify red**
 
-Run:
+## 当前收敛边界
 
-```bash
-cargo test --test product_ops_rbac_tests
-```
-
-Expected locally if `cargo` exists: compile failure because `api::product_ops` does not exist yet. If `cargo` is unavailable, record that local Rust execution is blocked and rely on GitHub Actions after implementation.
-
-### Task 2: Product Audit Store Read Boundary
-
-**Files:**
-- Modify: `src/telemetry/audit.rs`
-- Modify: `src/telemetry/mod.rs`
-
-- [ ] **Step 1: Extend trait**
-
-Add `fn list(&self) -> UnderlayResult<Vec<ProductAuditRecord>>` to `ProductAuditStore`.
-
-- [ ] **Step 2: Implement for stores**
-
-Implement `list` for `NoopProductAuditStore`, `InMemoryProductAuditStore`, and `JsonFileProductAuditStore`.
-
-- [ ] **Step 3: Add audit record constructor**
-
-Add `ProductAuditRecord::product_audit_export_requested`.
-
-### Task 3: Product Ops Manager
-
-**Files:**
-- Create: `src/api/product_ops.rs`
-- Modify: `src/api/mod.rs`
-
-- [ ] **Step 1: Add request/response types**
-
-Add `ProductOperatorContext`, `ExportProductAuditRequest`, `ProductAuditExportOverview`, and `ExportProductAuditResponse`.
-
-- [ ] **Step 2: Add manager methods**
-
-Implement `list_operation_summaries` and `export_product_audit`.
-
-- [ ] **Step 3: Wire module export**
-
-Add `pub mod product_ops;` in `src/api/mod.rs`.
-
-### Task 4: Docs
-
-**Files:**
-- Modify: `docs/runbooks/operator-operations.md`
-- Modify: `docs/progress-2026-04-26.md`
-- Modify: `docs/bug-inventory-current-2026-05-01.md`
-
-- [ ] **Step 1: Document product API boundary**
-
-Record that product-facing reads now require operator context and RBAC.
-
-- [ ] **Step 2: Update remaining gaps**
-
-Leave real HTTP routing, internal identity wiring, UI, and online reload as open work.
-
-### Task 5: Verification and Release Gate
-
-**Files:**
-- All changed files
-
-- [ ] **Step 1: Run local runnable checks**
-
-Run:
-
-```bash
-git diff --check
-python3 -m pytest adapter-python/tests -q
-cargo test --test product_ops_rbac_tests
-```
-
-- [ ] **Step 2: Commit and push**
-
-Stage only relevant files, commit, push to `origin main`, and wait for GitHub Actions to pass before moving to the next package.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

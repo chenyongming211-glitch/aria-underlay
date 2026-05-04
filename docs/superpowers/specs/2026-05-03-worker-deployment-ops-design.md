@@ -1,63 +1,38 @@
-# Worker Deployment Ops Design
+# 工作进程部署样例设计文档
 
-## Goal
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-Make the worker daemon safer to deploy without requiring a real switch by adding checked-in production deployment samples and an offline config preflight command.
+## 设计目标
 
-## Scope
+定义 production-style JSON、systemd、tmpfiles 和 预检；不做安装包。
 
-Included:
+## 设计原则
 
-- A production-style worker daemon JSON config sample with absolute paths under `/var/lib/aria-underlay`.
-- A systemd service sample that validates config before daemon startup.
-- A tmpfiles.d sample that documents runtime directory ownership and permissions.
-- `aria-underlay-ops check-worker-config` for offline structural and optional filesystem checks.
-- Tests that parse the checked-in samples and exercise valid and invalid preflight cases.
+- 复用现有架构边界，不为单个需求新造大平台。
+- 读写路径要可测试、可审计、失败语义清晰。
+- 本地/样本/骨架 能力只证明开发边界，不代表生产可用。
+- 涉及真实交换机、真实 ingress、安装包、外部系统的内容默认不在当前范围。
 
-Excluded:
+## 行为边界
 
-- Online daemon reload.
-- Host-specific package installation.
-- Real switch sessions.
-- External alert delivery.
+- 对外暴露的 API 或 CLI 必须有明确输入、输出和错误码。
+- 高风险操作必须保留 request_id、trace_id、operator、reason 等可追踪字段。
+- 文件写入采用原子写或 append-only 语义，避免半写入状态。
+- 配置无效时拒绝启动或拒绝采用新配置，不静默降级。
 
-## Design
+## 测试要求
 
-The preflight lives in a focused Rust module under `src/worker/deployment.rs`. It reads `UnderlayWorkerDaemonConfig`, validates dependency rules and schedules, validates retention policies, and can optionally check whether required parent directories exist and are writable. The command never starts workers, opens adapter sessions, locks devices, edits config, or changes persistent state except for temporary write probes in directories being checked.
+- 覆盖成功路径。
+- 覆盖权限/输入/配置错误。
+- 覆盖写失败或外部依赖失败时的 失败关闭 行为。
+- 没有真实交换机时，只允许 模拟适配器、样本、快照 和离线 校验器 验证。
 
-`strict_paths=false` is suitable for CI and config authoring because it checks semantics only. `strict_paths=true` is suitable for host startup because it verifies required directories exist and can be written by the service account.
 
-## Failure Semantics
+## 当前收敛边界
 
-Preflight is fail-closed:
-
-- JSON parse errors return an invalid report and non-zero CLI status.
-- `operation_alert` without `operation_summary` is invalid.
-- Any enabled schedule with `interval_secs=0` is invalid.
-- Invalid summary or journal GC retention is invalid.
-- In strict mode, missing or non-writable required directories are invalid.
-
-The CLI prints a JSON report before returning failure so operators and service managers have machine-readable evidence.
-
-## Deployment Samples
-
-The systemd sample uses:
-
-- `ExecStartPre=/usr/local/bin/aria-underlay-ops check-worker-config --worker-config-path /etc/aria-underlay/worker.json --strict-paths`
-- `ExecStart=/usr/local/bin/aria-underlay-worker /etc/aria-underlay/worker.json`
-- `User=aria-underlay`
-- restricted write paths for `/var/lib/aria-underlay`, `/var/log/aria-underlay`, and `/run/aria-underlay`
-
-The tmpfiles.d sample creates the directories needed by the production JSON sample with `aria-underlay` ownership.
-
-## Testing
-
-Tests cover:
-
-- Checked-in deployment sample consistency.
-- Strict preflight success with existing writable directories.
-- Schedule validation without starting daemon workers.
-- Strict path failure for missing directories.
-- CLI success path for `check-worker-config --strict-paths`.
-
-Local Rust tests may be unavailable on this workstation because `cargo` is not installed. GitHub Actions remains the Rust compile and test gate.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

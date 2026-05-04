@@ -1,103 +1,38 @@
-# Sprint 2G Validator Manifest Design
+# Sprint 2G 校验器清单设计文档
 
-## Goal
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-Make `aria-underlay-state-parse` useful for validating a batch of redacted NETCONF running XML samples after field capture.
+## 设计目标
 
-## Scope
+支持 清单 批量校验多份 XML 样本，产出结构化汇总。
 
-This phase extends the offline validator only. It does not connect to devices, does not change `NetconfBackedDriver`, and does not make fixture parsers production-ready.
+## 设计原则
 
-Add one option:
+- 复用现有架构边界，不为单个需求新造大平台。
+- 读写路径要可测试、可审计、失败语义清晰。
+- 本地/样本/骨架 能力只证明开发边界，不代表生产可用。
+- 涉及真实交换机、真实 ingress、安装包、外部系统的内容默认不在当前范围。
 
-- `--manifest`: read a JSON manifest that lists samples to validate.
+## 行为边界
 
-`--manifest` is mutually exclusive with single-sample `--vendor` and `--xml`. Existing single-sample behavior remains unchanged.
+- 对外暴露的 API 或 CLI 必须有明确输入、输出和错误码。
+- 高风险操作必须保留 request_id、trace_id、operator、reason 等可追踪字段。
+- 文件写入采用原子写或 append-only 语义，避免半写入状态。
+- 配置无效时拒绝启动或拒绝采用新配置，不静默降级。
 
-## Manifest Format
+## 测试要求
 
-The manifest is a JSON object with a `samples` array:
+- 覆盖成功路径。
+- 覆盖权限/输入/配置错误。
+- 覆盖写失败或外部依赖失败时的 失败关闭 行为。
+- 没有真实交换机时，只允许 模拟适配器、样本、快照 和离线 校验器 验证。
 
-```json
-{
-  "samples": [
-    {
-      "name": "huawei-vrp8-fixture",
-      "vendor": "huawei",
-      "xml": "adapter-python/tests/fixtures/state_parsers/huawei/vrp8_running.xml",
-      "scope": {
-        "vlans": [100],
-        "interfaces": ["GE1/0/1"]
-      }
-    }
-  ]
-}
-```
 
-`scope` is optional. Without scope, a sample is parsed as full observed state.
+## 当前收敛边界
 
-Relative XML paths are resolved relative to the manifest file location. This keeps a real sample manifest portable inside the fixture tree.
-
-## Output
-
-The validator prints one JSON report to stdout:
-
-```json
-{
-  "ok": false,
-  "sample_count": 2,
-  "passed": 1,
-  "failed": 1,
-  "samples": [
-    {
-      "name": "sample-a",
-      "ok": true,
-      "summary": {
-        "vendor": "huawei",
-        "profile_name": "vrp8-state-fixture",
-        "fixture_verified": true,
-        "production_ready": false,
-        "vlan_count": 1,
-        "interface_count": 1,
-        "scope": {
-          "full": false,
-          "vlan_ids": [100],
-          "interface_names": ["GE1/0/1"]
-        }
-      }
-    },
-    {
-      "name": "sample-b",
-      "ok": false,
-      "error": {
-        "code": "NETCONF_STATE_PARSE_FAILED",
-        "message": "failed to parse NETCONF running state",
-        "normalized_error": "parser_error",
-        "raw_error_summary": "missing required text: vlan/vlan-id",
-        "retryable": false
-      }
-    }
-  ]
-}
-```
-
-The command exits `0` only when every sample passes. It exits `1` when any sample fails, but still prints the full batch report to stdout so operators can see every sample result.
-
-## Error Handling
-
-Manifest validation failures return `1` and print structured JSON to stderr. Examples include invalid JSON, missing `samples`, non-object sample entries, missing sample fields, non-list scope fields, invalid scope item types, and mixing `--manifest` with single-sample arguments.
-
-Per-sample parser failures and unreadable XML files are captured inside the stdout batch report instead of aborting the whole batch. This lets one bad sample coexist with successful samples in the same triage run.
-
-## Tests
-
-Add validator tests for:
-
-- a manifest with two successful samples;
-- a manifest with one successful sample and one parser failure;
-- relative XML paths resolved from the manifest location;
-- invalid manifest shape returns structured stderr JSON.
-
-## Production Boundary
-
-Manifest validation is still sample qualification. A successful batch is evidence for parser development and regression coverage, not permission to set `production_ready=True`.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

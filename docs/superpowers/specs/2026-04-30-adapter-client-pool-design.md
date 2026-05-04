@@ -1,33 +1,38 @@
-# Adapter Client Pool Design
+# 适配器客户端连接池设计文档
 
-## Context
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-Rust core currently creates a new `AdapterClient::connect(endpoint)` for onboarding, dry-run state reads, apply, recovery, drift audit, and force unlock. That works in tests, but it creates avoidable gRPC channel churn and gives production no central place to manage endpoint channel lifecycle.
+## 设计目标
 
-## Decision
+按 adapter endpoint 缓存 tonic channel，调用方仍获取独立 client facade。
 
-Add an `AdapterClientPool` in `src/adapter_client/` that caches tonic `Channel` handles by adapter endpoint. Callers request a fresh `AdapterClient` facade from the pool for each operation; the facade owns an `UnderlayAdapterClient<Channel>` built from the cached channel clone.
+## 设计原则
 
-This keeps the pool boundary at the adapter client layer and avoids sharing one mutable RPC client across tasks. tonic `Channel` is already cheap to clone and supports HTTP/2 multiplexing and reconnect behavior, so caching channels is the right first production step.
+- 复用现有架构边界，不为单个需求新造大平台。
+- 读写路径要可测试、可审计、失败语义清晰。
+- 本地/样本/骨架 能力只证明开发边界，不代表生产可用。
+- 涉及真实交换机、真实 ingress、安装包、外部系统的内容默认不在当前范围。
 
-## Behavior
+## 行为边界
 
-- Same endpoint reuses one cached channel handle.
-- Different endpoints receive separate cached channels.
-- Invalid endpoint URIs fail before a client is returned.
-- Transport failures during RPC are still surfaced by the existing `AdapterClient` methods.
-- The pool exposes a small `invalidate(endpoint)` hook for future failure policies and operational controls.
+- 对外暴露的 API 或 CLI 必须有明确输入、输出和错误码。
+- 高风险操作必须保留 request_id、trace_id、operator、reason 等可追踪字段。
+- 文件写入采用原子写或 append-only 语义，避免半写入状态。
+- 配置无效时拒绝启动或拒绝采用新配置，不静默降级。
 
-## Integration
+## 测试要求
 
-- `AriaUnderlayService` owns one `AdapterClientPool`.
-- `DeviceOnboardingService` owns or receives the same pool where it is called from `AriaUnderlayService` and site initialization.
-- Existing `AdapterClient::connect(endpoint)` remains for examples and direct probes.
-- Default constructors create a default pool; tests can inject one if needed.
+- 覆盖成功路径。
+- 覆盖权限/输入/配置错误。
+- 覆盖写失败或外部依赖失败时的 失败关闭 行为。
+- 没有真实交换机时，只允许 模拟适配器、样本、快照 和离线 校验器 验证。
 
-## Non-Goals
 
-- No idle eviction in this sprint.
-- No max-per-endpoint object pool; tonic channel multiplexing makes that unnecessary for the current architecture.
-- No health-check worker in this sprint.
-- No real-switch validation dependency.
+## 当前收敛边界
+
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

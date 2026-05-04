@@ -1,92 +1,37 @@
-# Operation Summary Ops Surface Implementation Plan
+# 操作摘要运维查询面实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:test-driven-development for code changes and superpowers:verification-before-completion before claiming completion.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Make persisted operation summaries usable as an offline operator-facing query surface without requiring real switches, device sessions, or a product UI.
+## 目标
 
-**Architecture:** Extend the existing `list_operation_summaries` service API rather than adding a parallel JSONL parser. The service remains the single query path over any `OperationSummaryStore`. It filters records, returns a matched-record overview before limit truncation, and the existing `transaction_ops` example exposes read-only JSON output for local operations.
+让 操作摘要 成为本地可查询的运维入口，而不是只靠读源码和 JSONL。
 
-**Scope:**
+## 实施范围
 
-- Add result filtering to `ListOperationSummariesRequest`.
-- Add `OperationSummaryOverview` with matched/returned counts and action/result/device rollups.
-- Keep `limit` as a display concern: it truncates returned records, not the overview counts.
-- Extend `examples/transaction_ops.rs` with `list-operations` and `operation-summary`.
-- Keep storage, authorization, alert delivery, and product UI as separate follow-up work.
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
----
+## 主要任务
 
-### Task 1: API Rollup
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-**Files:**
+## 验证要求
 
-- Modify: `src/api/operations.rs`
-- Modify: `src/api/service.rs`
-- Test: `tests/telemetry_tests.rs`
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-- [x] **Step 1: Write failing test**
 
-Add a test that records multiple operation events, filters by result, applies a limit, and expects the overview to count all filtered records before limit truncation.
+## 当前收敛边界
 
-Local note: `cargo test operation_summary_query_returns_rollup_for_all_filtered_records_before_limit` cannot run in this workspace because `cargo` is unavailable.
-
-- [x] **Step 2: Implement request/response changes**
-
-Add `result` to `ListOperationSummariesRequest` and add `OperationSummaryOverview` to `ListOperationSummariesResponse`.
-
-- [x] **Step 3: Preserve limit semantics**
-
-Apply filters first, compute overview over the full filtered set, then apply `limit` to returned records.
-
-### Task 2: Offline CLI Entry
-
-**Files:**
-
-- Modify: `examples/transaction_ops.rs`
-
-- [x] **Step 1: Add list command**
-
-Add:
-
-```text
-cargo run --example transaction_ops -- list-operations --operation-summary-path <file> [filters]
-```
-
-It prints the full response: matching summaries plus overview.
-
-- [x] **Step 2: Add overview-only command**
-
-Add:
-
-```text
-cargo run --example transaction_ops -- operation-summary --operation-summary-path <file> [filters]
-```
-
-It prints only the overview object.
-
-- [x] **Step 3: Reuse service API**
-
-Both commands call `AriaUnderlayService::list_operation_summaries()` with a `JsonFileOperationSummaryStore`; they do not parse or mutate JSONL directly.
-
-### Task 3: Verification
-
-- [x] **Step 1: Local checks**
-
-Run:
-
-```bash
-python3 -m pytest adapter-python/tests -q
-git diff --check
-```
-
-Result: Python adapter tests passed with `238 passed`; `git diff --check` exited cleanly.
-
-- [x] **Step 2: Rust checks**
-
-If local Rust remains unavailable, push and use GitHub Actions as the Rust verification gate.
-
-Result: `cargo test operation_summary_query_returns_rollup_for_all_filtered_records_before_limit` returned `zsh:1: command not found: cargo`, so Rust verification is deferred to GitHub Actions.
-
-- [ ] **Step 3: Commit and push**
-
-Commit this package, push it, and wait for GitHub Actions to pass before starting the next package.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

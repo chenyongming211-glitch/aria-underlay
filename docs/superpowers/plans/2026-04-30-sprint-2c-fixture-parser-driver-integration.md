@@ -1,104 +1,37 @@
-# Sprint 2C Fixture Parser Driver Integration Implementation Plan
+# Sprint 2C 样本解析器驱动集成实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Wire fixture-verified Huawei/H3C state parsers through the NETCONF-backed driver in tests while preserving production fail-closed parser selection.
+## 目标
 
-**Architecture:** Add a driver-level opt-in fixture parser gate that is disabled by default. Use existing NETCONF backend session fakes and XML fixtures to exercise driver `GetCurrentState` and `Verify` through real parser, scope, and diff logic.
+让 样本验证 解析器 通过 NETCONF-backed 驱动 测试路径运行，但不标记 生产就绪。
 
-**Tech Stack:** Python 3.10+, pytest, existing NETCONF backend fake session helpers, protobuf-generated adapter messages.
+## 实施范围
 
----
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-### Task 1: Driver Fixture Parser Gate
+## 主要任务
 
-**Files:**
-- Modify: `adapter-python/tests/test_netconf_backend.py`
-- Modify: `adapter-python/aria_underlay_adapter/drivers/netconf_backed.py`
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-- [ ] **Step 1: Write failing opt-in driver state test**
+## 验证要求
 
-Add a test that constructs `NetconfBackedDriver(_BackendWithSession(session), allow_fixture_verified_parser=True)`, reads the Huawei fixture through `_Reply`, and asserts `GetCurrentState` contains VLAN 100 and interface `GE1/0/1`.
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-- [ ] **Step 2: Run test to verify it fails**
 
-Run: `python3 -m pytest adapter-python/tests/test_netconf_backend.py::test_netconf_driver_get_state_can_use_fixture_verified_parser_when_enabled -q`
+## 当前收敛边界
 
-Expected: fail because `NetconfBackedDriver.__init__()` does not accept `allow_fixture_verified_parser`.
-
-- [ ] **Step 3: Implement minimal constructor flag**
-
-Store `allow_fixture_verified_parser=False` in `NetconfBackedDriver`, and pass it to `state_parser_for_vendor()` inside `_backend_for_state_read()`.
-
-- [ ] **Step 4: Run focused test**
-
-Run: `python3 -m pytest adapter-python/tests/test_netconf_backend.py::test_netconf_driver_get_state_can_use_fixture_verified_parser_when_enabled -q`
-
-Expected: pass.
-
-### Task 2: Driver Verify Integration
-
-**Files:**
-- Modify: `adapter-python/tests/test_netconf_backend.py`
-
-- [ ] **Step 1: Write matching verify test**
-
-Add a driver-level `verify()` test using the Huawei fixture and matching `pb2.DesiredDeviceState`; assert response status is `ADAPTER_OPERATION_STATUS_NO_CHANGE`.
-
-- [ ] **Step 2: Run test to verify it fails before Task 1 implementation or passes after Task 1**
-
-Run: `python3 -m pytest adapter-python/tests/test_netconf_backend.py::test_netconf_driver_verify_succeeds_with_fixture_verified_parser_when_enabled -q`
-
-Expected: pass only after the opt-in driver parser gate exists.
-
-- [ ] **Step 3: Write mismatch verify test**
-
-Add a driver-level `verify()` test where desired VLAN 100 has the wrong name; assert response status is failed and error code is `VERIFY_FAILED`.
-
-- [ ] **Step 4: Run verify tests**
-
-Run: `python3 -m pytest adapter-python/tests/test_netconf_backend.py -q`
-
-Expected: pass.
-
-### Task 3: Scope Integration
-
-**Files:**
-- Modify: `adapter-python/tests/test_netconf_backend.py`
-
-- [ ] **Step 1: Write scoped state test**
-
-Add a driver-level `GetCurrentState` test with `scope=StateScope(vlan_ids=[100], interface_names=["GE1/0/1"])`; assert only VLAN 100 and interface `GE1/0/1` are returned and the session used a scoped subtree filter.
-
-- [ ] **Step 2: Write empty scope driver test**
-
-Add a driver-level `GetCurrentState` test with `StateScope(full=False)`; assert an empty observed state and no session calls.
-
-- [ ] **Step 3: Run scoped tests**
-
-Run: `python3 -m pytest adapter-python/tests/test_netconf_backend.py -q`
-
-Expected: pass.
-
-### Task 4: Docs and Full Adapter Verification
-
-**Files:**
-- Modify: `docs/progress-2026-04-26.md`
-
-- [ ] **Step 1: Update progress docs**
-
-Add a Sprint 2C section that states fixture parser driver/backend integration is locally verified and production readiness is still blocked on real device XML.
-
-- [ ] **Step 2: Run adapter tests**
-
-Run: `python3 -m pytest adapter-python/tests -q`
-
-Expected: all adapter tests pass.
-
-- [ ] **Step 3: Check whitespace and commit**
-
-Run: `git diff --check`
-
-Expected: no whitespace errors.
-
-Commit only Sprint 2C files and do not include unrelated `.gitignore` or `.claude/` worktree state.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

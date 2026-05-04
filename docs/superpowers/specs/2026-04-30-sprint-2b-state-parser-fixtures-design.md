@@ -1,52 +1,38 @@
-# Sprint 2B State Parser Fixtures Design
+# Sprint 2B 状态解析器样本设计文档
 
-## Goal
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-Build a fixture-verified minimum NETCONF running-state parser path for Huawei VRP8 and H3C Comware7 without depending on live switches.
+## 设计目标
 
-## Scope
+用 Huawei/H3C XML 样本 验证 VLAN 和接口状态解析边界，保持生产选择 失败关闭。
 
-This phase parses controlled XML fixtures into the adapter's standard observed-state dictionary:
+## 设计原则
 
-```python
-{
-    "vlans": [
-        {"vlan_id": 100, "name": "prod", "description": "production vlan"}
-    ],
-    "interfaces": [
-        {
-            "name": "GE1/0/1",
-            "admin_state": "up",
-            "description": "server uplink",
-            "mode": {
-                "kind": "access",
-                "access_vlan": 100,
-                "native_vlan": None,
-                "allowed_vlans": [],
-            },
-        }
-    ],
-}
-```
+- 复用现有架构边界，不为单个需求新造大平台。
+- 读写路径要可测试、可审计、失败语义清晰。
+- 本地/样本/骨架 能力只证明开发边界，不代表生产可用。
+- 涉及真实交换机、真实 ingress、安装包、外部系统的内容默认不在当前范围。
 
-The parser remains not production-ready until real device XML and field behavior are captured. Fixture verification proves parser mechanics and fail-closed behavior only.
+## 行为边界
 
-## Parser Model
+- 对外暴露的 API 或 CLI 必须有明确输入、输出和错误码。
+- 高风险操作必须保留 request_id、trace_id、operator、reason 等可追踪字段。
+- 文件写入采用原子写或 append-only 语义，避免半写入状态。
+- 配置无效时拒绝启动或拒绝采用新配置，不静默降级。
 
-Huawei and H3C keep vendor classes, but share a small common XML parser helper. Each parser has a profile with:
+## 测试要求
 
-- vendor name
-- profile name
-- fixture verification flag
-- production readiness flag
-- XML namespaces
+- 覆盖成功路径。
+- 覆盖权限/输入/配置错误。
+- 覆盖写失败或外部依赖失败时的 失败关闭 行为。
+- 没有真实交换机时，只允许 模拟适配器、样本、快照 和离线 校验器 验证。
 
-The common helper handles required text extraction, VLAN range validation, duplicate detection, and scope filtering.
 
-## Fail-Closed Rules
+## 当前收敛边界
 
-Parsing raises `AdapterError` with `NETCONF_STATE_PARSE_FAILED` when fixture XML is malformed, required fields are missing, VLAN IDs are outside 1..4094, VLAN/interface names are duplicated, or port mode is unknown.
-
-## Registry Policy
-
-`state_parser_for_vendor()` continues to reject parser selection by default while `production_ready=False`. Tests may request `allow_fixture_verified=True` to select fixture-verified parsers. This preserves production fail-closed behavior while allowing CI to exercise real parser code.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

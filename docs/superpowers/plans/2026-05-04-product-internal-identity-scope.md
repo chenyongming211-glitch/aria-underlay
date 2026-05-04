@@ -1,58 +1,37 @@
-# Product Internal Identity Scope Implementation Plan — 2026-05-04
+# 产品内部身份范围实施计划
 
-**Goal:** Remove the JWT/JWKS product identity package and make the product API
-strictly internal-token based.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-### Task 1: Config Contract
+## 目标
 
-Files:
-- `src/api/product_server_config.rs`
-- `tests/product_api_server_config_tests.rs`
+明确内部系统只用 static_tokens，不做 SSO/OIDC/JWT/JWKS/token 生命周期。
 
-- [x] Require `static_tokens` for product API startup.
-- [x] Allow `production_ingress` with internal bearer tokens.
-- [x] Add `deny_unknown_fields` so historical `jwt_jwks` and `jwt_jwks_file`
-      configs fail closed.
-- [x] Add a regression test for rejected JWT/JWKS fields.
+## 实施范围
 
-### Task 2: Identity Code Cleanup
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
-Files:
-- `src/api/product_identity.rs`
-- `Cargo.toml`
-- `tests/product_jwt_identity_tests.rs`
+## 主要任务
 
-- [x] Remove JWT/JWKS verifier types.
-- [x] Remove the `jsonwebtoken` dependency.
-- [x] Delete JWT/JWKS-specific tests.
-- [x] Keep bearer-token extraction and static verifier tests.
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-### Task 3: Samples And Docs
+## 验证要求
 
-Files:
-- `docs/examples/product-api.production.json`
-- `docs/examples/tmpfiles.d/aria-underlay.conf`
-- `docs/runbooks/operator-operations.md`
-- `docs/progress-2026-04-26.md`
-- `docs/bug-inventory-current-2026-05-01.md`
-- `docs/superpowers/*`
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-- [x] Replace production sample with internal `static_tokens`.
-- [x] Delete JWKS sample files and directory ownership.
-- [x] Mark SSO/OIDC/JWT/JWKS as out of scope.
-- [x] Record internal token lifecycle as remaining work.
 
-### Task 4: Verification
+## 当前收敛边界
 
-Run:
-
-```bash
-git diff --check
-python3 -m pytest adapter-python/tests -q
-python3 -m json.tool docs/examples/product-api.local.json
-python3 -m json.tool docs/examples/product-api.production.json
-cargo test --all-targets
-```
-
-Expected locally: Python and JSON checks pass; Rust test command is unavailable
-when `cargo` is not installed, so GitHub Actions is the Rust gate.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。

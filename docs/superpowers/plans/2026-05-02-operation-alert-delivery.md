@@ -1,102 +1,37 @@
-# Operation Alert Delivery Implementation Plan
+# 内部告警记录实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:test-driven-development for code changes and superpowers:verification-before-completion before claiming completion.
+> 本文档已经中文化。代码标识符、命令、文件路径和错误码保留英文原文。
 
-**Goal:** Deliver `attention_required` operation summaries to an operator-facing alert sink without requiring real switches or an external alerting product.
+## 目标
 
-**Architecture:** Keep alert delivery downstream of `OperationSummaryStore`. `OperationSummaryStore` remains the source of operator-relevant events. A new alert worker reads attention-required summaries, converts them into deterministic `OperationAlert` records, skips previously delivered dedupe keys through a checkpoint store, delivers only new alerts to a sink, and records the checkpoint only after successful sink delivery.
+把 操作告警 保持为内部 JSONL 记录，不做外部 webhook/IM/PagerDuty 投递。
 
-**Scope:**
+## 实施范围
 
-- Add `OperationAlert` and severity classification in telemetry.
-- Add `OperationAlertSink` and `OperationAlertCheckpointStore` traits.
-- Add in-memory implementations for tests.
-- Add JSONL alert sink and JSON checkpoint store for local deployments.
-- Add periodic worker/runtime/daemon config wiring.
-- Do not add product RBAC, external webhook clients, or UI in this package.
+- 保持改动聚焦在该主题对应的文件和测试。
+- 优先使用现有 trait、manager、驱动、registry 和 CLI 边界。
+- 所有失败路径保持 失败关闭；不能把 骨架、样本 或本地样例冒充生产可用。
+- 只做当前内部系统需要的最小能力，不扩展成产品平台。
 
----
+## 主要任务
 
-### Task 1: Alert Primitives
+1. 先补或保留对应回归测试。
+2. 实现最小闭环，保持已有边界不被绕过。
+3. 更新 操作手册、progress 或 bug inventory，明确完成状态和剩余限制。
+4. 运行本地可执行检查；Rust 本地不可用时，以 GitHub Actions 作为 Rust 编译和测试门禁。
 
-**Files:**
+## 验证要求
 
-- Create: `src/telemetry/alerts.rs`
-- Modify: `src/telemetry/mod.rs`
+- `git diff --check` 必须通过。
+- Python adapter 相关变更运行 `python3 -m pytest adapter-python/tests -q`。
+- Rust 相关变更运行对应 `cargo test`；如果本机没有 `cargo`，必须推送后等待 GitHub Actions 绿色。
 
-- [x] **Step 1: Define alert record**
 
-Convert each attention-required `OperationSummary` into an `OperationAlert` with:
+## 当前收敛边界
 
-- deterministic `dedupe_key`
-- `Warning` or `Critical` severity
-- request/trace/tx/device identity
-- action/result/fields
-
-- [x] **Step 2: Add sink and checkpoint traits**
-
-Keep delivery target and dedupe persistence separate so future product alert backends can replace the JSONL sink without changing worker logic.
-
-### Task 2: Alert Worker
-
-**Files:**
-
-- Create: `src/worker/operation_alerts.rs`
-- Modify: `src/worker/mod.rs`
-- Modify: `src/worker/runtime.rs`
-
-- [x] **Step 1: Write failing worker tests**
-
-Add tests for first delivery, second-run dedupe, and runtime scheduling.
-
-Local note: `cargo test operation_alert_worker_delivers_only_new_attention_required_summaries` cannot run in this workspace because `cargo` is unavailable.
-
-- [x] **Step 2: Implement worker**
-
-Read `list_attention_required()`, filter delivered dedupe keys, deliver new alerts, then checkpoint delivered keys.
-
-### Task 3: Daemon Wiring
-
-**Files:**
-
-- Modify: `src/worker/daemon.rs`
-- Test: `tests/worker_daemon_tests.rs`
-
-- [x] **Step 1: Add daemon config**
-
-Add `operation_alert` config with JSONL alert path, checkpoint path, and schedule.
-
-- [x] **Step 2: Wire JSONL sink/checkpoint**
-
-Daemon config requires `operation_summary.path`; alert delivery without an operation summary store fails closed.
-
-- [x] **Step 3: Verify restart dedupe**
-
-Run the daemon twice against the same operation summary JSONL and checkpoint; alert JSONL should not duplicate already delivered alerts.
-
-### Task 4: Verification
-
-- [x] **Step 1: Local Python and diff checks**
-
-Run:
-
-```bash
-python3 -m pytest adapter-python/tests -q
-git diff --check
-```
-
-Result: Python adapter tests passed with `238 passed`; `git diff --check` exited cleanly.
-
-- [x] **Step 2: Local Rust check attempt**
-
-Run:
-
-```bash
-cargo test operation_alert_worker_delivers_only_new_attention_required_summaries
-```
-
-Result: `zsh:1: command not found: cargo`; Rust verification is deferred to GitHub Actions.
-
-- [ ] **Step 3: Commit, push, and watch CI**
-
-Push this package and wait for GitHub Actions to pass before starting another package.
+- 当前是内部系统，不做外部系统集成。
+- 不做 SSO、OIDC、JWT、JWKS、refresh token、浏览器会话。
+- 不做产品 UI、外部告警投递、企业 IM、PagerDuty、Webhook。
+- 不在仓库内实现 ingress、TLS、client auth、rate limit、proxy header。
+- 不生成 deb/rpm/tar 安装包；systemd、tmpfiles 和 JSON 文件只作为部署样例。
+- 没有真实交换机前，Huawei/H3C 解析器 和 渲染器 只能 样本/快照 验证，不能标记 生产就绪。
