@@ -1,0 +1,33 @@
+[Unit]
+Description=Aria Underlay product operations API
+Documentation=docs/runbooks/operator-operations.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=aria-underlay
+Group=aria-underlay
+Environment=RUST_LOG=info
+Environment=ARIA_UNDERLAY_PRODUCT_API_CONFIG=/etc/aria-underlay/product-api.json
+ExecStart=/usr/local/bin/aria-underlay-product-api
+Restart=on-failure
+RestartSec=5s
+RuntimeDirectory=aria-underlay
+StateDirectory=aria-underlay
+LogsDirectory=aria-underlay
+ReadOnlyPaths=/etc/aria-underlay
+ReadWritePaths=/var/lib/aria-underlay /var/log/aria-underlay /run/aria-underlay
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+CapabilityBoundingSet=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

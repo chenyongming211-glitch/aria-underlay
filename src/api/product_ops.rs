@@ -3,6 +3,9 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::api::operation_alerts::{
+    list_operation_alerts, ListOperationAlertsRequest, OperationAlertOverview,
+};
 use crate::api::operations::{
     ListOperationSummariesRequest, ListOperationSummariesResponse, OperationSummaryOverview,
 };
@@ -15,10 +18,12 @@ use crate::authz::{
     AdminAction, AuthorizationDecision, AuthorizationPolicy, AuthorizationRequest,
 };
 use crate::telemetry::{
-    OperationSummary, OperationSummaryRetentionPolicy, OperationSummaryStore,
-    ProductAuditRecord, ProductAuditStore,
+    OperationAlertSeverity, OperationSummary, OperationSummaryRetentionPolicy,
+    OperationSummaryStore, ProductAuditRecord, ProductAuditStore,
 };
-use crate::worker::daemon::{WorkerReloadCheckpoint, WorkerScheduleConfig};
+use crate::worker::daemon::{
+    WorkerConfigReloadStatus, WorkerReloadCheckpoint, WorkerScheduleConfig,
+};
 use crate::worker::gc::RetentionPolicy;
 use crate::{UnderlayError, UnderlayResult};
 
@@ -79,6 +84,49 @@ pub struct ProductChangeWorkerScheduleRequest {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProductGetWorkerReloadStatusRequest {
     pub checkpoint_path: std::path::PathBuf,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProductStatusBundleRequest {
+    #[serde(default)]
+    pub operation_summary: ListOperationSummariesRequest,
+    #[serde(default)]
+    pub operation_alert_path: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub alert_state_path: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub alert_severity: Option<OperationAlertSeverity>,
+    #[serde(default)]
+    pub alert_limit: Option<usize>,
+    #[serde(default)]
+    pub worker_reload_checkpoint_path: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductStatusBundleResponse {
+    pub operation_summary: OperationSummaryOverview,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alert_summary: Option<OperationAlertOverview>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_reload: Option<WorkerReloadCheckpoint>,
+    pub health: ProductStatusBundleHealth,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductStatusBundleHealth {
+    pub status: ProductStatusBundleHealthStatus,
+    pub attention_required: bool,
+    pub operation_attention_required: usize,
+    pub critical_alerts: usize,
+    pub open_alerts: usize,
+    pub rejected_worker_reload: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProductStatusBundleHealthStatus {
+    Healthy,
+    AttentionRequired,
 }
 
 impl Default for ProductChangeSummaryRetentionRequest {
@@ -262,6 +310,54 @@ impl ProductOpsManager {
         WorkerReloadCheckpoint::from_path(request.checkpoint_path)
     }
 
+    pub fn get_product_status_bundle(
+        &self,
+        context: ProductOperatorContext,
+        request: ProductStatusBundleRequest,
+    ) -> UnderlayResult<ProductStatusBundleResponse> {
+        let (_trace_id, _decision) = self.authorize_context(
+            &context,
+            AdminAction::GetProductStatusBundle,
+            "product ops get status bundle",
+        )?;
+        let operation_summary = self
+            .list_operation_summaries(context, request.operation_summary)?
+            .overview;
+        let alert_summary = match request.operation_alert_path {
+            Some(operation_alert_path) => {
+                validate_path("operation alert path", &operation_alert_path)?;
+                Some(
+                    list_operation_alerts(ListOperationAlertsRequest {
+                        operation_alert_path,
+                        alert_state_path: request.alert_state_path,
+                        severity: request.alert_severity,
+                        limit: request.alert_limit,
+                    })?
+                    .overview,
+                )
+            }
+            None => None,
+        };
+        let worker_reload = match request.worker_reload_checkpoint_path {
+            Some(checkpoint_path) => {
+                validate_path("worker reload checkpoint path", &checkpoint_path)?;
+                Some(WorkerReloadCheckpoint::from_path(checkpoint_path)?)
+            }
+            None => None,
+        };
+        let health = ProductStatusBundleHealth::from_parts(
+            &operation_summary,
+            alert_summary.as_ref(),
+            worker_reload.as_ref(),
+        );
+        Ok(ProductStatusBundleResponse {
+            operation_summary,
+            alert_summary,
+            worker_reload,
+            health,
+        })
+    }
+
     fn worker_config_admin(&self) -> WorkerConfigAdminManager {
         WorkerConfigAdminManager::new(
             self.authorization_policy.clone(),
@@ -311,6 +407,36 @@ impl ProductAuditExportOverview {
         }
 
         overview
+    }
+}
+
+impl ProductStatusBundleHealth {
+    pub fn from_parts(
+        operation_summary: &OperationSummaryOverview,
+        alert_summary: Option<&OperationAlertOverview>,
+        worker_reload: Option<&WorkerReloadCheckpoint>,
+    ) -> Self {
+        let critical_alerts = alert_summary.map(|overview| overview.critical).unwrap_or(0);
+        let open_alerts = alert_summary.map(|overview| overview.open).unwrap_or(0);
+        let rejected_worker_reload = worker_reload
+            .map(|checkpoint| checkpoint.status == WorkerConfigReloadStatus::Rejected)
+            .unwrap_or(false);
+        let attention_required = operation_summary.attention_required > 0
+            || critical_alerts > 0
+            || open_alerts > 0
+            || rejected_worker_reload;
+        Self {
+            status: if attention_required {
+                ProductStatusBundleHealthStatus::AttentionRequired
+            } else {
+                ProductStatusBundleHealthStatus::Healthy
+            },
+            attention_required,
+            operation_attention_required: operation_summary.attention_required,
+            critical_alerts,
+            open_alerts,
+            rejected_worker_reload,
+        }
     }
 }
 

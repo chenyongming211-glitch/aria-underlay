@@ -5,11 +5,11 @@
 Move the product API identity boundary beyond static bearer tokens by adding a
 real JWT signature and claims verifier behind `ProductIdentityVerifier`.
 
-This package still avoids external runtime dependencies:
+This package still avoids external network dependencies:
 
 - no live IdP call
 - no OIDC discovery
-- no online JWKS refresh
+- no HTTP JWKS fetch inside the product API process
 - no real switch dependency
 
 ## Selected Approach
@@ -33,17 +33,20 @@ to use.
 
 ## Config Boundary
 
-`aria-underlay-product-api` can now use either:
+`aria-underlay-product-api` can now use one of:
 
 - `static_tokens`: deterministic local/offline tokens
 - `jwt_jwks`: signed JWT verification against a configured JWKS
+- `jwt_jwks_file`: signed JWT verification against a local JWKS file with
+  refresh and stale-cache limits
 
-Supplying both is invalid and prevents startup.
+Supplying more than one is invalid and prevents startup. The file-backed mode is
+the packaged key-rotation path: an external OIDC/JWKS sync process can update
+the file atomically, and the product API accepts rotated keys without restart.
 
 ## Out Of Scope
 
 - HTTP fetching of JWKS.
-- JWKS refresh/cache expiry.
 - OIDC discovery.
 - browser login/session flows.
 - TLS/ingress selection.

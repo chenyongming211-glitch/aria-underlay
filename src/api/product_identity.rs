@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
@@ -68,9 +70,45 @@ pub struct ProductJwtJwksVerifierConfig {
     pub jwks: JwkSet,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProductJwtJwksFileVerifierConfig {
+    pub issuer: String,
+    pub audiences: Vec<String>,
+    #[serde(default = "default_product_jwt_algorithms")]
+    pub allowed_algorithms: Vec<ProductJwtAlgorithm>,
+    #[serde(default = "default_product_jwt_role_claim")]
+    pub role_claim: String,
+    #[serde(default)]
+    pub operator_id_claim: Option<String>,
+    #[serde(default)]
+    pub session_id_claim: Option<String>,
+    #[serde(default = "default_product_jwt_leeway_secs")]
+    pub leeway_secs: u64,
+    #[serde(default = "default_product_jwt_role_mappings")]
+    pub role_mappings: BTreeMap<String, RbacRole>,
+    pub jwks_path: PathBuf,
+    #[serde(default = "default_product_jwks_refresh_interval_secs")]
+    pub refresh_interval_secs: u64,
+    #[serde(default = "default_product_jwks_max_stale_secs")]
+    pub max_stale_secs: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct JwtJwksProductIdentityVerifier {
     config: ProductJwtJwksVerifierConfig,
+}
+
+#[derive(Debug)]
+pub struct RefreshingJwtJwksProductIdentityVerifier {
+    config: ProductJwtJwksFileVerifierConfig,
+    state: Mutex<RefreshingJwtJwksState>,
+}
+
+#[derive(Debug)]
+struct RefreshingJwtJwksState {
+    verifier: JwtJwksProductIdentityVerifier,
+    loaded_at_unix_secs: u64,
+    last_checked_at_unix_secs: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -148,6 +186,61 @@ impl JwtJwksProductIdentityVerifier {
     }
 }
 
+impl RefreshingJwtJwksProductIdentityVerifier {
+    pub fn new(config: ProductJwtJwksFileVerifierConfig) -> UnderlayResult<Self> {
+        validate_jwt_file_config(&config)?;
+        let verifier = JwtJwksProductIdentityVerifier::new(config.load_inline_config()?)?;
+        let now = now_unix_secs();
+        Ok(Self {
+            config,
+            state: Mutex::new(RefreshingJwtJwksState {
+                verifier,
+                loaded_at_unix_secs: now,
+                last_checked_at_unix_secs: now,
+            }),
+        })
+    }
+
+    fn refresh_if_due(
+        &self,
+        state: &mut RefreshingJwtJwksState,
+        now_unix_secs: u64,
+    ) -> UnderlayResult<()> {
+        let refresh_due = now_unix_secs
+            >= state
+                .last_checked_at_unix_secs
+                .saturating_add(self.config.refresh_interval_secs);
+        if !refresh_due {
+            return Ok(());
+        }
+        state.last_checked_at_unix_secs = now_unix_secs;
+        match self
+            .config
+            .load_inline_config()
+            .and_then(JwtJwksProductIdentityVerifier::new)
+        {
+            Ok(verifier) => {
+                state.verifier = verifier;
+                state.loaded_at_unix_secs = now_unix_secs;
+                Ok(())
+            }
+            Err(error) => {
+                if now_unix_secs
+                    > state
+                        .loaded_at_unix_secs
+                        .saturating_add(self.config.max_stale_secs)
+                {
+                    Err(UnderlayError::AuthenticationFailed(format!(
+                        "product JWKS refresh failed and cached keys are stale: {error}"
+                    )))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
 impl ProductIdentityVerifier for JwtJwksProductIdentityVerifier {
     fn verify_bearer_token(
         &self,
@@ -201,6 +294,20 @@ impl ProductIdentityVerifier for JwtJwksProductIdentityVerifier {
         let decoded = decode::<ProductJwtClaims>(token, &key, &validation)
             .map_err(jwt_auth_error)?;
         claims_to_principal(&self.config, decoded.claims, now_unix_secs)
+    }
+}
+
+impl ProductIdentityVerifier for RefreshingJwtJwksProductIdentityVerifier {
+    fn verify_bearer_token(
+        &self,
+        token: &str,
+        now_unix_secs: u64,
+    ) -> UnderlayResult<ProductAuthenticatedPrincipal> {
+        let mut state = self.state.lock().map_err(|_| {
+            UnderlayError::AuthenticationFailed("product JWKS refresh state mutex poisoned".into())
+        })?;
+        self.refresh_if_due(&mut state, now_unix_secs)?;
+        state.verifier.verify_bearer_token(token, now_unix_secs)
     }
 }
 
@@ -338,6 +445,84 @@ fn validate_jwt_config(config: &ProductJwtJwksVerifierConfig) -> UnderlayResult<
         })?;
     }
     Ok(())
+}
+
+fn validate_jwt_file_config(config: &ProductJwtJwksFileVerifierConfig) -> UnderlayResult<()> {
+    validate_non_empty("product JWT issuer", &config.issuer)?;
+    if config.audiences.is_empty() {
+        return Err(UnderlayError::InvalidIntent(
+            "product JWT audiences must not be empty".into(),
+        ));
+    }
+    for audience in &config.audiences {
+        validate_non_empty("product JWT audience", audience)?;
+    }
+    if config.allowed_algorithms.is_empty() {
+        return Err(UnderlayError::InvalidIntent(
+            "product JWT allowed_algorithms must not be empty".into(),
+        ));
+    }
+    validate_non_empty("product JWT role_claim", &config.role_claim)?;
+    if let Some(operator_id_claim) = &config.operator_id_claim {
+        validate_non_empty("product JWT operator_id_claim", operator_id_claim)?;
+    }
+    if let Some(session_id_claim) = &config.session_id_claim {
+        validate_non_empty("product JWT session_id_claim", session_id_claim)?;
+    }
+    if config.role_mappings.is_empty() {
+        return Err(UnderlayError::InvalidIntent(
+            "product JWT role_mappings must not be empty".into(),
+        ));
+    }
+    if config.jwks_path.as_os_str().is_empty() {
+        return Err(UnderlayError::InvalidIntent(
+            "product JWT jwks_path must not be empty".into(),
+        ));
+    }
+    if config.refresh_interval_secs == 0 {
+        return Err(UnderlayError::InvalidIntent(
+            "product JWT refresh_interval_secs must be greater than zero".into(),
+        ));
+    }
+    if config.max_stale_secs < config.refresh_interval_secs {
+        return Err(UnderlayError::InvalidIntent(
+            "product JWT max_stale_secs must be greater than or equal to refresh_interval_secs"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+impl ProductJwtJwksFileVerifierConfig {
+    pub fn validate_static(&self) -> UnderlayResult<()> {
+        validate_jwt_file_config(self)
+    }
+
+    fn load_inline_config(&self) -> UnderlayResult<ProductJwtJwksVerifierConfig> {
+        let payload = fs::read_to_string(&self.jwks_path).map_err(|err| {
+            UnderlayError::InvalidIntent(format!(
+                "read product JWT JWKS {:?}: {err}",
+                self.jwks_path
+            ))
+        })?;
+        let jwks = serde_json::from_str::<JwkSet>(&payload).map_err(|err| {
+            UnderlayError::InvalidIntent(format!(
+                "parse product JWT JWKS {:?}: {err}",
+                self.jwks_path
+            ))
+        })?;
+        Ok(ProductJwtJwksVerifierConfig {
+            issuer: self.issuer.clone(),
+            audiences: self.audiences.clone(),
+            allowed_algorithms: self.allowed_algorithms.clone(),
+            role_claim: self.role_claim.clone(),
+            operator_id_claim: self.operator_id_claim.clone(),
+            session_id_claim: self.session_id_claim.clone(),
+            leeway_secs: self.leeway_secs,
+            role_mappings: self.role_mappings.clone(),
+            jwks,
+        })
+    }
 }
 
 fn claims_to_principal(
@@ -491,6 +676,14 @@ fn default_product_jwt_role_claim() -> String {
 
 fn default_product_jwt_leeway_secs() -> u64 {
     60
+}
+
+fn default_product_jwks_refresh_interval_secs() -> u64 {
+    300
+}
+
+fn default_product_jwks_max_stale_secs() -> u64 {
+    3600
 }
 
 fn default_product_jwt_role_mappings() -> BTreeMap<String, RbacRole> {

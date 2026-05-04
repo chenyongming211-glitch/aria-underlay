@@ -1,82 +1,8 @@
-use std::collections::BTreeMap;
 use std::error::Error;
-use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 
-use aria_underlay::api::product_api::ProductOpsApi;
-use aria_underlay::api::product_http::ProductHttpRouter;
-use aria_underlay::api::product_http_server::{
-    ProductHttpListenerConfig, ProductHttpServer,
-};
-use aria_underlay::api::product_identity::{
-    BearerTokenProductSessionExtractor, JwtJwksProductIdentityVerifier,
-    ProductAuthenticatedPrincipal, ProductIdentityVerifier, ProductJwtJwksVerifierConfig,
-    StaticProductIdentityVerifier,
-};
-use aria_underlay::telemetry::{
-    JsonFileOperationSummaryStore, JsonFileProductAuditStore,
-};
-use serde::Deserialize;
-
-#[derive(Debug, Clone, Deserialize)]
-struct ProductApiServerConfig {
-    bind_addr: SocketAddr,
-    #[serde(default = "default_max_body_bytes")]
-    max_body_bytes: usize,
-    operation_summary_path: PathBuf,
-    product_audit_path: PathBuf,
-    #[serde(default)]
-    static_tokens: BTreeMap<String, ProductAuthenticatedPrincipal>,
-    #[serde(default)]
-    jwt_jwks: Option<ProductJwtJwksVerifierConfig>,
-}
-
-impl ProductApiServerConfig {
-    fn from_path(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
-        let payload = std::fs::read_to_string(path)?;
-        Ok(serde_json::from_str(&payload)?)
-    }
-
-    fn listener_config(&self) -> ProductHttpListenerConfig {
-        ProductHttpListenerConfig {
-            bind_addr: self.bind_addr,
-            max_body_bytes: self.max_body_bytes,
-        }
-    }
-
-    fn router(&self) -> Result<ProductHttpRouter, Box<dyn Error>> {
-        let verifier = self.identity_verifier()?;
-        Ok(ProductHttpRouter::new(ProductOpsApi::new(
-            Arc::new(BearerTokenProductSessionExtractor::new(verifier)),
-            Arc::new(JsonFileOperationSummaryStore::new(
-                self.operation_summary_path.clone(),
-            )),
-            Arc::new(JsonFileProductAuditStore::new(
-                self.product_audit_path.clone(),
-            )),
-        )))
-    }
-
-    fn identity_verifier(&self) -> Result<Arc<dyn ProductIdentityVerifier>, Box<dyn Error>> {
-        if self.jwt_jwks.is_some() && !self.static_tokens.is_empty() {
-            return Err(
-                "product API config must choose either jwt_jwks or static_tokens, not both"
-                    .into(),
-            );
-        }
-        if let Some(config) = &self.jwt_jwks {
-            return Ok(Arc::new(JwtJwksProductIdentityVerifier::new(
-                config.clone(),
-            )?));
-        }
-        let mut verifier = StaticProductIdentityVerifier::new();
-        for (token, principal) in &self.static_tokens {
-            verifier = verifier.with_token(token.clone(), principal.clone());
-        }
-        Ok(Arc::new(verifier))
-    }
-}
+use aria_underlay::api::product_http_server::ProductHttpServer;
+use aria_underlay::api::product_server_config::ProductApiServerConfig;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -95,10 +21,6 @@ fn product_api_config_path() -> Result<PathBuf, Box<dyn Error>> {
         return Ok(path.into());
     }
     Err("usage: aria-underlay-product-api <config.json>".into())
-}
-
-fn default_max_body_bytes() -> usize {
-    1024 * 1024
 }
 
 async fn shutdown_signal() {

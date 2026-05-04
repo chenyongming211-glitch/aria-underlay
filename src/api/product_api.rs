@@ -8,9 +8,10 @@ use crate::api::operations::{
 };
 use crate::api::product_ops::{
     ExportProductAuditRequest, ExportProductAuditResponse,
-    ProductGetWorkerReloadStatusRequest,
     ProductChangeJournalGcRetentionRequest, ProductChangeSummaryRetentionRequest,
-    ProductChangeWorkerScheduleRequest, ProductOperatorContext, ProductOpsManager,
+    ProductChangeWorkerScheduleRequest, ProductGetWorkerReloadStatusRequest,
+    ProductOperatorContext, ProductOpsManager, ProductStatusBundleRequest,
+    ProductStatusBundleResponse,
 };
 use crate::api::worker_config_admin::WorkerConfigAdminResponse;
 use crate::authz::{RbacRole, StaticAuthorizationPolicy};
@@ -166,6 +167,19 @@ impl ProductOpsApi {
         let body = self
             .manager_for_session(&session)
             .get_worker_reload_status(operator_context(&metadata, &session), request.body)?;
+        Ok(api_response(metadata, session, trace_id, body))
+    }
+
+    pub fn get_product_status_bundle(
+        &self,
+        request: ProductApiRequest<ProductStatusBundleRequest>,
+    ) -> UnderlayResult<ProductApiResponse<ProductStatusBundleResponse>> {
+        let metadata = request.metadata();
+        let session = self.session_extractor.extract(&metadata)?;
+        let trace_id = trace_id_or_request_id(&metadata);
+        let body = self
+            .manager_for_session(&session)
+            .get_product_status_bundle(operator_context(&metadata, &session), request.body)?;
         Ok(api_response(metadata, session, trace_id, body))
     }
 

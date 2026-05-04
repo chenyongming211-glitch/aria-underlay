@@ -512,7 +512,9 @@ The bearer extractor reads:
 
 `JwtJwksProductIdentityVerifier` verifies signed JWT bearer tokens against a configured offline JWKS document. It requires a matching `kid`, allowed algorithm, valid signature, issuer, audience, subject, expiration, and mapped product role. It can read operator and session IDs from configured claims. Unknown roles, unknown keys, wrong audience, wrong issuer, expired tokens, and ambiguous multi-role mappings fail closed.
 
-The header extractor and static verifier are not production identity models. The offline JWT/JWKS verifier is suitable for a controlled local or packaged deployment where JWKS material is managed by config. Production IdP integration still needs OIDC discovery or a JWKS refresh path if keys rotate outside config deployment.
+`RefreshingJwtJwksProductIdentityVerifier` is the packaged local key-rotation path. It reads JWKS from `jwt_jwks_file.jwks_path`, refreshes on `refresh_interval_secs`, and accepts rotated keys without restarting `aria-underlay-product-api`. If the trust source cannot be parsed or loaded beyond `max_stale_secs`, JWT verification fails closed instead of trusting stale keys indefinitely.
+
+The header extractor and static verifier are not production identity models. The inline JWT/JWKS verifier is suitable for controlled local tests or pinned config deployments. Production ingress mode should use `jwt_jwks_file` with an external OIDC/JWKS sync process that atomically updates `/etc/aria-underlay/jwks/product-api.jwks.json`; this package deliberately does not fetch IdP metadata over the network from the product API process.
 
 `ProductHttpRouter` currently defines these product HTTP routes, and `ProductHttpServer` can serve them over a local HTTP/1.1 listener:
 
@@ -524,6 +526,7 @@ The header extractor and static verifier are not production identity models. The
 | `POST` | `/product/v1/worker-config/journal-gc-retention:change` | `ProductChangeJournalGcRetentionRequest` JSON | `ProductApiResponse<WorkerConfigAdminResponse>` |
 | `POST` | `/product/v1/worker-config/schedule:change` | `ProductChangeWorkerScheduleRequest` JSON | `ProductApiResponse<WorkerConfigAdminResponse>` |
 | `POST` | `/product/v1/worker-reload/status:get` | `ProductGetWorkerReloadStatusRequest` JSON | `ProductApiResponse<WorkerReloadCheckpoint>` |
+| `POST` | `/product/v1/status:bundle` | `ProductStatusBundleRequest` JSON | `ProductApiResponse<ProductStatusBundleResponse>` |
 
 Required HTTP headers:
 
@@ -561,7 +564,19 @@ The checked-in static-token sample binds to `127.0.0.1:8088` and uses static loc
 aria-underlay-product-api docs/examples/product-api.jwt-jwks.local.json
 ```
 
-Keep this listener local or behind site access controls until TLS/ingress model, product packaging, and online JWKS refresh or equivalent IdP key-management workflow are selected.
+The file-backed JWKS refresh sample is:
+
+```bash
+aria-underlay-product-api docs/examples/product-api.jwt-jwks-file.local.json
+```
+
+Production packaging uses:
+
+```bash
+aria-underlay-product-api /etc/aria-underlay/product-api.json
+```
+
+Use `docs/examples/product-api.production.json` as the starting point. It sets `deployment_mode` to `production_ingress`, binds the product API to loopback, uses `/var/lib/aria-underlay/ops` for state, and reads rotating JWT keys from `/etc/aria-underlay/jwks/product-api.jwks.json`. TLS, client authentication, ingress rate limiting, and external OIDC discovery belong in the production ingress or a dedicated JWKS sync process, not inside the current local HTTP listener.
 
 Current product boundary behavior:
 
@@ -569,6 +584,7 @@ Current product boundary behavior:
 | --- | --- | --- |
 | List operation summaries | `ListOperationSummaries` | Read-only; no product audit record in this package. |
 | Get worker reload status | `GetWorkerReloadStatus` | Read-only; no product audit record in this package. |
+| Get product status bundle | `GetProductStatusBundle` | Read-only; no product audit record in this package. |
 | Export product audit history | `ExportAuditHistory` | Writes `product_audit.export_requested` before returning records. |
 | Change worker retention policy | `ChangeRetentionPolicy` | Writes `daemon.retention_change_requested` before changing config. |
 | Change worker schedule | `ChangeDaemonSchedule` | Writes `daemon.schedule_change_requested` before changing config. |
@@ -577,11 +593,19 @@ Audit export is fail-closed. If the export action cannot be appended to product 
 
 Worker config mutation is also fail-closed. If audit append, authorization, validation, or config parsing fails, the config file is not changed. These routes update the configured worker JSON file. A running daemon adopts the change only when reload supervision is enabled in that worker config.
 
+Product API systemd packaging is checked in at:
+
+```text
+docs/examples/systemd/aria-underlay-product-api.service
+docs/examples/tmpfiles.d/aria-underlay.conf
+```
+
+Install-time directory ownership should keep `/etc/aria-underlay` and `/etc/aria-underlay/jwks` owned by `root:aria-underlay` with mode `0750`; runtime state remains under `/var/lib/aria-underlay`, logs under `/var/log/aria-underlay`, and runtime files under `/run/aria-underlay`.
+
 Still missing from the product layer:
 
-- Online identity provider integration.
-- OIDC discovery / JWKS refresh or internal SSO session validation.
-- production TLS/ingress selection.
+- Online identity provider discovery and JWKS download daemon, if the deployment does not already provide a local JWKS sync process.
+- Production TLS/ingress implementation and hardening outside the local listener.
 - product UI.
 
 The design boundary is recorded in:

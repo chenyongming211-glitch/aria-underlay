@@ -1,12 +1,12 @@
-use std::collections::BTreeMap;
 use std::error::Error;
 use std::io;
 use std::sync::Arc;
 
-use serde::Serialize;
-
 use crate::api::alert_lifecycle::{AlertLifecycleManager, AlertLifecycleTransitionRequest};
 use crate::api::force_resolve::ForceResolveTransactionRequest;
+use crate::api::operation_alerts::{
+    list_operation_alerts, ListOperationAlertsRequest,
+};
 use crate::api::operations::ListOperationSummariesRequest;
 use crate::api::transactions::ListInDoubtTransactionsRequest;
 use crate::api::worker_config_admin::{
@@ -18,10 +18,8 @@ use crate::authz::{RbacRole, StaticAuthorizationPolicy};
 use crate::device::DeviceInventory;
 use crate::model::DeviceId;
 use crate::telemetry::{
-    JsonFileOperationAlertLifecycleStore, JsonFileOperationAlertSink,
-    JsonFileOperationSummaryStore, JsonFileProductAuditStore, OperationAlert,
-    OperationAlertLifecycleRecord, OperationAlertLifecycleStatus, OperationAlertLifecycleStore,
-    OperationAlertSeverity, OperationSummaryRetentionPolicy,
+    JsonFileOperationAlertLifecycleStore, JsonFileOperationSummaryStore, JsonFileProductAuditStore,
+    OperationAlertLifecycleStatus, OperationAlertSeverity, OperationSummaryRetentionPolicy,
 };
 use crate::tx::JsonFileTxJournalStore;
 use crate::worker::daemon::{WorkerReloadCheckpoint, WorkerScheduleConfig};
@@ -133,29 +131,14 @@ async fn operation_summary(args: &[String]) -> Result<(), Box<dyn Error>> {
 }
 
 async fn list_alerts(args: &[String]) -> Result<(), Box<dyn Error>> {
-    let operation_alert_path = required_option(args, "--operation-alert-path")?;
-    let alerts = filtered_alerts(args, operation_alert_path)?;
-    let lifecycle_records = lifecycle_records(args)?;
-    let limit = optional_usize(args, "--limit")?;
-    let returned_alerts = limit_alerts(&alerts, &lifecycle_records, limit);
-    let response = ListOperationAlertsResponse {
-        overview: OperationAlertOverview::from_alerts(
-            &alerts,
-            returned_alerts.len(),
-            &lifecycle_records,
-        ),
-        alerts: returned_alerts,
-    };
+    let response = list_operation_alerts(operation_alerts_request(args)?)?;
 
     println!("{}", serde_json::to_string_pretty(&response)?);
     Ok(())
 }
 
 async fn alert_summary(args: &[String]) -> Result<(), Box<dyn Error>> {
-    let operation_alert_path = required_option(args, "--operation-alert-path")?;
-    let alerts = filtered_alerts(args, operation_alert_path)?;
-    let lifecycle_records = lifecycle_records(args)?;
-    let overview = OperationAlertOverview::from_alerts(&alerts, alerts.len(), &lifecycle_records);
+    let overview = list_operation_alerts(operation_alerts_request(args)?)?.overview;
 
     println!("{}", serde_json::to_string_pretty(&overview)?);
     Ok(())
@@ -324,129 +307,13 @@ fn operation_summary_request(args: &[String]) -> Result<ListOperationSummariesRe
     })
 }
 
-fn filtered_alerts(
-    args: &[String],
-    operation_alert_path: String,
-) -> Result<Vec<OperationAlert>, Box<dyn Error>> {
-    let severity = optional_alert_severity(args, "--severity")?;
-    let alerts = JsonFileOperationAlertSink::new(operation_alert_path)
-        .list()?
-        .into_iter()
-        .filter(|alert| {
-            severity
-                .as_ref()
-                .map(|severity| alert.severity == *severity)
-                .unwrap_or(true)
-        })
-        .collect();
-    Ok(alerts)
-}
-
-fn lifecycle_records(
-    args: &[String],
-) -> Result<BTreeMap<String, OperationAlertLifecycleRecord>, Box<dyn Error>> {
-    let Some(alert_state_path) = option_value(args, "--alert-state-path") else {
-        return Ok(BTreeMap::new());
-    };
-    let records = JsonFileOperationAlertLifecycleStore::new(alert_state_path)
-        .list()?
-        .into_iter()
-        .map(|record| (record.dedupe_key.clone(), record))
-        .collect();
-    Ok(records)
-}
-
-fn limit_alerts(
-    alerts: &[OperationAlert],
-    lifecycle_records: &BTreeMap<String, OperationAlertLifecycleRecord>,
-    limit: Option<usize>,
-) -> Vec<OperationAlertView> {
-    alerts
-        .iter()
-        .take(limit.unwrap_or(alerts.len()))
-        .map(|alert| OperationAlertView {
-            alert: alert.clone(),
-            lifecycle: lifecycle_records.get(&alert.dedupe_key).cloned(),
-        })
-        .collect()
-}
-
-#[derive(Debug, Serialize)]
-struct ListOperationAlertsResponse {
-    alerts: Vec<OperationAlertView>,
-    overview: OperationAlertOverview,
-}
-
-#[derive(Debug, Serialize)]
-struct OperationAlertView {
-    #[serde(flatten)]
-    alert: OperationAlert,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    lifecycle: Option<OperationAlertLifecycleRecord>,
-}
-
-#[derive(Debug, Default, Serialize)]
-struct OperationAlertOverview {
-    matched_alerts: usize,
-    returned_alerts: usize,
-    critical: usize,
-    warning: usize,
-    open: usize,
-    acknowledged: usize,
-    resolved: usize,
-    suppressed: usize,
-    expired: usize,
-    by_action: BTreeMap<String, usize>,
-    by_result: BTreeMap<String, usize>,
-    by_device: BTreeMap<String, usize>,
-}
-
-impl OperationAlertOverview {
-    fn from_alerts(
-        alerts: &[OperationAlert],
-        returned_alerts: usize,
-        lifecycle_records: &BTreeMap<String, OperationAlertLifecycleRecord>,
-    ) -> Self {
-        let mut overview = Self {
-            matched_alerts: alerts.len(),
-            returned_alerts,
-            ..Default::default()
-        };
-
-        for alert in alerts {
-            match alert.severity {
-                OperationAlertSeverity::Critical => overview.critical += 1,
-                OperationAlertSeverity::Warning => overview.warning += 1,
-            }
-            increment(&mut overview.by_action, &alert.action);
-            increment(&mut overview.by_result, &alert.result);
-            if let Some(device_id) = &alert.device_id {
-                increment(&mut overview.by_device, &device_id.0);
-            }
-            overview.record_lifecycle_status(
-                lifecycle_records
-                    .get(&alert.dedupe_key)
-                    .map(|record| &record.status)
-                    .unwrap_or(&OperationAlertLifecycleStatus::Open),
-            );
-        }
-
-        overview
-    }
-
-    fn record_lifecycle_status(&mut self, status: &OperationAlertLifecycleStatus) {
-        match status {
-            OperationAlertLifecycleStatus::Open => self.open += 1,
-            OperationAlertLifecycleStatus::Acknowledged => self.acknowledged += 1,
-            OperationAlertLifecycleStatus::Resolved => self.resolved += 1,
-            OperationAlertLifecycleStatus::Suppressed => self.suppressed += 1,
-            OperationAlertLifecycleStatus::Expired => self.expired += 1,
-        }
-    }
-}
-
-fn increment(map: &mut BTreeMap<String, usize>, key: &str) {
-    *map.entry(key.to_string()).or_insert(0) += 1;
+fn operation_alerts_request(args: &[String]) -> Result<ListOperationAlertsRequest, Box<dyn Error>> {
+    Ok(ListOperationAlertsRequest {
+        operation_alert_path: required_option(args, "--operation-alert-path")?.into(),
+        alert_state_path: option_value(args, "--alert-state-path").map(Into::into),
+        severity: optional_alert_severity(args, "--severity")?,
+        limit: optional_usize(args, "--limit")?,
+    })
 }
 
 fn required_option(args: &[String], name: &str) -> Result<String, io::Error> {
