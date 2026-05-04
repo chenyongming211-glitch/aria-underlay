@@ -6,7 +6,7 @@ Add a product-facing HTTP route contract on top of `ProductOpsApi` so future HTT
 
 ## Scope
 
-This package adds method/path/status/body JSON semantics. It does not start a listener, add a web framework, integrate a real identity provider, add UI, or require a real switch.
+This package adds method/path/status/body JSON semantics. It does not start a listener, add a web framework, add external identity integration, add UI, or require a real switch.
 
 ## Route Contract
 

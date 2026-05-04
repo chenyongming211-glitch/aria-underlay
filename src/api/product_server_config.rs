@@ -10,9 +10,7 @@ use crate::api::product_api::ProductOpsApi;
 use crate::api::product_http::ProductHttpRouter;
 use crate::api::product_http_server::ProductHttpListenerConfig;
 use crate::api::product_identity::{
-    BearerTokenProductSessionExtractor, JwtJwksProductIdentityVerifier,
-    ProductAuthenticatedPrincipal, ProductIdentityVerifier, ProductJwtJwksFileVerifierConfig,
-    ProductJwtJwksVerifierConfig, RefreshingJwtJwksProductIdentityVerifier,
+    BearerTokenProductSessionExtractor, ProductAuthenticatedPrincipal, ProductIdentityVerifier,
     StaticProductIdentityVerifier,
 };
 use crate::telemetry::{JsonFileOperationSummaryStore, JsonFileProductAuditStore};
@@ -27,6 +25,7 @@ pub enum ProductApiDeploymentMode {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProductApiServerConfig {
     #[serde(default)]
     pub deployment_mode: ProductApiDeploymentMode,
@@ -37,10 +36,6 @@ pub struct ProductApiServerConfig {
     pub product_audit_path: PathBuf,
     #[serde(default)]
     pub static_tokens: BTreeMap<String, ProductAuthenticatedPrincipal>,
-    #[serde(default)]
-    pub jwt_jwks: Option<ProductJwtJwksVerifierConfig>,
-    #[serde(default)]
-    pub jwt_jwks_file: Option<ProductJwtJwksFileVerifierConfig>,
 }
 
 impl ProductApiServerConfig {
@@ -53,13 +48,9 @@ impl ProductApiServerConfig {
         self.listener_config().validate()?;
         validate_non_empty_path("operation_summary_path", &self.operation_summary_path)?;
         validate_non_empty_path("product_audit_path", &self.product_audit_path)?;
-        let identity_modes = usize::from(!self.static_tokens.is_empty())
-            + usize::from(self.jwt_jwks.is_some())
-            + usize::from(self.jwt_jwks_file.is_some());
-        if identity_modes != 1 {
+        if self.static_tokens.is_empty() {
             return Err(UnderlayError::InvalidIntent(
-                "product API config must choose exactly one of static_tokens, jwt_jwks, or jwt_jwks_file"
-                    .into(),
+                "product API config static_tokens must not be empty".into(),
             ));
         }
         if self.deployment_mode == ProductApiDeploymentMode::Local
@@ -68,20 +59,6 @@ impl ProductApiServerConfig {
             return Err(UnderlayError::InvalidIntent(
                 "product API local deployment_mode must bind to a loopback address".into(),
             ));
-        }
-        if self.deployment_mode == ProductApiDeploymentMode::ProductionIngress
-            && !self.static_tokens.is_empty()
-        {
-            return Err(UnderlayError::InvalidIntent(
-                "product API production_ingress deployment_mode must use jwt_jwks_file or jwt_jwks, not static_tokens"
-                    .into(),
-            ));
-        }
-        if let Some(config) = &self.jwt_jwks {
-            JwtJwksProductIdentityVerifier::new(config.clone())?;
-        }
-        if let Some(config) = &self.jwt_jwks_file {
-            config.validate_static()?;
         }
         Ok(())
     }
@@ -108,16 +85,6 @@ impl ProductApiServerConfig {
     }
 
     fn identity_verifier(&self) -> Result<Arc<dyn ProductIdentityVerifier>, Box<dyn Error>> {
-        if let Some(config) = &self.jwt_jwks {
-            return Ok(Arc::new(JwtJwksProductIdentityVerifier::new(
-                config.clone(),
-            )?));
-        }
-        if let Some(config) = &self.jwt_jwks_file {
-            return Ok(Arc::new(RefreshingJwtJwksProductIdentityVerifier::new(
-                config.clone(),
-            )?));
-        }
         let mut verifier = StaticProductIdentityVerifier::new();
         for (token, principal) in &self.static_tokens {
             verifier = verifier.with_token(token.clone(), principal.clone());

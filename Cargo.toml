@@ -22,7 +22,6 @@ path = "src/bin/aria_underlay_product_api.rs"
 [dependencies]
 async-trait = "0.1"
 dashmap = "6"
-jsonwebtoken = "9"
 prost = "0.13"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }

@@ -2,11 +2,11 @@
 
 ## Goal
 
-Replace the product API's implicit mock-header-only identity path with an explicit, fail-closed session identity boundary that can later be backed by a real IdP without changing product operations, RBAC, or audit code.
+Replace the product API's implicit mock-header-only identity path with an explicit, fail-closed internal session identity boundary without changing product operations, RBAC, or audit code.
 
 ## Scope
 
-This package adds identity abstraction and local/static verifier coverage. It does not implement OIDC, JWT signature verification, JWKS fetch, SSO login, refresh tokens, browser sessions, or a public HTTP listener.
+This package adds identity abstraction and local/static verifier coverage. Product decision: this repository is for an internal system and does not implement SSO, OIDC, JWT signature verification, JWKS fetch, refresh tokens, browser sessions, or a public HTTP listener.
 
 ## Architecture
 
@@ -17,7 +17,7 @@ Add `src/api/product_identity.rs`:
 - `StaticProductIdentityVerifier`: deterministic in-memory verifier for tests and local/offline mode.
 - `BearerTokenProductSessionExtractor`: `ProductSessionExtractor` implementation that reads `Authorization: Bearer <token>`, validates it through a verifier, and returns the existing `ProductSession`.
 
-The existing `HeaderProductSessionExtractor` remains for local/mock contract tests only. Production-facing HTTP wiring should use `BearerTokenProductSessionExtractor` or a future IdP-backed verifier.
+The existing `HeaderProductSessionExtractor` remains for local/mock contract tests only. Product-facing HTTP wiring should use `BearerTokenProductSessionExtractor` with the internal bearer-token verifier.
 
 ## Semantics
 

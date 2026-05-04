@@ -67,11 +67,11 @@ Map authentication failures to `AUTHENTICATION_FAILED` in journal/error fields f
 
 - [ ] **Step 1: Document identity boundary**
 
-Record the distinction between local mock headers, bearer-token verifier abstraction, RBAC, and future real IdP.
+Record the distinction between local mock headers, bearer-token verifier abstraction, RBAC, and the internal identity boundary.
 
 - [ ] **Step 2: Update current open debt**
 
-Move identity/session validation from fully open to abstraction complete; leave real OIDC/JWT/JWKS and listener exposure open.
+Move identity/session validation from fully open to abstraction complete; keep SSO/OIDC/JWT/JWKS out of scope and leave listener exposure open.
 
 ### Task 5: Verification and CI
 

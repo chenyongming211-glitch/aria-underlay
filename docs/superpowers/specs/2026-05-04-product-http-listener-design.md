@@ -3,8 +3,8 @@
 ## Goal
 
 Bind the existing framework-neutral `ProductHttpRouter` to a real local HTTP
-listener without introducing a real switch dependency or pretending that the
-production identity provider is complete.
+listener without introducing a real switch dependency or external identity
+provider dependency.
 
 ## Design Choice
 
@@ -38,8 +38,8 @@ The local config includes:
 - static bearer-token principals for offline/local operation
 
 The checked-in sample binds to `127.0.0.1:8088`. Operators should keep this
-listener behind local access controls until the real IdP verifier and production
-deployment model are selected.
+listener behind local access controls or an internal ingress selected by the
+deployment.
 
 ## Error Handling
 
@@ -67,7 +67,7 @@ Actions remains the Rust compile/test gate.
 ## Out Of Scope
 
 - TLS termination.
-- real IdP/JWT/JWKS verification.
+- SSO/OIDC/JWT/JWKS integration.
 - product UI.
 - product audit database backend.
 - external alert delivery.

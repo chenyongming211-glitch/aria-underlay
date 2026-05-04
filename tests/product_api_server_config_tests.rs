@@ -21,20 +21,6 @@ fn product_api_server_config_rejects_wildcard_bind_in_local_mode() {
 }
 
 #[test]
-fn product_api_server_config_rejects_static_tokens_in_production_ingress_mode() {
-    let config = ProductApiServerConfig {
-        deployment_mode: ProductApiDeploymentMode::ProductionIngress,
-        ..local_static_config()
-    };
-
-    let err = config
-        .validate()
-        .expect_err("production ingress mode should reject static bearer tokens");
-
-    assert!(matches!(err, UnderlayError::InvalidIntent(_)));
-}
-
-#[test]
 fn product_api_production_sample_parses_and_validates_packaging_boundary() {
     let config = ProductApiServerConfig::from_path("docs/examples/product-api.production.json")
         .expect("production sample should parse");
@@ -46,8 +32,23 @@ fn product_api_production_sample_parses_and_validates_packaging_boundary() {
         config.deployment_mode,
         ProductApiDeploymentMode::ProductionIngress
     );
-    assert!(config.jwt_jwks_file.is_some());
-    assert!(config.static_tokens.is_empty());
+    assert!(!config.static_tokens.is_empty());
+}
+
+#[test]
+fn product_api_server_config_rejects_jwt_jwks_fields() {
+    let json = r#"{
+      "deployment_mode": "production_ingress",
+      "bind_addr": "127.0.0.1:8088",
+      "max_body_bytes": 1048576,
+      "operation_summary_path": "/var/lib/aria-underlay/ops/operation-summaries.jsonl",
+      "product_audit_path": "/var/lib/aria-underlay/ops/product-audit.jsonl",
+      "static_tokens": {},
+      "jwt_jwks": {"issuer": "https://internal.example.invalid"}
+    }"#;
+
+    serde_json::from_str::<ProductApiServerConfig>(json)
+        .expect_err("product API config must not accept JWT/JWKS fields");
 }
 
 fn local_static_config() -> ProductApiServerConfig {
@@ -61,7 +62,5 @@ fn local_static_config() -> ProductApiServerConfig {
             "local-viewer-token".into(),
             ProductAuthenticatedPrincipal::new("local-viewer", RbacRole::Viewer),
         )]),
-        jwt_jwks: None,
-        jwt_jwks_file: None,
     }
 }

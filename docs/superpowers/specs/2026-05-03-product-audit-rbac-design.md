@@ -150,6 +150,6 @@ Required tests before product backend promotion:
 
 ## Current Decision
 
-Continue using JSONL local mode for no-real-switch development. Product audit/RBAC now has a local foundation for `force_resolve_transaction`, internal alert lifecycle actions, and local worker retention/schedule config changes. Build the database-backed product audit/RBAC backend behind existing traits once product storage and identity provider requirements are fixed.
+Continue using JSONL local mode for no-real-switch development. Product audit/RBAC now has a local foundation for `force_resolve_transaction`, internal alert lifecycle actions, and local worker retention/schedule config changes. Build the database-backed product audit/RBAC backend behind existing traits once product storage and internal token lifecycle requirements are fixed.
 
 External alert delivery is not part of the current product direction. Do not build webhook, enterprise IM, PagerDuty, email, or external retry adapters unless the product requirement changes. Alerts remain internal records queried through `aria-underlay-ops`, product APIs, and later UI. Current local alert lifecycle supports `open`, `acknowledged`, `resolved`, `suppressed`, and `expired`, with audit and RBAC on every operator action. Current local worker config admin supports audited retention and schedule config writes, but does not hot-reload a running daemon. Remaining product work is database-backed lifecycle/config storage plus product API/UI packaging.

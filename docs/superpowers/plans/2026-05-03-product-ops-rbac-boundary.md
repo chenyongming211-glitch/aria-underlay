@@ -78,7 +78,7 @@ Record that product-facing reads now require operator context and RBAC.
 
 - [ ] **Step 2: Update remaining gaps**
 
-Leave real HTTP routing, IdP integration, UI, and online reload as open work.
+Leave real HTTP routing, internal identity wiring, UI, and online reload as open work.
 
 ### Task 5: Verification and Release Gate
 

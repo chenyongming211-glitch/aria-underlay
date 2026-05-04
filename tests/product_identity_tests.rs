@@ -31,7 +31,7 @@ fn bearer_token_session_lists_operation_summaries_without_mock_role_headers() {
             StaticProductIdentityVerifier::new().with_token(
                 "viewer-token",
                 ProductAuthenticatedPrincipal::new("viewer-a", RbacRole::Viewer)
-                    .with_issuer("test-idp")
+                    .with_issuer("internal-product-config")
                     .with_subject("subject-viewer-a")
                     .with_session_id("session-viewer-a"),
             ),

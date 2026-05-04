@@ -19,7 +19,7 @@ Covered:
 Not covered:
 
 - Product audit database deployment.
-- Product identity provider deployment.
+- Internal token lifecycle tooling and product audit database deployment.
 - Real switch parser/renderer promotion.
 
 External paging systems such as enterprise IM, Slack, email, PagerDuty, or webhook delivery are intentionally out of scope. Alerts stay inside Aria Underlay and are queried through CLI, later product APIs, and later UI.
@@ -493,7 +493,7 @@ There are now two session extractors:
 | Extractor | Intended use |
 | --- | --- |
 | `HeaderProductSessionExtractor` | Local/mock contract tests only. |
-| `BearerTokenProductSessionExtractor` | Product-facing route wiring before a real IdP verifier is selected. |
+| `BearerTokenProductSessionExtractor` | Internal product API route wiring using the configured bearer-token verifier. |
 
 The local/mock header extractor reads:
 
@@ -510,11 +510,9 @@ The bearer extractor reads:
 
 `StaticProductIdentityVerifier` is deterministic local/offline infrastructure. It maps bearer tokens to normalized principals with `operator_id`, role, optional issuer, optional subject, optional session ID, and optional expiry. Missing, malformed, unknown, and expired tokens fail closed before RBAC or product audit export runs.
 
-`JwtJwksProductIdentityVerifier` verifies signed JWT bearer tokens against a configured offline JWKS document. It requires a matching `kid`, allowed algorithm, valid signature, issuer, audience, subject, expiration, and mapped product role. It can read operator and session IDs from configured claims. Unknown roles, unknown keys, wrong audience, wrong issuer, expired tokens, and ambiguous multi-role mappings fail closed.
+Product decision: this is an internal system. SSO, OIDC, JWT, JWKS, refresh tokens, and browser sessions are intentionally out of scope for this repository. The packaged identity model is internal bearer tokens configured in `static_tokens`, optionally protected by a site-local ingress, firewall rule, or operator network boundary. Token creation, rotation, and revocation remain an operational process until a first-party product audit database and internal identity store are designed.
 
-`RefreshingJwtJwksProductIdentityVerifier` is the packaged local key-rotation path. It reads JWKS from `jwt_jwks_file.jwks_path`, refreshes on `refresh_interval_secs`, and accepts rotated keys without restarting `aria-underlay-product-api`. If the trust source cannot be parsed or loaded beyond `max_stale_secs`, JWT verification fails closed instead of trusting stale keys indefinitely.
-
-The header extractor and static verifier are not production identity models. The inline JWT/JWKS verifier is suitable for controlled local tests or pinned config deployments. Production ingress mode should use `jwt_jwks_file` with an external OIDC/JWKS sync process that atomically updates `/etc/aria-underlay/jwks/product-api.jwks.json`; this package deliberately does not fetch IdP metadata over the network from the product API process.
+The product API config rejects unknown fields, so historical `jwt_jwks` or `jwt_jwks_file` settings fail at startup instead of being silently ignored.
 
 `ProductHttpRouter` currently defines these product HTTP routes, and `ProductHttpServer` can serve them over a local HTTP/1.1 listener:
 
@@ -558,17 +556,7 @@ Start the local product API with:
 aria-underlay-product-api docs/examples/product-api.local.json
 ```
 
-The checked-in static-token sample binds to `127.0.0.1:8088` and uses static local bearer tokens. The JWKS sample is:
-
-```bash
-aria-underlay-product-api docs/examples/product-api.jwt-jwks.local.json
-```
-
-The file-backed JWKS refresh sample is:
-
-```bash
-aria-underlay-product-api docs/examples/product-api.jwt-jwks-file.local.json
-```
+The checked-in static-token sample binds to `127.0.0.1:8088` and uses static local bearer tokens.
 
 Production packaging uses:
 
@@ -576,7 +564,7 @@ Production packaging uses:
 aria-underlay-product-api /etc/aria-underlay/product-api.json
 ```
 
-Use `docs/examples/product-api.production.json` as the starting point. It sets `deployment_mode` to `production_ingress`, binds the product API to loopback, uses `/var/lib/aria-underlay/ops` for state, and reads rotating JWT keys from `/etc/aria-underlay/jwks/product-api.jwks.json`. TLS, client authentication, ingress rate limiting, and external OIDC discovery belong in the production ingress or a dedicated JWKS sync process, not inside the current local HTTP listener.
+Use `docs/examples/product-api.production.json` as the starting point. It sets `deployment_mode` to `production_ingress`, binds the product API to loopback, uses `/var/lib/aria-underlay/ops` for state, and requires internal bearer tokens through `static_tokens`. TLS, client authentication, ingress rate limiting, and proxy-header policy belong in the production ingress or local host policy, not inside the current HTTP listener.
 
 Current product boundary behavior:
 
@@ -600,11 +588,11 @@ docs/examples/systemd/aria-underlay-product-api.service
 docs/examples/tmpfiles.d/aria-underlay.conf
 ```
 
-Install-time directory ownership should keep `/etc/aria-underlay` and `/etc/aria-underlay/jwks` owned by `root:aria-underlay` with mode `0750`; runtime state remains under `/var/lib/aria-underlay`, logs under `/var/log/aria-underlay`, and runtime files under `/run/aria-underlay`.
+Install-time directory ownership should keep `/etc/aria-underlay` owned by `root:aria-underlay` with mode `0750`; runtime state remains under `/var/lib/aria-underlay`, logs under `/var/log/aria-underlay`, and runtime files under `/run/aria-underlay`.
 
 Still missing from the product layer:
 
-- Online identity provider discovery and JWKS download daemon, if the deployment does not already provide a local JWKS sync process.
+- Internal token lifecycle and rotation tooling, including audit-friendly replacement of `static_tokens`.
 - Production TLS/ingress implementation and hardening outside the local listener.
 - product UI.
 
@@ -617,6 +605,6 @@ docs/superpowers/specs/2026-05-03-product-api-routing-skeleton-design.md
 docs/superpowers/specs/2026-05-03-product-http-routing-design.md
 docs/superpowers/specs/2026-05-04-product-session-identity-boundary-design.md
 docs/superpowers/specs/2026-05-04-product-http-listener-design.md
-docs/superpowers/specs/2026-05-04-product-jwt-jwks-identity-design.md
+docs/superpowers/specs/2026-05-04-product-internal-identity-scope-design.md
 docs/superpowers/specs/2026-05-04-product-worker-config-admin-design.md
 ```

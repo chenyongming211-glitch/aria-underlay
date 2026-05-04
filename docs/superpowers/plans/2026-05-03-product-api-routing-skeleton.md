@@ -64,7 +64,7 @@ Record that this is a handler-facing product API skeleton, not an HTTP server.
 
 - [ ] **Step 2: Record remaining gaps**
 
-Keep real HTTP routing, IdP, token/session validation, and UI as open work.
+Keep real HTTP routing, internal token/session validation, and UI as open work.
 
 ### Task 4: Verification and Release Gate
 

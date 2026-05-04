@@ -61,11 +61,11 @@ Map `UnderlayError::InvalidIntent` to `400`, `AuthorizationDenied` to `403`, and
 
 - [ ] **Step 1: Document route contract**
 
-Record paths, headers, status semantics, and the no-listener/no-real-IdP boundary.
+Record paths, headers, status semantics, and the no-listener/no-external-identity boundary.
 
 - [ ] **Step 2: Update current progress and open debt**
 
-Move product API routing from fully open to framework-neutral route contract complete; leave real server, real IdP, DB backend, and UI as open product packaging work.
+Move product API routing from fully open to framework-neutral route contract complete; leave real server, DB backend, and UI as open product packaging work.
 
 ### Task 4: Verification and CI
 
