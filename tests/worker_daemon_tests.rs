@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::time::Duration;
 
 use aria_underlay::model::{DeviceId, InterfaceConfig, VlanConfig};
 use aria_underlay::state::{DeviceShadowState, JsonFileShadowStateStore, ShadowStateStore};
@@ -11,9 +12,11 @@ use aria_underlay::tx::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore,
 use aria_underlay::worker::daemon::{
     DriftAuditDaemonConfig, JournalGcDaemonConfig, OperationAlertDaemonConfig,
     OperationSummaryDaemonConfig, UnderlayWorkerDaemon, UnderlayWorkerDaemonConfig,
+    WorkerConfigReloadStatus, WorkerReloadCheckpoint, WorkerReloadDaemonConfig,
     WorkerScheduleConfig,
 };
 use aria_underlay::worker::gc::RetentionPolicy;
+use tokio::sync::watch;
 
 #[test]
 fn checked_in_worker_daemon_sample_config_parses() {
@@ -47,6 +50,7 @@ async fn daemon_config_wires_gc_drift_and_persistent_operation_summaries() {
         .expect("observed shadow should be stored");
 
     let config = UnderlayWorkerDaemonConfig {
+        reload: None,
         operation_summary: Some(OperationSummaryDaemonConfig {
             path: operation_summary_path.clone(),
             retention: OperationSummaryRetentionPolicy::default(),
@@ -133,6 +137,7 @@ async fn daemon_config_wires_operation_summary_retention_worker() {
     }
 
     let config = UnderlayWorkerDaemonConfig {
+        reload: None,
         operation_summary: Some(OperationSummaryDaemonConfig {
             path: operation_summary_path.clone(),
             retention: OperationSummaryRetentionPolicy {
@@ -188,6 +193,7 @@ async fn daemon_config_wires_operation_alert_delivery_worker() {
         .expect("second attention-required operation summary should persist before alert delivery");
 
     let config = UnderlayWorkerDaemonConfig {
+        reload: None,
         operation_summary: Some(OperationSummaryDaemonConfig {
             path: operation_summary_path.clone(),
             retention: OperationSummaryRetentionPolicy::default(),
@@ -226,6 +232,7 @@ async fn daemon_config_wires_operation_alert_delivery_worker() {
     assert!(checkpoint_path.exists());
 
     let second_config = UnderlayWorkerDaemonConfig {
+        reload: None,
         operation_summary: Some(OperationSummaryDaemonConfig {
             path: operation_summary_path.clone(),
             retention: OperationSummaryRetentionPolicy::default(),
@@ -291,6 +298,127 @@ async fn daemon_config_file_rejects_invalid_worker_schedule_before_start() {
         !temp.join("ops").join("summaries.jsonl").exists(),
         "daemon should validate schedule before worker events are persisted"
     );
+
+    fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn reloadable_daemon_applies_valid_config_change_and_records_checkpoint() {
+    let temp = temp_test_dir("daemon-reload-valid");
+    let config_path = temp.join("worker.json");
+    let checkpoint_path = temp.join("ops").join("worker-reload-checkpoint.json");
+    let mut config = reloadable_worker_config(&temp, 3_600);
+    fs::create_dir_all(&temp).expect("temp config dir should be created");
+    config
+        .write_to_path(&config_path)
+        .expect("initial reloadable worker config should be written");
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let daemon_task = tokio::spawn({
+        let config_path = config_path.clone();
+        async move {
+            UnderlayWorkerDaemon::run_config_path_until_shutdown(
+                config_path,
+                wait_for_watch_shutdown(shutdown_rx),
+            )
+            .await
+        }
+    });
+
+    let initial_checkpoint = wait_for_reload_checkpoint(&checkpoint_path, |checkpoint| {
+        checkpoint.status == WorkerConfigReloadStatus::Started
+    })
+    .await;
+    assert_eq!(initial_checkpoint.generation, 1);
+
+    config
+        .operation_summary
+        .as_mut()
+        .expect("operation summary should exist")
+        .retention_schedule
+        .interval_secs = 900;
+    config
+        .write_to_path(&config_path)
+        .expect("updated reloadable worker config should be written");
+
+    let applied_checkpoint = wait_for_reload_checkpoint(&checkpoint_path, |checkpoint| {
+        checkpoint.status == WorkerConfigReloadStatus::Applied && checkpoint.generation == 2
+    })
+    .await;
+    assert_eq!(applied_checkpoint.error, None);
+
+    shutdown_tx
+        .send(true)
+        .expect("daemon shutdown signal should be sent");
+    tokio::time::timeout(Duration::from_secs(5), daemon_task)
+        .await
+        .expect("daemon should stop after shutdown")
+        .expect("daemon task should join")
+        .expect("reloadable daemon should stop cleanly");
+
+    fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn reloadable_daemon_rejects_invalid_config_change_without_replacing_runtime() {
+    let temp = temp_test_dir("daemon-reload-invalid");
+    let config_path = temp.join("worker.json");
+    let checkpoint_path = temp.join("ops").join("worker-reload-checkpoint.json");
+    let mut config = reloadable_worker_config(&temp, 3_600);
+    fs::create_dir_all(&temp).expect("temp config dir should be created");
+    config
+        .write_to_path(&config_path)
+        .expect("initial reloadable worker config should be written");
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let daemon_task = tokio::spawn({
+        let config_path = config_path.clone();
+        async move {
+            UnderlayWorkerDaemon::run_config_path_until_shutdown(
+                config_path,
+                wait_for_watch_shutdown(shutdown_rx),
+            )
+            .await
+        }
+    });
+
+    wait_for_reload_checkpoint(&checkpoint_path, |checkpoint| {
+        checkpoint.status == WorkerConfigReloadStatus::Started
+    })
+    .await;
+
+    config
+        .operation_summary
+        .as_mut()
+        .expect("operation summary should exist")
+        .retention_schedule
+        .interval_secs = 0;
+    config
+        .write_to_path(&config_path)
+        .expect("invalid reload candidate should be written");
+
+    let rejected_checkpoint = wait_for_reload_checkpoint(&checkpoint_path, |checkpoint| {
+        checkpoint.status == WorkerConfigReloadStatus::Rejected
+    })
+    .await;
+    assert_eq!(rejected_checkpoint.generation, 1);
+    assert!(
+        rejected_checkpoint
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("interval_secs"),
+        "invalid reload checkpoint should include schedule error: {rejected_checkpoint:#?}"
+    );
+
+    shutdown_tx
+        .send(true)
+        .expect("daemon shutdown signal should be sent");
+    tokio::time::timeout(Duration::from_secs(5), daemon_task)
+        .await
+        .expect("daemon should stop after rejected reload")
+        .expect("daemon task should join")
+        .expect("reloadable daemon should keep old runtime and stop cleanly");
 
     fs::remove_dir_all(temp).ok();
 }
@@ -368,6 +496,67 @@ fn attention_recovery_event(index: usize) -> UnderlayEvent {
             decisions: Vec::new(),
         },
     )
+}
+
+fn reloadable_worker_config(
+    temp: &std::path::Path,
+    retention_interval_secs: u64,
+) -> UnderlayWorkerDaemonConfig {
+    UnderlayWorkerDaemonConfig {
+        reload: Some(WorkerReloadDaemonConfig {
+            enabled: true,
+            poll_interval_secs: 1,
+            checkpoint_path: Some(temp.join("ops").join("worker-reload-checkpoint.json")),
+        }),
+        operation_summary: Some(OperationSummaryDaemonConfig {
+            path: temp.join("ops").join("summaries.jsonl"),
+            retention: OperationSummaryRetentionPolicy {
+                max_records: Some(10_000),
+                max_bytes: None,
+                max_rotated_files: 5,
+            },
+            retention_schedule: WorkerScheduleConfig {
+                interval_secs: retention_interval_secs,
+                run_immediately: false,
+            },
+        }),
+        operation_alert: None,
+        journal_gc: None,
+        drift_audit: None,
+    }
+}
+
+async fn wait_for_watch_shutdown(mut shutdown_rx: watch::Receiver<bool>) {
+    loop {
+        if *shutdown_rx.borrow() {
+            return;
+        }
+        if shutdown_rx.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+async fn wait_for_reload_checkpoint(
+    checkpoint_path: &std::path::Path,
+    predicate: impl Fn(&WorkerReloadCheckpoint) -> bool,
+) -> WorkerReloadCheckpoint {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(payload) = fs::read(checkpoint_path) {
+            let checkpoint: WorkerReloadCheckpoint =
+                serde_json::from_slice(&payload).expect("checkpoint should be valid JSON");
+            if predicate(&checkpoint) {
+                return checkpoint;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for reload checkpoint at {:?}",
+            checkpoint_path
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 fn temp_test_dir(name: &str) -> std::path::PathBuf {

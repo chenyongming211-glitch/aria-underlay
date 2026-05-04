@@ -422,6 +422,7 @@ fn journal_record(tx_id: &str, phase: TxPhase, device_id: &str) -> TxJournalReco
 
 fn worker_config(temp: &std::path::Path) -> UnderlayWorkerDaemonConfig {
     UnderlayWorkerDaemonConfig {
+        reload: None,
         operation_summary: Some(OperationSummaryDaemonConfig {
             path: temp.join("ops").join("summaries.jsonl"),
             retention: Default::default(),

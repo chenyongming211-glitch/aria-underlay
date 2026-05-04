@@ -1,14 +1,15 @@
 use std::error::Error;
 use std::path::PathBuf;
 
-use aria_underlay::worker::daemon::{UnderlayWorkerDaemon, UnderlayWorkerDaemonConfig};
+use aria_underlay::worker::daemon::UnderlayWorkerDaemon;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let config_path = worker_config_path()?;
-    let config = UnderlayWorkerDaemonConfig::from_path(&config_path)?;
-    let report = UnderlayWorkerDaemon::from_config(config)?
-        .run_until_shutdown(shutdown_signal())
+    let report = UnderlayWorkerDaemon::run_config_path_until_shutdown(
+        config_path,
+        shutdown_signal(),
+    )
         .await?;
 
     println!("{report:?}");

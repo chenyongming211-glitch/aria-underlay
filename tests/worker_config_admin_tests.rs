@@ -218,6 +218,7 @@ fn schedule_request(
 
 fn worker_config(temp: &std::path::Path) -> UnderlayWorkerDaemonConfig {
     UnderlayWorkerDaemonConfig {
+        reload: None,
         operation_summary: Some(OperationSummaryDaemonConfig {
             path: temp.join("ops").join("summaries.jsonl"),
             retention: OperationSummaryRetentionPolicy::default(),

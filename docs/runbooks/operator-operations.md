@@ -262,7 +262,8 @@ If product audit cannot be written, lifecycle writes fail closed and the alert s
 
 ## Change Worker Config
 
-Worker config admin commands update the JSON config file. They do not hot-reload a running daemon. Restart or reload orchestration remains a separate deployment concern.
+Worker config admin commands update the JSON config file. A running daemon adopts
+the change only when its top-level `reload.enabled` setting is true.
 
 All config writes require:
 
@@ -327,6 +328,40 @@ Schedule targets:
 | `drift-audit` | `drift_audit.schedule` |
 
 If the target section is absent from the config file, the command fails closed instead of creating a partial config.
+
+## Worker Daemon Reload
+
+Reload is configured in the worker JSON:
+
+```json
+{
+  "reload": {
+    "enabled": true,
+    "poll_interval_secs": 5,
+    "checkpoint_path": "var/aria-underlay/ops/worker-reload-checkpoint.json"
+  }
+}
+```
+
+When enabled, `aria-underlay-worker` polls the config file. A changed config is
+parsed and validated before the current runtime is touched. Valid changes stop
+the current runtime, start a fresh runtime from the new config, and write a
+checkpoint with `status=applied`. Invalid changes are rejected, the old runtime
+continues, and the checkpoint records `status=rejected` plus the validation
+error.
+
+Checkpoint states:
+
+| State | Meaning |
+| --- | --- |
+| `started` | Daemon started under reload supervision and adopted generation 1. |
+| `applied` | A changed config was validated and adopted. |
+| `rejected` | A changed config was invalid; the previous runtime is still active. |
+| `shutdown` | Daemon stopped after graceful shutdown. |
+
+Reload supervisor settings are process-lifecycle settings. Changing
+`reload.poll_interval_secs` or `reload.checkpoint_path` in the config should be
+treated as a restart-required deployment change.
 
 ## Triage GC
 
@@ -522,7 +557,7 @@ Current product boundary behavior:
 
 Audit export is fail-closed. If the export action cannot be appended to product audit, no audit records are returned.
 
-Worker config mutation is also fail-closed. If audit append, authorization, validation, or config parsing fails, the config file is not changed. These routes update the configured worker JSON file only; they do not hot-reload a running daemon.
+Worker config mutation is also fail-closed. If audit append, authorization, validation, or config parsing fails, the config file is not changed. These routes update the configured worker JSON file. A running daemon adopts the change only when reload supervision is enabled in that worker config.
 
 Still missing from the product layer:
 
@@ -530,7 +565,7 @@ Still missing from the product layer:
 - OIDC discovery / JWKS refresh or internal SSO session validation.
 - production TLS/ingress selection.
 - product UI.
-- online daemon reload.
+- product UI.
 
 The design boundary is recorded in:
 

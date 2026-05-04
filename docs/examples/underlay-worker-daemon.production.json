@@ -1,4 +1,9 @@
 {
+  "reload": {
+    "enabled": true,
+    "poll_interval_secs": 5,
+    "checkpoint_path": "/var/lib/aria-underlay/ops/worker-reload-checkpoint.json"
+  },
   "operation_summary": {
     "path": "/var/lib/aria-underlay/ops/operation-summaries.jsonl",
     "retention": {

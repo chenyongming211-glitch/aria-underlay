@@ -3,7 +3,8 @@ use std::fs;
 use aria_underlay::telemetry::OperationSummaryRetentionPolicy;
 use aria_underlay::worker::daemon::{
     DriftAuditDaemonConfig, JournalGcDaemonConfig, OperationAlertDaemonConfig,
-    OperationSummaryDaemonConfig, UnderlayWorkerDaemonConfig, WorkerScheduleConfig,
+    OperationSummaryDaemonConfig, UnderlayWorkerDaemonConfig, WorkerReloadDaemonConfig,
+    WorkerScheduleConfig,
 };
 use aria_underlay::worker::deployment::WorkerDeploymentPreflight;
 use aria_underlay::worker::gc::RetentionPolicy;
@@ -100,6 +101,41 @@ fn preflight_rejects_invalid_schedule_without_starting_workers() {
 }
 
 #[test]
+fn preflight_rejects_invalid_reload_config_without_starting_workers() {
+    let temp = temp_test_dir("invalid-reload");
+    let mut config = worker_config(&temp);
+    config.reload = Some(WorkerReloadDaemonConfig {
+        enabled: true,
+        poll_interval_secs: 0,
+        checkpoint_path: None,
+    });
+
+    let report = WorkerDeploymentPreflight::new().check_config(&config);
+
+    assert!(!report.valid);
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|error| error.contains("reload.poll_interval_secs")),
+        "reload poll interval should be reported: {report:#?}"
+    );
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|error| error.contains("reload.checkpoint_path")),
+        "reload checkpoint path should be reported: {report:#?}"
+    );
+    assert!(
+        !temp.join("ops").join("summaries.jsonl").exists(),
+        "preflight must not start daemon workers or write summaries"
+    );
+
+    fs::remove_dir_all(temp).ok();
+}
+
+#[test]
 fn preflight_strict_paths_rejects_missing_directory() {
     let temp = temp_test_dir("missing-dir");
     let config = worker_config(&temp);
@@ -122,6 +158,7 @@ fn preflight_strict_paths_rejects_missing_directory() {
 
 fn worker_config(temp: &std::path::Path) -> UnderlayWorkerDaemonConfig {
     UnderlayWorkerDaemonConfig {
+        reload: None,
         operation_summary: Some(OperationSummaryDaemonConfig {
             path: temp.join("ops").join("summaries.jsonl"),
             retention: OperationSummaryRetentionPolicy {

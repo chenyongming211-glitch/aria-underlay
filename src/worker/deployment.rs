@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::worker::daemon::{
     DriftAuditDaemonConfig, JournalGcDaemonConfig, OperationAlertDaemonConfig,
-    OperationSummaryDaemonConfig, UnderlayWorkerDaemonConfig, WorkerScheduleConfig,
+    OperationSummaryDaemonConfig, UnderlayWorkerDaemonConfig, WorkerReloadDaemonConfig,
+    WorkerScheduleConfig,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +117,9 @@ impl WorkerDeploymentPreflight {
         if let Some(drift_audit) = &config.drift_audit {
             self.check_drift_audit(report, drift_audit);
         }
+        if let Some(reload) = &config.reload {
+            self.check_reload(report, reload);
+        }
     }
 
     fn check_operation_summary(
@@ -185,6 +189,29 @@ impl WorkerDeploymentPreflight {
             report,
             &config.observed_shadow_root,
             "drift_audit.observed_shadow_root",
+            true,
+        );
+    }
+
+    fn check_reload(
+        &self,
+        report: &mut WorkerDeploymentPreflightReport,
+        config: &WorkerReloadDaemonConfig,
+    ) {
+        if !config.enabled {
+            return;
+        }
+        if config.poll_interval_secs == 0 {
+            report.error("reload.poll_interval_secs must be greater than zero");
+        }
+        let Some(checkpoint_path) = &config.checkpoint_path else {
+            report.error("reload.checkpoint_path is required when reload is enabled");
+            return;
+        };
+        self.check_file_parent(
+            report,
+            checkpoint_path,
+            "reload.checkpoint_path.parent",
             true,
         );
     }
