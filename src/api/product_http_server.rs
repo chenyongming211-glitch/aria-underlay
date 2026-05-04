@@ -6,6 +6,7 @@ use crate::api::product_http::{
     ProductHttpErrorResponse, ProductHttpMethod, ProductHttpRequest, ProductHttpResponse,
     ProductHttpRouter,
 };
+use crate::utils::time::now_unix_secs;
 use crate::{UnderlayError, UnderlayResult};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -95,7 +96,12 @@ impl ProductHttpServer {
                     let server = self.clone();
                     tokio::spawn(async move {
                         if let Err(error) = server.serve_stream(stream).await {
-                            tracing::warn!(?peer_addr, error = %error, "product HTTP connection failed");
+                            eprintln!(
+                                "ts={} level=warn component=product_http action=connection_failed peer_addr={} error={}",
+                                now_unix_secs(),
+                                peer_addr,
+                                format_product_http_log_value(&error.to_string())
+                            );
                         }
                     });
                 }
@@ -417,4 +423,16 @@ fn reason_phrase(status: u16) -> &'static str {
 
 fn product_http_io_error(err: std::io::Error) -> UnderlayError {
     UnderlayError::Internal(format!("product HTTP server io error: {err}"))
+}
+
+fn format_product_http_log_value(value: &str) -> String {
+    if value.chars().all(is_unquoted_product_http_log_char) {
+        value.to_string()
+    } else {
+        serde_json::to_string(value).unwrap_or_else(|_| "\"<unprintable>\"".into())
+    }
+}
+
+fn is_unquoted_product_http_log_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | ':' | ',' | '@')
 }

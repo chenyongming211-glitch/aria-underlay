@@ -29,8 +29,26 @@ fn checked_in_worker_deployment_samples_are_consistent() {
     ));
     assert!(systemd_unit
         .contains("ExecStart=/usr/local/bin/aria-underlay-worker /etc/aria-underlay/worker.json"));
+    assert!(systemd_unit.contains(
+        "StandardOutput=append:/var/log/aria/aria-underlay.log"
+    ));
+    assert!(systemd_unit.contains(
+        "StandardError=append:/var/log/aria/aria-underlay.log"
+    ));
     assert!(systemd_unit
-        .contains("ReadWritePaths=/var/lib/aria-underlay /var/log/aria-underlay /run/aria-underlay"));
+        .contains("ReadWritePaths=/var/lib/aria-underlay /var/log/aria /run/aria-underlay"));
+
+    let product_systemd_unit =
+        fs::read_to_string("docs/examples/systemd/aria-underlay-product-api.service")
+            .expect("checked-in product API systemd unit should exist");
+    assert!(product_systemd_unit.contains(
+        "StandardOutput=append:/var/log/aria/aria-underlay.log"
+    ));
+    assert!(product_systemd_unit.contains(
+        "StandardError=append:/var/log/aria/aria-underlay.log"
+    ));
+    assert!(product_systemd_unit
+        .contains("ReadWritePaths=/var/lib/aria-underlay /var/log/aria /run/aria-underlay"));
 
     let tmpfiles = fs::read_to_string("docs/examples/tmpfiles.d/aria-underlay.conf")
         .expect("checked-in tmpfiles.d sample should exist");
@@ -38,6 +56,8 @@ fn checked_in_worker_deployment_samples_are_consistent() {
     assert!(tmpfiles.contains("/var/lib/aria-underlay/journal"));
     assert!(tmpfiles.contains("/var/lib/aria-underlay/shadow/expected"));
     assert!(tmpfiles.contains("/var/lib/aria-underlay/shadow/observed"));
+    assert!(tmpfiles.contains("d /var/log/aria "));
+    assert!(tmpfiles.contains("f /var/log/aria/aria-underlay.log "));
 }
 
 #[test]

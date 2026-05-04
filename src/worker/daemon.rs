@@ -15,8 +15,9 @@ use crate::state::{
 };
 use crate::telemetry::{
     EventSink, JsonFileOperationAlertCheckpointStore, JsonFileOperationAlertSink,
-    JsonFileOperationAuditStore, JsonFileOperationSummaryStore, NoopEventSink,
+    JsonFileOperationAuditStore, JsonFileOperationSummaryStore,
     OperationAuditRetentionPolicy, OperationSummaryRetentionPolicy, RecordingEventSink,
+    StderrEventSink,
 };
 use crate::worker::drift_auditor::{
     DriftAuditSchedule, DriftAuditWorker, DriftAuditor, DriftObservationSource,
@@ -201,23 +202,24 @@ impl UnderlayWorkerDaemon {
         let operation_audit_store = operation_audit_config
             .as_ref()
             .map(|config| Arc::new(JsonFileOperationAuditStore::new(config.path.clone())));
+        let runtime_log_sink: Arc<dyn EventSink> = Arc::new(StderrEventSink);
         let event_sink: Arc<dyn EventSink> =
             match (operation_summary_store.clone(), operation_audit_store.clone()) {
                 (Some(summary_store), Some(audit_store)) => Arc::new(
-                    RecordingEventSink::new(Arc::new(NoopEventSink), summary_store)
+                    RecordingEventSink::new(runtime_log_sink.clone(), summary_store)
                         .with_operation_audit_store(audit_store),
                 ),
                 (Some(summary_store), None) => {
-                    Arc::new(RecordingEventSink::new(Arc::new(NoopEventSink), summary_store))
+                    Arc::new(RecordingEventSink::new(runtime_log_sink.clone(), summary_store))
                 }
                 (None, Some(audit_store)) => Arc::new(
                     RecordingEventSink::new(
-                        Arc::new(NoopEventSink),
+                        runtime_log_sink.clone(),
                         Arc::new(crate::telemetry::InMemoryOperationSummaryStore::default()),
                     )
                     .with_operation_audit_store(audit_store),
                 ),
-                (None, None) => Arc::new(NoopEventSink),
+                (None, None) => runtime_log_sink,
             };
 
         let mut runtime = UnderlayWorkerRuntime::new();

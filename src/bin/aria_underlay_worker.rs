@@ -1,17 +1,38 @@
 use std::error::Error;
 use std::path::PathBuf;
 
+use aria_underlay::utils::time::now_unix_secs;
 use aria_underlay::worker::daemon::UnderlayWorkerDaemon;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let config_path = worker_config_path()?;
-    let report = UnderlayWorkerDaemon::run_config_path_until_shutdown(
+    eprintln!(
+        "ts={} level=info component=worker action=starting config_path={}",
+        now_unix_secs(),
+        config_path.display()
+    );
+    let report = match UnderlayWorkerDaemon::run_config_path_until_shutdown(
         config_path,
         shutdown_signal(),
     )
-        .await?;
+    .await
+    {
+        Ok(report) => report,
+        Err(error) => {
+            eprintln!(
+                "ts={} level=error component=worker action=failed error={:?}",
+                now_unix_secs(),
+                error.to_string()
+            );
+            return Err(error.into());
+        }
+    };
 
+    eprintln!(
+        "ts={} level=info component=worker action=stopped",
+        now_unix_secs()
+    );
     println!("{report:?}");
     Ok(())
 }

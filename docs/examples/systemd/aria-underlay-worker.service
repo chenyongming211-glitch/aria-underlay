@@ -11,12 +11,14 @@ Group=aria-underlay
 Environment=RUST_LOG=info
 ExecStartPre=/usr/local/bin/aria-underlay-ops check-worker-config --worker-config-path /etc/aria-underlay/worker.json --strict-paths
 ExecStart=/usr/local/bin/aria-underlay-worker /etc/aria-underlay/worker.json
+StandardOutput=append:/var/log/aria/aria-underlay.log
+StandardError=append:/var/log/aria/aria-underlay.log
 Restart=on-failure
 RestartSec=5s
 RuntimeDirectory=aria-underlay
 StateDirectory=aria-underlay
-LogsDirectory=aria-underlay
-ReadWritePaths=/var/lib/aria-underlay /var/log/aria-underlay /run/aria-underlay
+LogsDirectory=aria
+ReadWritePaths=/var/lib/aria-underlay /var/log/aria /run/aria-underlay
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true

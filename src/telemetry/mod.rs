@@ -25,4 +25,7 @@ pub use ops::{
     InMemoryOperationSummaryStore, JsonFileOperationSummaryStore, OperationSummary,
     OperationSummaryCompactionReport, OperationSummaryRetentionPolicy, OperationSummaryStore,
 };
-pub use sink::{EventSink, InMemoryEventSink, NoopEventSink, RecordingEventSink};
+pub use sink::{
+    format_underlay_event_log_line, EventSink, InMemoryEventSink, NoopEventSink,
+    RecordingEventSink, StderrEventSink,
+};

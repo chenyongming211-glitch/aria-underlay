@@ -10,7 +10,8 @@ use aria_underlay::model::{DeviceId, DeviceRole, Vendor};
 use aria_underlay::proto::adapter;
 use aria_underlay::state::drift::{DriftFinding, DriftReport, DriftType};
 use aria_underlay::telemetry::{
-    AuditRecord, EventSink, InMemoryEventSink, InMemoryOperationSummaryStore,
+    format_underlay_event_log_line, AuditRecord, EventSink, InMemoryEventSink,
+    InMemoryOperationSummaryStore,
     JsonFileOperationAuditStore, JsonFileOperationSummaryStore, MetricName, Metrics,
     OperationAuditRecord, OperationAuditRetentionPolicy, OperationAuditStore, OperationSummary,
     OperationSummaryRetentionPolicy, OperationSummaryStore, RecordingEventSink, UnderlayEvent,
@@ -106,6 +107,34 @@ fn audit_record_maps_force_resolved_transaction_event() {
     assert_eq!(record.action, "transaction.force_resolved");
     assert_eq!(record.result, "force_resolved");
     assert_eq!(record.tx_id.as_deref(), Some("tx-force"));
+}
+
+#[test]
+fn runtime_log_line_preserves_operator_facing_event_context() {
+    let event = UnderlayEvent::transaction_result(
+        "req-1",
+        "trace-1",
+        "tx-1",
+        Some(DeviceId("leaf-a".into())),
+        TxPhase::InDoubt,
+        Some(TransactionStrategy::CandidateCommit),
+        "in_doubt",
+    )
+    .with_error("TX_IN_DOUBT", "candidate commit result is unknown");
+
+    let line = format_underlay_event_log_line(&event);
+
+    assert!(line.contains("level=error"));
+    assert!(line.contains("action=transaction.in_doubt"));
+    assert!(line.contains("result=in_doubt"));
+    assert!(line.contains("request_id=req-1"));
+    assert!(line.contains("trace_id=trace-1"));
+    assert!(line.contains("tx_id=tx-1"));
+    assert!(line.contains("device_id=leaf-a"));
+    assert!(line.contains("phase=InDoubt"));
+    assert!(line.contains("strategy=CandidateCommit"));
+    assert!(line.contains("error_code=TX_IN_DOUBT"));
+    assert!(line.contains("error_message=\"candidate commit result is unknown\""));
 }
 
 #[test]

@@ -12,6 +12,7 @@
 
 ## 本地文件
 
+- 运行日志：`/var/log/aria/aria-underlay.log`，主排障入口。
 - 操作摘要：JSONL。
 - operation 审计日志：append-only JSONL，记录从 `UnderlayEvent` 派生的完整本地审计记录。
 - 操作告警：JSONL。
@@ -20,10 +21,30 @@
 
 ## 操作摘要、审计和告警的区别
 
+- 运行日志用于日常查错和现场排障，优先从 `/var/log/aria/aria-underlay.log` 看错误、事务状态、drift、GC、worker reload 和 product API 连接问题。
 - 操作摘要用于运维查询和 overview 统计，字段较少，面向“现在有什么风险”。
-- operation 审计日志用于事后复盘，字段更完整，包含 request_id、trace_id、tx_id、device_id、action、result、operator、reason、error 和 fields。
+- operation 审计日志用于内部结构化留痕，字段更完整，包含 request_id、trace_id、tx_id、device_id、action、result、operator、reason、error 和 fields；当前不要求通过 CLI 查询它。
 - 操作告警由摘要派生，面向需要人工处理的风险。
 - 三者都使用本地 JSON/JSONL 文件；当前不做审计数据库、UI 或外部投递。
+
+## 运行日志
+
+systemd 样例把 `aria-underlay-worker` 和 `aria-underlay-product-api` 的 stdout/stderr 追加到：
+
+```text
+/var/log/aria/aria-underlay.log
+```
+
+常用排障命令：
+
+```bash
+tail -f /var/log/aria/aria-underlay.log
+grep 'level=error' /var/log/aria/aria-underlay.log
+grep 'tx_id=<事务ID>' /var/log/aria/aria-underlay.log
+grep 'device_id=<设备ID>' /var/log/aria/aria-underlay.log
+```
+
+日志使用单行 key=value 格式，便于 `grep`。关键字段包括 `ts`、`level`、`component` 或 `action`、`request_id`、`trace_id`、`tx_id`、`device_id`、`result`、`error_code` 和 `error_message`。
 
 ## 产品 API 身份
 
@@ -41,7 +62,7 @@ Token 在 `product-api.local.json` 或 `product-api.production.json` 的 `static
 
 ## 工作进程部署样例
 
-仓库提供 systemd、tmpfiles 和 JSON 配置样例，但不生成 deb/rpm/tar 安装包。部署方负责用户创建、二进制放置、服务启用、日志策略和目录权限。
+仓库提供 systemd、tmpfiles 和 JSON 配置样例，但不生成 deb/rpm/tar 安装包。部署方负责用户创建、二进制放置、服务启用和目录权限；样例中的运行日志统一落到 `/var/log/aria/aria-underlay.log`。
 
 ## 告警处理
 

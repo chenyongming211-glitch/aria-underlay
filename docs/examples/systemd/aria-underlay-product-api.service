@@ -11,13 +11,15 @@ Group=aria-underlay
 Environment=RUST_LOG=info
 Environment=ARIA_UNDERLAY_PRODUCT_API_CONFIG=/etc/aria-underlay/product-api.json
 ExecStart=/usr/local/bin/aria-underlay-product-api
+StandardOutput=append:/var/log/aria/aria-underlay.log
+StandardError=append:/var/log/aria/aria-underlay.log
 Restart=on-failure
 RestartSec=5s
 RuntimeDirectory=aria-underlay
 StateDirectory=aria-underlay
-LogsDirectory=aria-underlay
+LogsDirectory=aria
 ReadOnlyPaths=/etc/aria-underlay
-ReadWritePaths=/var/lib/aria-underlay /var/log/aria-underlay /run/aria-underlay
+ReadWritePaths=/var/lib/aria-underlay /var/log/aria /run/aria-underlay
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
