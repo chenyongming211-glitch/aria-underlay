@@ -10,7 +10,8 @@ use aria_underlay::api::product_http_server::{
     ProductHttpListenerConfig, ProductHttpServer,
 };
 use aria_underlay::api::product_identity::{
-    BearerTokenProductSessionExtractor, ProductAuthenticatedPrincipal,
+    BearerTokenProductSessionExtractor, JwtJwksProductIdentityVerifier,
+    ProductAuthenticatedPrincipal, ProductIdentityVerifier, ProductJwtJwksVerifierConfig,
     StaticProductIdentityVerifier,
 };
 use aria_underlay::telemetry::{
@@ -27,6 +28,8 @@ struct ProductApiServerConfig {
     product_audit_path: PathBuf,
     #[serde(default)]
     static_tokens: BTreeMap<String, ProductAuthenticatedPrincipal>,
+    #[serde(default)]
+    jwt_jwks: Option<ProductJwtJwksVerifierConfig>,
 }
 
 impl ProductApiServerConfig {
@@ -42,20 +45,36 @@ impl ProductApiServerConfig {
         }
     }
 
-    fn router(&self) -> ProductHttpRouter {
-        let mut verifier = StaticProductIdentityVerifier::new();
-        for (token, principal) in &self.static_tokens {
-            verifier = verifier.with_token(token.clone(), principal.clone());
-        }
-        ProductHttpRouter::new(ProductOpsApi::new(
-            Arc::new(BearerTokenProductSessionExtractor::new(Arc::new(verifier))),
+    fn router(&self) -> Result<ProductHttpRouter, Box<dyn Error>> {
+        let verifier = self.identity_verifier()?;
+        Ok(ProductHttpRouter::new(ProductOpsApi::new(
+            Arc::new(BearerTokenProductSessionExtractor::new(verifier)),
             Arc::new(JsonFileOperationSummaryStore::new(
                 self.operation_summary_path.clone(),
             )),
             Arc::new(JsonFileProductAuditStore::new(
                 self.product_audit_path.clone(),
             )),
-        ))
+        )))
+    }
+
+    fn identity_verifier(&self) -> Result<Arc<dyn ProductIdentityVerifier>, Box<dyn Error>> {
+        if self.jwt_jwks.is_some() && !self.static_tokens.is_empty() {
+            return Err(
+                "product API config must choose either jwt_jwks or static_tokens, not both"
+                    .into(),
+            );
+        }
+        if let Some(config) = &self.jwt_jwks {
+            return Ok(Arc::new(JwtJwksProductIdentityVerifier::new(
+                config.clone(),
+            )?));
+        }
+        let mut verifier = StaticProductIdentityVerifier::new();
+        for (token, principal) in &self.static_tokens {
+            verifier = verifier.with_token(token.clone(), principal.clone());
+        }
+        Ok(Arc::new(verifier))
     }
 }
 
@@ -63,7 +82,7 @@ impl ProductApiServerConfig {
 async fn main() -> Result<(), Box<dyn Error>> {
     let config_path = product_api_config_path()?;
     let config = ProductApiServerConfig::from_path(&config_path)?;
-    let server = ProductHttpServer::new(config.router(), config.listener_config())?;
+    let server = ProductHttpServer::new(config.router()?, config.listener_config())?;
     server.serve_until_shutdown(shutdown_signal()).await?;
     Ok(())
 }

@@ -459,7 +459,9 @@ The bearer extractor reads:
 
 `StaticProductIdentityVerifier` is deterministic local/offline infrastructure. It maps bearer tokens to normalized principals with `operator_id`, role, optional issuer, optional subject, optional session ID, and optional expiry. Missing, malformed, unknown, and expired tokens fail closed before RBAC or product audit export runs.
 
-The header extractor and static verifier are not production identity models. Production should replace the verifier with OIDC/JWT/JWKS or the selected internal SSO/session verifier before exposing a listener.
+`JwtJwksProductIdentityVerifier` verifies signed JWT bearer tokens against a configured offline JWKS document. It requires a matching `kid`, allowed algorithm, valid signature, issuer, audience, subject, expiration, and mapped product role. It can read operator and session IDs from configured claims. Unknown roles, unknown keys, wrong audience, wrong issuer, expired tokens, and ambiguous multi-role mappings fail closed.
+
+The header extractor and static verifier are not production identity models. The offline JWT/JWKS verifier is suitable for a controlled local or packaged deployment where JWKS material is managed by config. Production IdP integration still needs OIDC discovery or a JWKS refresh path if keys rotate outside config deployment.
 
 `ProductHttpRouter` currently defines these product HTTP routes, and `ProductHttpServer` can serve them over a local HTTP/1.1 listener:
 
@@ -498,7 +500,13 @@ Start the local product API with:
 aria-underlay-product-api docs/examples/product-api.local.json
 ```
 
-The checked-in sample binds to `127.0.0.1:8088` and uses static local bearer tokens. Keep this listener local or behind site access controls until the real IdP/JWT/JWKS verifier, TLS/ingress model, and product packaging are selected.
+The checked-in static-token sample binds to `127.0.0.1:8088` and uses static local bearer tokens. The JWKS sample is:
+
+```bash
+aria-underlay-product-api docs/examples/product-api.jwt-jwks.local.json
+```
+
+Keep this listener local or behind site access controls until TLS/ingress model, product packaging, and online JWKS refresh or equivalent IdP key-management workflow are selected.
 
 Current product boundary behavior:
 
@@ -511,8 +519,8 @@ Audit export is fail-closed. If the export action cannot be appended to product 
 
 Still missing from the product layer:
 
-- Real identity provider integration.
-- JWT/OIDC/JWKS or internal SSO token validation.
+- Online identity provider integration.
+- OIDC discovery / JWKS refresh or internal SSO session validation.
 - production TLS/ingress selection.
 - product UI.
 - online daemon reload.
@@ -526,4 +534,5 @@ docs/superpowers/specs/2026-05-03-product-api-routing-skeleton-design.md
 docs/superpowers/specs/2026-05-03-product-http-routing-design.md
 docs/superpowers/specs/2026-05-04-product-session-identity-boundary-design.md
 docs/superpowers/specs/2026-05-04-product-http-listener-design.md
+docs/superpowers/specs/2026-05-04-product-jwt-jwks-identity-design.md
 ```
