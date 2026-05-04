@@ -2,9 +2,9 @@
 
 ## 当前基线
 
-最新有效基线：`main` / `8a9b0d1 docs: refresh current bug inventory baseline`。
+最新有效基线：`main` / `6efbf75 fix: validate netconf observed state output`。
 
-GitHub Actions：`25326262048`，结论 `success`。
+GitHub Actions：`25328357356`，结论 `success`。
 
 本地环境仍没有 `cargo` / `rustfmt`，Rust 编译和测试以 GitHub Actions 为准。当前产品方向已经收敛为内部系统：不做 SSO/OIDC/JWT/JWKS，不做 RBAC，不做产品 UI，不做外部告警投递，不在仓库内实现 ingress/TLS，不生成安装包。
 
@@ -30,6 +30,7 @@ GitHub Actions：`25326262048`，结论 `success`。
 - runtime 日志收敛：运行日志统一写入 `/var/log/aria/aria-underlay.log`，提供 systemd/logrotate 样例；不再要求运维手工用 CLI 查日志。
 - 产品平台过度设计清理：旧 RBAC/JWT/OIDC/product audit DB/外部告警等方案已在文档中标记为历史方案，不作为后续开发依据。
 - NETCONF state driver 输出校验：`GetCurrentState` 的 parsed-state 到 protobuf 映射已补 admin-state 归一化、非法 mode 结构化错误、VLAN/接口基本 shape 校验。
+- parser / renderer fixture 边界增强：新增 Huawei/H3C `missing_port_mode`、`non_integer_access_vlan` 负例；renderer 端口模式大小写归一；snapshot 对未知 `admin_state` 返回结构化失败。
 - 事务 crash/restart 核心矩阵：
   - process-level kill 覆盖 `Preparing`、`Committing`、`Verifying`、`FinalConfirming`、`RollingBack`。
   - recovery 覆盖 adapter session down、roll-forward 前 shadow 持久化、多设备 mixed outcome、recover RPC transient retry。
@@ -52,7 +53,7 @@ GitHub Actions：`25326262048`，结论 `success`。
 | 区域 | 状态 | 下一步 |
 | --- | --- | --- |
 | targeted code review | 2026-05-04 已审查 recovery、journal/shadow、drift、adapter pool、parser/validator 无真机路径；新增 P2 state 输出缺陷已修复 | 继续 fixture 边界测试 |
-| parser / renderer fixture 边界 | Huawei/H3C 已有样本和负例，但不能替代真机 | 继续补 XML namespace、字段缺失、非法 VLAN、重复接口、unknown mode 等边界样本 |
+| parser / renderer fixture 边界 | Huawei/H3C 已有样本、负例和 snapshot 边界测试，但不能替代真机 | 后续只随真实样本或明确 bug 增量补，不作为持续扩功能入口 |
 | recovery backoff | recover RPC transient retry 已有固定短重试 | 如后续 CI 或现场暴露抖动，再做可配置 backoff；当前不是阻塞项 |
 | intent validation | VLAN/interface/domain 基础校验已补 | 后续新增 ACL/VRF/route/BGP 等模型时同步补校验 |
 | 文档一致性 | 当前范围已收敛 | 后续只做小范围状态刷新，避免旧历史计划误导开发 |
@@ -87,4 +88,4 @@ GitHub Actions：`25326262048`，结论 `success`。
 
 1. 没有真实交换机前，不推进 解析器/渲染器 生产化。
 2. 后续只做小范围清理和回归测试加固，不继续扩展产品平台能力。
-3. 优先顺序：fixture 边界测试 > 必要的 recovery/backoff 小修。
+3. 优先顺序：必要的 recovery/backoff 小修；其余等待真实样本或真实交换机证据。

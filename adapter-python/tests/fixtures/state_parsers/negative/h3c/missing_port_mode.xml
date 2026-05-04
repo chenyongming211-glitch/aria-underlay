@@ -1,0 +1,7 @@
+<data>
+  <interfaces>
+    <interface>
+      <name>GigabitEthernet1/0/1</name>
+    </interface>
+  </interfaces>
+</data>

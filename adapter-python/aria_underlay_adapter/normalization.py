@@ -8,7 +8,13 @@ def admin_state_to_text(value) -> str:
         normalized = value.strip().lower()
         if normalized in {"up", "down"}:
             return normalized
-        return normalized
-    if int(value) == 2:
+        raise ValueError(f"unknown admin state: {value}")
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"unknown admin state: {value}") from exc
+    if numeric == 2:
         return "down"
-    return "up"
+    if numeric in {0, 1}:
+        return "up"
+    raise ValueError(f"unknown admin state: {value}")

@@ -229,6 +229,16 @@ def test_huawei_parser_fails_closed_for_invalid_xml(xml, summary):
         ),
         (
             HuaweiStateParser(),
+            FIXTURES / "negative" / "huawei" / "missing_port_mode.xml",
+            "missing required element: interface GE1/0/1/port-mode",
+        ),
+        (
+            HuaweiStateParser(),
+            FIXTURES / "negative" / "huawei" / "non_integer_access_vlan.xml",
+            "invalid VLAN ID abc",
+        ),
+        (
+            HuaweiStateParser(),
             FIXTURES / "negative" / "huawei" / "unknown_mode.xml",
             "unknown port mode hybrid",
         ),
@@ -266,6 +276,16 @@ def test_huawei_parser_fails_closed_for_invalid_xml(xml, summary):
             H3cStateParser(),
             FIXTURES / "negative" / "h3c" / "empty_interface_name.xml",
             "missing required text: interface/name",
+        ),
+        (
+            H3cStateParser(),
+            FIXTURES / "negative" / "h3c" / "missing_port_mode.xml",
+            "missing required element: interface GigabitEthernet1/0/1/port-mode",
+        ),
+        (
+            H3cStateParser(),
+            FIXTURES / "negative" / "h3c" / "non_integer_access_vlan.xml",
+            "invalid VLAN ID abc",
         ),
         (
             H3cStateParser(),

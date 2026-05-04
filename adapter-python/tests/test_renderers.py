@@ -46,6 +46,11 @@ def test_renderer_admin_state_text_matches_netconf_default_for_unspecified_value
     assert _admin_state_text("DOWN") == "down"
 
 
+def test_renderer_admin_state_text_rejects_unknown_values():
+    with pytest.raises(ValueError, match="unknown admin state"):
+        _admin_state_text("disabled")
+
+
 @pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])
 def test_vendor_renderer_skeletons_are_not_production_ready(renderer):
     assert renderer.production_ready is False
@@ -153,6 +158,42 @@ def test_vendor_renderer_builds_access_interface_xml(renderer):
     assert "<ns0:name>GE1/0/1</ns0:name>" in xml
     assert "<ns0:admin-state>up</ns0:admin-state>" in xml
     assert "<ns0:vlan-id>100</ns0:vlan-id>" in xml
+
+
+@pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])
+def test_vendor_renderer_normalizes_mixed_case_port_mode_kind(renderer):
+    xml = renderer.render_edit_config(
+        _DesiredState(
+            vlans=[],
+            interfaces=[
+                _Interface(
+                    name="GE1/0/1",
+                    admin_state="up",
+                    description=None,
+                    mode={"kind": "Access", "access_vlan": 100},
+                ),
+                _Interface(
+                    name="GE1/0/2",
+                    admin_state="down",
+                    description=None,
+                    mode={
+                        "kind": "Trunk",
+                        "native_vlan": 100,
+                        "allowed_vlans": [100, 200],
+                    },
+                ),
+            ],
+        )
+    )
+
+    root = ElementTree.fromstring(xml)
+    assert root.find(f".//{{{renderer.IFACE_NAMESPACE}}}access") is not None
+    assert root.find(f".//{{{renderer.IFACE_NAMESPACE}}}trunk") is not None
+    admin_states = [
+        node.text
+        for node in root.findall(f".//{{{renderer.IFACE_NAMESPACE}}}admin-state")
+    ]
+    assert "down" in admin_states
 
 
 @pytest.mark.parametrize("renderer", [HuaweiRenderer(), H3cRenderer()])

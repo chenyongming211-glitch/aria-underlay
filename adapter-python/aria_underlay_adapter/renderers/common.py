@@ -114,7 +114,8 @@ class StructuredSkeletonRenderer:
 
 def _port_mode_element(mode: dict, namespace: str) -> XmlElement:
     kind = _field(mode, "kind")
-    if kind in {"access", "ACCESS", 1}:
+    normalized_kind = kind.strip().lower() if isinstance(kind, str) else kind
+    if normalized_kind in {"access", 1}:
         access_vlan = _validate_vlan_id(
             _optional_field(mode, "access_vlan"),
             "mode.access_vlan",
@@ -130,7 +131,7 @@ def _port_mode_element(mode: dict, namespace: str) -> XmlElement:
                 )
             ],
         )
-    if kind in {"trunk", "TRUNK", 2}:
+    if normalized_kind in {"trunk", 2}:
         children = []
         native_vlan = _optional_field(mode, "native_vlan")
         if native_vlan is not None:

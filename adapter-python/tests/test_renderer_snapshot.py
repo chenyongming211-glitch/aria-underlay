@@ -124,6 +124,28 @@ def test_render_snapshot_returns_structured_error_for_invalid_trunk_mode(
     assert "duplicate allowed_vlans" in error["raw_error_summary"]
 
 
+def test_render_snapshot_returns_structured_error_for_invalid_admin_state(
+    tmp_path, capsys
+):
+    desired_state = tmp_path / "desired.json"
+    _write_desired_state(desired_state)
+    data = json.loads(desired_state.read_text())
+    data["interfaces"][0]["admin_state"] = "disabled"
+    desired_state.write_text(json.dumps(data))
+
+    result = snapshot.main(
+        ["--vendor", "huawei", "--desired-state", str(desired_state)]
+    )
+
+    captured = capsys.readouterr()
+    error = json.loads(captured.err)
+
+    assert result == 1
+    assert captured.out == ""
+    assert error["code"] == "RENDER_SNAPSHOT_FAILED"
+    assert "unknown admin state" in error["raw_error_summary"]
+
+
 def test_render_snapshot_returns_structured_error_for_invalid_input_shape(
     tmp_path, capsys
 ):
