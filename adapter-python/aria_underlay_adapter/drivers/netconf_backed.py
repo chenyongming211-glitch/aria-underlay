@@ -54,33 +54,14 @@ class NetconfBackedDriver:
         try:
             backend = self._backend_for_state_read(request.device)
             state = backend.get_current_state(scope=_request_scope(request))
+            observed_state = self._observed_state_to_proto(
+                request.device.device_id,
+                state,
+            )
         except AdapterError as error:
             return pb2.GetCurrentStateResponse(errors=[error.to_proto(pb2)])
 
-        return pb2.GetCurrentStateResponse(
-            state=pb2.ObservedDeviceState(
-                device_id=request.device.device_id,
-                vlans=[
-                    pb2.VlanConfig(
-                        vlan_id=vlan["vlan_id"],
-                        name=vlan["name"],
-                        description=vlan["description"],
-                    )
-                    for vlan in state["vlans"]
-                ],
-                interfaces=[
-                    pb2.InterfaceConfig(
-                        name=iface["name"],
-                        admin_state=pb2.ADMIN_STATE_UP
-                        if iface["admin_state"] == "up"
-                        else pb2.ADMIN_STATE_DOWN,
-                        description=iface["description"],
-                        mode=self._port_mode_to_proto(iface["mode"]),
-                    )
-                    for iface in state["interfaces"]
-                ],
-            )
-        )
+        return pb2.GetCurrentStateResponse(state=observed_state)
 
     def dry_run(self, device, desired_state):
         try:
@@ -350,24 +331,105 @@ class NetconfBackedDriver:
             return pb2.BACKEND_KIND_CLI
         return pb2.BACKEND_KIND_UNSPECIFIED
 
-    def _port_mode_to_proto(self, mode: dict):
-        if mode["kind"] == "trunk":
-            return pb2.PortMode(
-                kind=pb2.PORT_MODE_KIND_TRUNK,
-                native_vlan=mode["native_vlan"],
-                allowed_vlans=mode["allowed_vlans"],
-            )
-        if mode["kind"] == "access":
-            return pb2.PortMode(
-                kind=pb2.PORT_MODE_KIND_ACCESS,
-                access_vlan=mode["access_vlan"],
-                allowed_vlans=mode["allowed_vlans"],
+    def _observed_state_to_proto(self, device_id: str, state: dict):
+        if not isinstance(state, dict):
+            raise _parsed_state_error(f"parsed_state_type={type(state).__name__}")
+
+        vlans = state.get("vlans", [])
+        interfaces = state.get("interfaces", [])
+        if not isinstance(vlans, list):
+            raise _parsed_state_error(f"vlans must be a list, got {type(vlans).__name__}")
+        if not isinstance(interfaces, list):
+            raise _parsed_state_error(
+                f"interfaces must be a list, got {type(interfaces).__name__}"
             )
 
-        raise AdapterError(
-            code="INVALID_PORT_MODE",
-            message=f"unknown port mode kind: {mode['kind']}",
+        return pb2.ObservedDeviceState(
+            device_id=device_id,
+            vlans=[
+                self._vlan_to_proto(vlan, index)
+                for index, vlan in enumerate(vlans)
+            ],
+            interfaces=[
+                self._interface_to_proto(interface, index)
+                for index, interface in enumerate(interfaces)
+            ],
         )
+
+    def _vlan_to_proto(self, vlan: dict, index: int):
+        if not isinstance(vlan, dict):
+            raise _parsed_state_error(
+                f"vlans[{index}] must be an object, got {type(vlan).__name__}"
+            )
+
+        vlan_id = _parsed_vlan_id(vlan.get("vlan_id"), f"vlans[{index}].vlan_id")
+        return pb2.VlanConfig(
+            vlan_id=vlan_id,
+            name=vlan.get("name"),
+            description=vlan.get("description"),
+        )
+
+    def _interface_to_proto(self, interface: dict, index: int):
+        if not isinstance(interface, dict):
+            raise _parsed_state_error(
+                "interfaces[{}] must be an object, got {}".format(
+                    index,
+                    type(interface).__name__,
+                )
+            )
+
+        name = interface.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise _parsed_state_error(f"interfaces[{index}].name must be non-empty")
+
+        return pb2.InterfaceConfig(
+            name=name,
+            admin_state=_admin_state_to_proto(
+                interface.get("admin_state"),
+                f"interfaces[{index}].admin_state",
+            ),
+            description=interface.get("description"),
+            mode=self._port_mode_to_proto(
+                interface.get("mode"),
+                path=f"interfaces[{index}].mode",
+            ),
+        )
+
+    def _port_mode_to_proto(self, mode: dict, *, path: str = "mode"):
+        if not isinstance(mode, dict):
+            raise _parsed_state_error(f"{path} must be an object")
+
+        raw_kind = mode.get("kind")
+        kind = raw_kind.strip().lower() if isinstance(raw_kind, str) else raw_kind
+        if kind == "trunk":
+            native_vlan = _optional_parsed_vlan_id(
+                mode.get("native_vlan"),
+                f"{path}.native_vlan",
+            )
+            allowed_vlans = [
+                _parsed_vlan_id(vlan_id, f"{path}.allowed_vlans[{index}]")
+                for index, vlan_id in enumerate(mode.get("allowed_vlans", []))
+            ]
+            kwargs = {
+                "kind": pb2.PORT_MODE_KIND_TRUNK,
+                "allowed_vlans": allowed_vlans,
+            }
+            if native_vlan is not None:
+                kwargs["native_vlan"] = native_vlan
+            return pb2.PortMode(**kwargs)
+        if kind == "access":
+            access_vlan = _parsed_vlan_id(mode.get("access_vlan"), f"{path}.access_vlan")
+            return pb2.PortMode(
+                kind=pb2.PORT_MODE_KIND_ACCESS,
+                access_vlan=access_vlan,
+            )
+
+        if path == "mode":
+            raise AdapterError(
+                code="INVALID_PORT_MODE",
+                message=f"unknown port mode kind: {raw_kind}",
+            )
+        raise _parsed_state_error(f"{path}.kind has unsupported value: {raw_kind!r}")
 
 
 def _request_scope(request):
@@ -392,4 +454,51 @@ def _desired_state_is_empty(desired_state) -> bool:
             not list(getattr(desired_state, "vlans", []))
             and not list(getattr(desired_state, "interfaces", []))
         )
+    )
+
+
+def _admin_state_to_proto(value, path: str):
+    if value is None or value == "" or value == 0:
+        return pb2.ADMIN_STATE_UP
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "up":
+            return pb2.ADMIN_STATE_UP
+        if normalized == "down":
+            return pb2.ADMIN_STATE_DOWN
+        raise _parsed_state_error(f"{path} has unsupported value: {value!r}")
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError) as exc:
+        raise _parsed_state_error(f"{path} must be up/down or enum value") from exc
+    if numeric == pb2.ADMIN_STATE_UP:
+        return pb2.ADMIN_STATE_UP
+    if numeric == pb2.ADMIN_STATE_DOWN:
+        return pb2.ADMIN_STATE_DOWN
+    raise _parsed_state_error(f"{path} has unsupported value: {value!r}")
+
+
+def _optional_parsed_vlan_id(value, path: str):
+    if value is None or value == "":
+        return None
+    return _parsed_vlan_id(value, path)
+
+
+def _parsed_vlan_id(value, path: str) -> int:
+    try:
+        vlan_id = int(value)
+    except (TypeError, ValueError) as exc:
+        raise _parsed_state_error(f"{path} must be an integer: {value!r}") from exc
+    if vlan_id < 1 or vlan_id > 4094:
+        raise _parsed_state_error(f"{path} out of range: {vlan_id}")
+    return vlan_id
+
+
+def _parsed_state_error(summary: str) -> AdapterError:
+    return AdapterError(
+        code="NETCONF_STATE_PARSE_FAILED",
+        message="NETCONF running state parser returned invalid state",
+        normalized_error="invalid parsed state",
+        raw_error_summary=summary,
+        retryable=False,
     )

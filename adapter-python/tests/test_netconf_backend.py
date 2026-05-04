@@ -379,6 +379,81 @@ def test_netconf_driver_get_state_can_use_h3c_fixture_verified_parser_when_enabl
     ]
 
 
+def test_netconf_driver_get_state_normalizes_observed_admin_state():
+    driver = NetconfBackedDriver(
+        _ParsedStateBackend(
+            {
+                "vlans": [],
+                "interfaces": [
+                    _parsed_interface("GE1/0/1", None),
+                    _parsed_interface("GE1/0/2", "UP"),
+                    _parsed_interface("GE1/0/3", "down"),
+                ],
+            }
+        )
+    )
+
+    response = driver.get_current_state(
+        pb2.GetCurrentStateRequest(device=pb2.DeviceRef(device_id="leaf-a"))
+    )
+
+    assert response.errors == []
+    assert [interface.admin_state for interface in response.state.interfaces] == [
+        pb2.ADMIN_STATE_UP,
+        pb2.ADMIN_STATE_UP,
+        pb2.ADMIN_STATE_DOWN,
+    ]
+
+
+def test_netconf_driver_get_state_rejects_unknown_observed_admin_state():
+    driver = NetconfBackedDriver(
+        _ParsedStateBackend(
+            {
+                "vlans": [],
+                "interfaces": [_parsed_interface("GE1/0/1", "testing")],
+            }
+        )
+    )
+
+    response = driver.get_current_state(
+        pb2.GetCurrentStateRequest(device=pb2.DeviceRef(device_id="leaf-a"))
+    )
+
+    assert response.state.device_id == ""
+    assert response.errors[0].code == "NETCONF_STATE_PARSE_FAILED"
+    assert "interfaces[0].admin_state" in response.errors[0].raw_error_summary
+
+
+def test_netconf_driver_get_state_returns_error_for_malformed_parser_output():
+    driver = NetconfBackedDriver(
+        _ParsedStateBackend(
+            {
+                "vlans": [],
+                "interfaces": [
+                    {
+                        "name": "GE1/0/1",
+                        "admin_state": "up",
+                        "description": None,
+                        "mode": {
+                            "kind": "hybrid",
+                            "access_vlan": None,
+                            "allowed_vlans": [],
+                        },
+                    }
+                ],
+            }
+        )
+    )
+
+    response = driver.get_current_state(
+        pb2.GetCurrentStateRequest(device=pb2.DeviceRef(device_id="leaf-a"))
+    )
+
+    assert response.state.device_id == ""
+    assert response.errors[0].code == "NETCONF_STATE_PARSE_FAILED"
+    assert "interfaces[0].mode" in response.errors[0].raw_error_summary
+
+
 def test_netconf_driver_verify_succeeds_with_fixture_verified_parser_when_enabled():
     session = _RecordingSession(reply=_Reply(_huawei_fixture_xml()))
     driver = NetconfBackedDriver(
@@ -1142,9 +1217,31 @@ class _StaticStateParser:
         return self.state
 
 
+class _ParsedStateBackend:
+    def __init__(self, state):
+        self.state = state
+
+    def get_current_state(self, scope=None):
+        return self.state
+
+
 class _Reply:
     def __init__(self, data_xml):
         self.data_xml = data_xml
+
+
+def _parsed_interface(name, admin_state):
+    return {
+        "name": name,
+        "admin_state": admin_state,
+        "description": None,
+        "mode": {
+            "kind": "access",
+            "access_vlan": 100,
+            "native_vlan": None,
+            "allowed_vlans": [],
+        },
+    }
 
 
 def _desired_state():
