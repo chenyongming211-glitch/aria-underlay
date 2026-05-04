@@ -4,7 +4,7 @@
 
 ## 目标
 
-在 ProductOpsManager 外提供 handler-facing facade，固定 request/session/RBAC/审计 调用链。
+在 ProductOpsManager 外提供 handler-facing facade，固定 request/operator/本地审计 调用链。
 
 ## 实施范围
 
