@@ -12,3 +12,4 @@ adapter-python/build/
 adapter-python/*.egg-info/
 adapter-python/aria_underlay_adapter/proto/*_pb2.py
 adapter-python/aria_underlay_adapter/proto/*_pb2_grpc.py
+.gstack/
