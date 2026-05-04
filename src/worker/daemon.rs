@@ -15,8 +15,8 @@ use crate::state::{
 };
 use crate::telemetry::{
     EventSink, JsonFileOperationAlertCheckpointStore, JsonFileOperationAlertSink,
-    JsonFileOperationSummaryStore, NoopEventSink, OperationSummaryRetentionPolicy,
-    RecordingEventSink,
+    JsonFileOperationAuditStore, JsonFileOperationSummaryStore, NoopEventSink,
+    OperationAuditRetentionPolicy, OperationSummaryRetentionPolicy, RecordingEventSink,
 };
 use crate::worker::drift_auditor::{
     DriftAuditSchedule, DriftAuditWorker, DriftAuditor, DriftObservationSource,
@@ -24,6 +24,9 @@ use crate::worker::drift_auditor::{
 use crate::worker::gc::{JournalGc, JournalGcSchedule, JournalGcWorker, RetentionPolicy};
 use crate::worker::operation_alerts::{
     OperationAlertDeliverySchedule, OperationAlertDeliveryWorker,
+};
+use crate::worker::operation_audit_compactor::{
+    OperationAuditCompactionSchedule, OperationAuditCompactionWorker,
 };
 use crate::worker::operation_summary_compactor::{
     OperationSummaryCompactionSchedule, OperationSummaryCompactionWorker,
@@ -39,6 +42,8 @@ pub struct UnderlayWorkerDaemonConfig {
     pub reload: Option<WorkerReloadDaemonConfig>,
     #[serde(default)]
     pub operation_summary: Option<OperationSummaryDaemonConfig>,
+    #[serde(default)]
+    pub operation_audit: Option<OperationAuditDaemonConfig>,
     #[serde(default)]
     pub operation_alert: Option<OperationAlertDaemonConfig>,
     #[serde(default)]
@@ -62,6 +67,15 @@ pub struct OperationSummaryDaemonConfig {
     pub path: PathBuf,
     #[serde(default)]
     pub retention: OperationSummaryRetentionPolicy,
+    #[serde(default)]
+    pub retention_schedule: WorkerScheduleConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationAuditDaemonConfig {
+    pub path: PathBuf,
+    #[serde(default)]
+    pub retention: OperationAuditRetentionPolicy,
     #[serde(default)]
     pub retention_schedule: WorkerScheduleConfig,
 }
@@ -183,10 +197,28 @@ impl UnderlayWorkerDaemon {
         let operation_summary_store = operation_summary_config
             .as_ref()
             .map(|config| Arc::new(JsonFileOperationSummaryStore::new(config.path.clone())));
-        let event_sink: Arc<dyn EventSink> = match operation_summary_store.clone() {
-            Some(store) => Arc::new(RecordingEventSink::new(Arc::new(NoopEventSink), store)),
-            None => Arc::new(NoopEventSink),
-        };
+        let operation_audit_config = config.operation_audit;
+        let operation_audit_store = operation_audit_config
+            .as_ref()
+            .map(|config| Arc::new(JsonFileOperationAuditStore::new(config.path.clone())));
+        let event_sink: Arc<dyn EventSink> =
+            match (operation_summary_store.clone(), operation_audit_store.clone()) {
+                (Some(summary_store), Some(audit_store)) => Arc::new(
+                    RecordingEventSink::new(Arc::new(NoopEventSink), summary_store)
+                        .with_operation_audit_store(audit_store),
+                ),
+                (Some(summary_store), None) => {
+                    Arc::new(RecordingEventSink::new(Arc::new(NoopEventSink), summary_store))
+                }
+                (None, Some(audit_store)) => Arc::new(
+                    RecordingEventSink::new(
+                        Arc::new(NoopEventSink),
+                        Arc::new(crate::telemetry::InMemoryOperationSummaryStore::default()),
+                    )
+                    .with_operation_audit_store(audit_store),
+                ),
+                (None, None) => Arc::new(NoopEventSink),
+            };
 
         let mut runtime = UnderlayWorkerRuntime::new();
         if let (Some(config), Some(store)) =
@@ -195,6 +227,16 @@ impl UnderlayWorkerDaemon {
             if config.retention.is_enabled() {
                 runtime = runtime.with_operation_summary_compaction(
                     OperationSummaryCompactionWorker::new(store, config.retention),
+                    config.retention_schedule.into(),
+                );
+            }
+        }
+        if let (Some(config), Some(store)) =
+            (operation_audit_config, operation_audit_store.clone())
+        {
+            if config.retention.is_enabled() {
+                runtime = runtime.with_operation_audit_compaction(
+                    OperationAuditCompactionWorker::new(store, config.retention),
                     config.retention_schedule.into(),
                 );
             }
@@ -314,6 +356,15 @@ impl From<WorkerScheduleConfig> for DriftAuditSchedule {
 }
 
 impl From<WorkerScheduleConfig> for OperationSummaryCompactionSchedule {
+    fn from(config: WorkerScheduleConfig) -> Self {
+        Self {
+            interval_secs: config.interval_secs,
+            run_immediately: config.run_immediately,
+        }
+    }
+}
+
+impl From<WorkerScheduleConfig> for OperationAuditCompactionSchedule {
     fn from(config: WorkerScheduleConfig) -> Self {
         Self {
             interval_secs: config.interval_secs,
@@ -531,6 +582,13 @@ pub(crate) fn validate_worker_config_for_runtime(
         validate_worker_schedule(
             "operation_summary.retention_schedule",
             operation_summary.retention_schedule,
+        )?;
+    }
+    if let Some(operation_audit) = &config.operation_audit {
+        operation_audit.retention.validate()?;
+        validate_worker_schedule(
+            "operation_audit.retention_schedule",
+            operation_audit.retention_schedule,
         )?;
     }
     if let Some(operation_alert) = &config.operation_alert {

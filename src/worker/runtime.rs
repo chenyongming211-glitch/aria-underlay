@@ -11,6 +11,10 @@ use crate::worker::operation_alerts::{
     OperationAlertDeliverySchedule, OperationAlertDeliverySchedulerReport,
     OperationAlertDeliveryWorker,
 };
+use crate::worker::operation_audit_compactor::{
+    OperationAuditCompactionSchedule, OperationAuditCompactionSchedulerReport,
+    OperationAuditCompactionWorker,
+};
 use crate::worker::operation_summary_compactor::{
     OperationSummaryCompactionSchedule, OperationSummaryCompactionSchedulerReport,
     OperationSummaryCompactionWorker,
@@ -25,6 +29,8 @@ pub struct UnderlayWorkerRuntime {
         Option<(OperationAlertDeliveryWorker, OperationAlertDeliverySchedule)>,
     operation_summary_compaction:
         Option<(OperationSummaryCompactionWorker, OperationSummaryCompactionSchedule)>,
+    operation_audit_compaction:
+        Option<(OperationAuditCompactionWorker, OperationAuditCompactionSchedule)>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -33,6 +39,7 @@ pub struct UnderlayWorkerRuntimeReport {
     pub drift_audit: Option<DriftAuditSchedulerReport>,
     pub operation_alert_delivery: Option<OperationAlertDeliverySchedulerReport>,
     pub operation_summary_compaction: Option<OperationSummaryCompactionSchedulerReport>,
+    pub operation_audit_compaction: Option<OperationAuditCompactionSchedulerReport>,
 }
 
 enum RuntimeWorkerOutcome {
@@ -40,6 +47,7 @@ enum RuntimeWorkerOutcome {
     DriftAudit(UnderlayResult<DriftAuditSchedulerReport>),
     OperationAlertDelivery(UnderlayResult<OperationAlertDeliverySchedulerReport>),
     OperationSummaryCompaction(UnderlayResult<OperationSummaryCompactionSchedulerReport>),
+    OperationAuditCompaction(UnderlayResult<OperationAuditCompactionSchedulerReport>),
 }
 
 impl UnderlayWorkerRuntime {
@@ -80,6 +88,15 @@ impl UnderlayWorkerRuntime {
         schedule: OperationSummaryCompactionSchedule,
     ) -> Self {
         self.operation_summary_compaction = Some((worker, schedule));
+        self
+    }
+
+    pub fn with_operation_audit_compaction(
+        mut self,
+        worker: OperationAuditCompactionWorker,
+        schedule: OperationAuditCompactionSchedule,
+    ) -> Self {
+        self.operation_audit_compaction = Some((worker, schedule));
         self
     }
 
@@ -131,6 +148,16 @@ impl UnderlayWorkerRuntime {
             let worker_shutdown = shutdown_rx.clone();
             tasks.spawn(async move {
                 RuntimeWorkerOutcome::OperationSummaryCompaction(
+                    worker
+                        .run_periodic_until_shutdown(schedule, wait_for_shutdown(worker_shutdown))
+                        .await,
+                )
+            });
+        }
+        if let Some((worker, schedule)) = self.operation_audit_compaction {
+            let worker_shutdown = shutdown_rx.clone();
+            tasks.spawn(async move {
+                RuntimeWorkerOutcome::OperationAuditCompaction(
                     worker
                         .run_periodic_until_shutdown(schedule, wait_for_shutdown(worker_shutdown))
                         .await,
@@ -193,6 +220,9 @@ impl UnderlayWorkerRuntime {
         if let Some((_, schedule)) = &self.operation_summary_compaction {
             validate_interval("operation summary compaction", schedule.interval_secs)?;
         }
+        if let Some((_, schedule)) = &self.operation_audit_compaction {
+            validate_interval("operation audit compaction", schedule.interval_secs)?;
+        }
         Ok(())
     }
 }
@@ -233,6 +263,9 @@ fn record_worker_outcome(
         }
         RuntimeWorkerOutcome::OperationSummaryCompaction(worker_report) => {
             report.operation_summary_compaction = Some(worker_report?);
+        }
+        RuntimeWorkerOutcome::OperationAuditCompaction(worker_report) => {
+            report.operation_audit_compaction = Some(worker_report?);
         }
     }
     Ok(())

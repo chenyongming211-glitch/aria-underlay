@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::worker::daemon::{
     DriftAuditDaemonConfig, JournalGcDaemonConfig, OperationAlertDaemonConfig,
-    OperationSummaryDaemonConfig, UnderlayWorkerDaemonConfig, WorkerReloadDaemonConfig,
-    WorkerScheduleConfig,
+    OperationAuditDaemonConfig, OperationSummaryDaemonConfig, UnderlayWorkerDaemonConfig,
+    WorkerReloadDaemonConfig, WorkerScheduleConfig,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +94,7 @@ impl WorkerDeploymentPreflight {
         config: &UnderlayWorkerDaemonConfig,
     ) {
         if config.operation_summary.is_none()
+            && config.operation_audit.is_none()
             && config.operation_alert.is_none()
             && config.journal_gc.is_none()
             && config.drift_audit.is_none()
@@ -107,6 +108,9 @@ impl WorkerDeploymentPreflight {
 
         if let Some(operation_summary) = &config.operation_summary {
             self.check_operation_summary(report, operation_summary);
+        }
+        if let Some(operation_audit) = &config.operation_audit {
+            self.check_operation_audit(report, operation_audit);
         }
         if let Some(operation_alert) = &config.operation_alert {
             self.check_operation_alert(report, operation_alert);
@@ -141,6 +145,22 @@ impl WorkerDeploymentPreflight {
             "operation_summary.path.parent",
             true,
         );
+    }
+
+    fn check_operation_audit(
+        &self,
+        report: &mut WorkerDeploymentPreflightReport,
+        config: &OperationAuditDaemonConfig,
+    ) {
+        if let Err(err) = config.retention.validate() {
+            report.error(format!("operation_audit.retention: {err}"));
+        }
+        check_schedule(
+            report,
+            "operation_audit.retention_schedule",
+            config.retention_schedule,
+        );
+        self.check_file_parent(report, &config.path, "operation_audit.path.parent", true);
     }
 
     fn check_operation_alert(

@@ -230,6 +230,37 @@ impl UnderlayEvent {
         failed_action: impl Into<String>,
         error_message: impl Into<String>,
     ) -> Self {
+        Self::audit_write_failed_with_code(
+            request_id,
+            trace_id,
+            failed_action,
+            "OPERATION_SUMMARY_WRITE_FAILED",
+            error_message,
+        )
+    }
+
+    pub fn operation_audit_write_failed(
+        request_id: impl Into<String>,
+        trace_id: impl Into<String>,
+        failed_action: impl Into<String>,
+        error_message: impl Into<String>,
+    ) -> Self {
+        Self::audit_write_failed_with_code(
+            request_id,
+            trace_id,
+            failed_action,
+            "OPERATION_AUDIT_WRITE_FAILED",
+            error_message,
+        )
+    }
+
+    fn audit_write_failed_with_code(
+        request_id: impl Into<String>,
+        trace_id: impl Into<String>,
+        failed_action: impl Into<String>,
+        error_code: impl Into<String>,
+        error_message: impl Into<String>,
+    ) -> Self {
         let mut fields = BTreeMap::new();
         fields.insert("failed_action".into(), failed_action.into());
 
@@ -242,7 +273,7 @@ impl UnderlayEvent {
             phase: None,
             strategy: None,
             result: Some("failed".into()),
-            error_code: Some("OPERATION_SUMMARY_WRITE_FAILED".into()),
+            error_code: Some(error_code.into()),
             error_message: Some(error_message.into()),
             fields,
         }

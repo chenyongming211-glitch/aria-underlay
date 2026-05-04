@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use crate::telemetry::audit::AuditRecord;
+use crate::telemetry::audit::{AuditRecord, OperationAuditStore};
 use crate::telemetry::events::UnderlayEvent;
 use crate::telemetry::events::UnderlayEventKind;
 use crate::telemetry::ops::OperationSummaryStore;
@@ -44,6 +44,7 @@ impl EventSink for InMemoryEventSink {
 pub struct RecordingEventSink {
     inner: Arc<dyn EventSink>,
     operation_summaries: Arc<dyn OperationSummaryStore>,
+    operation_audit: Option<Arc<dyn OperationAuditStore>>,
 }
 
 impl RecordingEventSink {
@@ -54,7 +55,16 @@ impl RecordingEventSink {
         Self {
             inner,
             operation_summaries,
+            operation_audit: None,
         }
+    }
+
+    pub fn with_operation_audit_store(
+        mut self,
+        operation_audit: Arc<dyn OperationAuditStore>,
+    ) -> Self {
+        self.operation_audit = Some(operation_audit);
+        self
     }
 }
 
@@ -69,6 +79,19 @@ impl EventSink for RecordingEventSink {
                     audit.action,
                     format!("{err}"),
                 ));
+            }
+        }
+        if let Some(operation_audit) = &self.operation_audit {
+            if let Err(err) = operation_audit.record_event(&event) {
+                if event.kind != UnderlayEventKind::UnderlayAuditWriteFailed {
+                    let audit = AuditRecord::from_event(&event);
+                    self.inner.emit(UnderlayEvent::operation_audit_write_failed(
+                        event.request_id.clone(),
+                        event.trace_id.clone(),
+                        audit.action,
+                        format!("{err}"),
+                    ));
+                }
             }
         }
         self.inner.emit(event);

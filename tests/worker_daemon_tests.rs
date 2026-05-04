@@ -5,15 +5,15 @@ use std::time::Duration;
 use aria_underlay::model::{DeviceId, InterfaceConfig, VlanConfig};
 use aria_underlay::state::{DeviceShadowState, JsonFileShadowStateStore, ShadowStateStore};
 use aria_underlay::telemetry::{
-    JsonFileOperationAlertSink, JsonFileOperationSummaryStore, OperationSummaryRetentionPolicy,
-    UnderlayEvent,
+    JsonFileOperationAlertSink, JsonFileOperationAuditStore, JsonFileOperationSummaryStore,
+    OperationAuditRetentionPolicy, OperationSummaryRetentionPolicy, UnderlayEvent,
 };
 use aria_underlay::tx::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase};
 use aria_underlay::worker::daemon::{
     DriftAuditDaemonConfig, JournalGcDaemonConfig, OperationAlertDaemonConfig,
-    OperationSummaryDaemonConfig, UnderlayWorkerDaemon, UnderlayWorkerDaemonConfig,
-    WorkerConfigReloadStatus, WorkerReloadCheckpoint, WorkerReloadDaemonConfig,
-    WorkerScheduleConfig,
+    OperationAuditDaemonConfig, OperationSummaryDaemonConfig, UnderlayWorkerDaemon,
+    UnderlayWorkerDaemonConfig, WorkerConfigReloadStatus, WorkerReloadCheckpoint,
+    WorkerReloadDaemonConfig, WorkerScheduleConfig,
 };
 use aria_underlay::worker::gc::RetentionPolicy;
 use tokio::sync::watch;
@@ -26,6 +26,7 @@ fn checked_in_worker_daemon_sample_config_parses() {
     .expect("checked-in worker daemon sample config should parse");
 
     assert!(config.operation_summary.is_some());
+    assert!(config.operation_audit.is_some());
     assert!(config.operation_alert.is_some());
     assert!(config.journal_gc.is_some());
     assert!(config.drift_audit.is_some());
@@ -38,6 +39,7 @@ async fn daemon_config_wires_gc_drift_and_persistent_operation_summaries() {
     let expected_shadow_root = temp.join("expected-shadow");
     let observed_shadow_root = temp.join("observed-shadow");
     let operation_summary_path = temp.join("ops").join("summaries.jsonl");
+    let operation_audit_path = temp.join("ops").join("audit.jsonl");
 
     JsonFileTxJournalStore::new(&journal_root)
         .put(&journal_record("tx-old", TxPhase::Committed, 100))
@@ -54,6 +56,11 @@ async fn daemon_config_wires_gc_drift_and_persistent_operation_summaries() {
         operation_summary: Some(OperationSummaryDaemonConfig {
             path: operation_summary_path.clone(),
             retention: OperationSummaryRetentionPolicy::default(),
+            retention_schedule: WorkerScheduleConfig::default(),
+        }),
+        operation_audit: Some(OperationAuditDaemonConfig {
+            path: operation_audit_path.clone(),
+            retention: OperationAuditRetentionPolicy::default(),
             retention_schedule: WorkerScheduleConfig::default(),
         }),
         operation_alert: None,
@@ -121,6 +128,22 @@ async fn daemon_config_wires_gc_drift_and_persistent_operation_summaries() {
             "journal.gc_completed"
         ]
     );
+    let audit_records = JsonFileOperationAuditStore::new(&operation_audit_path)
+        .list()
+        .expect("operation audit records should be persisted by daemon workers");
+    let mut audit_actions = audit_records
+        .iter()
+        .map(|record| record.action.as_str())
+        .collect::<Vec<_>>();
+    audit_actions.sort();
+    assert_eq!(
+        audit_actions,
+        vec![
+            "drift.audit_completed",
+            "drift.detected",
+            "journal.gc_completed"
+        ]
+    );
 
     fs::remove_dir_all(temp).ok();
 }
@@ -150,6 +173,7 @@ async fn daemon_config_wires_operation_summary_retention_worker() {
                 run_immediately: true,
             },
         }),
+        operation_audit: None,
         operation_alert: None,
         journal_gc: None,
         drift_audit: None,
@@ -179,6 +203,60 @@ async fn daemon_config_wires_operation_summary_retention_worker() {
 }
 
 #[tokio::test]
+async fn daemon_config_wires_operation_audit_retention_worker() {
+    let temp = temp_test_dir("daemon-operation-audit-retention");
+    let operation_audit_path = temp.join("ops").join("audit.jsonl");
+    let store = JsonFileOperationAuditStore::new(&operation_audit_path);
+    for index in 1..=3 {
+        store
+            .record_event(&recovery_event(index))
+            .expect("operation audit should persist before daemon compaction");
+    }
+
+    let config = UnderlayWorkerDaemonConfig {
+        reload: None,
+        operation_summary: None,
+        operation_audit: Some(OperationAuditDaemonConfig {
+            path: operation_audit_path.clone(),
+            retention: OperationAuditRetentionPolicy {
+                max_records: Some(1),
+                max_bytes: None,
+                max_rotated_files: 1,
+            },
+            retention_schedule: WorkerScheduleConfig {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+        }),
+        operation_alert: None,
+        journal_gc: None,
+        drift_audit: None,
+    };
+
+    let report = UnderlayWorkerDaemon::from_config(config)
+        .expect("daemon config should build operation audit retention runtime")
+        .run_until_shutdown(async {})
+        .await
+        .expect("daemon audit retention worker should stop cleanly on shutdown");
+
+    assert_eq!(
+        report
+            .operation_audit_compaction
+            .as_ref()
+            .expect("operation audit compaction report should be present")
+            .runs,
+        1
+    );
+    let records = JsonFileOperationAuditStore::new(&operation_audit_path)
+        .list()
+        .expect("compacted audit records should be readable");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].request_id, "req-3");
+
+    fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
 async fn daemon_config_wires_operation_alert_delivery_worker() {
     let temp = temp_test_dir("daemon-operation-alert-delivery");
     let operation_summary_path = temp.join("ops").join("summaries.jsonl");
@@ -199,6 +277,7 @@ async fn daemon_config_wires_operation_alert_delivery_worker() {
             retention: OperationSummaryRetentionPolicy::default(),
             retention_schedule: WorkerScheduleConfig::default(),
         }),
+        operation_audit: None,
         operation_alert: Some(OperationAlertDaemonConfig {
             path: alert_path.clone(),
             checkpoint_path: checkpoint_path.clone(),
@@ -238,6 +317,7 @@ async fn daemon_config_wires_operation_alert_delivery_worker() {
             retention: OperationSummaryRetentionPolicy::default(),
             retention_schedule: WorkerScheduleConfig::default(),
         }),
+        operation_audit: None,
         operation_alert: Some(OperationAlertDaemonConfig {
             path: alert_path.clone(),
             checkpoint_path: checkpoint_path.clone(),
@@ -520,6 +600,7 @@ fn reloadable_worker_config(
                 run_immediately: false,
             },
         }),
+        operation_audit: None,
         operation_alert: None,
         journal_gc: None,
         drift_audit: None,

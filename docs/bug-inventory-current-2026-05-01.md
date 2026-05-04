@@ -1,89 +1,52 @@
-# Current Bug / Tech Debt Inventory — 2026-05-01
+# 当前缺陷 / 技术债清单 — 2026-05-01
 
-This is the current working inventory after the 2026-04-30 verified bug pass,
-the P2 hardening wave, and the 2026-05-01 architecture hygiene packages.
+## 当前基线
 
-Use this file for new planning. Older inventories remain useful as historical
-review evidence, but their line numbers and "remaining" counts are stale.
+最新有效基线以 `main` 上的 CI 绿色提交为准。当前产品方向已经收敛为内部系统：不做 SSO/OIDC/JWT/JWKS，不做产品 UI，不做外部告警投递，不在仓库内实现 ingress/TLS，不生成安装包。
 
-## Current Baseline
+## 已收敛完成的历史问题
 
-Latest verified main commits:
+以下问题已经通过前序修复包关闭，不应重复作为 open bug：
 
-| Commit | Scope | CI |
+- 事务 committed 与 shadow 写入顺序。
+- 批量恢复 TOCTOU。
+- 部分失败被汇总为成功。
+- journal 错误历史丢失。
+- 孤儿密钥 清理。
+- 适配器客户端 连接 churn。
+- Drifted 生命周期清理。
+- desired baseline 与 observed cache 混用。
+- file-backed journal/shadow 并发和崩溃弱点。
+- Rust 到 Python 的 主机密钥策略 传递。
+- TOFU host-key store。
+- Python placeholder 后端 改为明确 unsupported。
+- Rust 死 渲染器骨架 清理。
+- 轻量 operation 审计 log：append-only JSONL、关键字段、retention/rotation 和写失败可观测性。
+
+## 当前仍需要做
+
+| 区域 | 状态 | 下一步 |
 | --- | --- | --- |
-| `9461c95` | Transaction process chaos coverage package 1 | `25211232450` success |
-| `351b449` | Journal GC worker productionization package | `25211412687` success |
-| `d56a3c9` | Drift audit worker loop package | `25211569832` success |
-| `7934e8d` | Operation summary query surface package | `25211804565` success |
-| `c415bad` | Documentation truth refresh | `25198760941` success |
-| `f6396f2` | Remove Python placeholder module ambiguity | `25198892159` success |
-| `a58907b` | Split Rust service helper boundaries | `25199109107` success |
-| `2fea866` | Split Python NETCONF backend helpers | `25199378631` success |
+| 真实 NETCONF 解析器 | Huawei/H3C 仅 样本验证 | 等真实 XML 或真实交换机后验证，不提前 生产就绪 |
+| 真实 NETCONF 渲染器 | Huawei/H3C 仍是 骨架/快照 验证 | 等真实设备验证后再讨论 生产就绪 |
+| 主机密钥策略 | fingerprint-only pinning 仍未完整实现 | 暂不扩展；保持 失败关闭 |
+| Drift policy | AutoReconcile 明确未实现 | 暂不开发；保持 unsupported |
+| Vendor scope | Cisco/Ruijie 未实现 | 等样本和明确需求 |
+| Alternate 后端s | NAPALM/Netmiko/SSH CLI 未实现 | 等明确 后端 合同和测试需求 |
+| Force unlock | NETCONF kill-session/force-unlock 未实现 | 等设备会话身份和审计需求明确后再设计 |
 
-Current local verification at the time this inventory was created:
+## 明确不做
 
-- Python adapter tests: `232 passed`
-- Focused package / NETCONF tests: `59 passed`
-- `git diff --check`: passed
-- Local Rust toolchain is unavailable in this workspace; Rust compile/test
-  status is verified by GitHub Actions.
+- product 审计 database。
+- 扩展 RBAC 平台。
+- token 创建、轮换、撤销工具。
+- SSO/OIDC/JWT/JWKS。
+- 产品 UI。
+- 外部告警投递。
+- 仓库内 ingress/TLS/client-auth/rate-limit/proxy-header。
+- deb/rpm/tar 安装包或多平台 installer。
 
-## Resolved Since Older Inventories
+## 当前执行计划
 
-These older claims should not be re-opened unless new evidence appears:
-
-- Rust transaction shadow/journal ordering and terminal status handling.
-- Partial apply failure incorrectly aggregating as `SuccessWithWarning`.
-- Batch recovery journal-read / lock TOCTOU.
-- Recovery attempt context being overwritten when entering `InDoubt`.
-- Secret orphan cleanup on registration/bootstrap failure.
-- Adapter client connection churn; `AdapterClientPool` is now used.
-- Drifted lifecycle not clearing after a clean audit.
-- Desired baseline and observed cache being mixed in one shadow meaning.
-- File-backed journal/shadow durability and concurrent same-record writes.
-- `HostKeyPolicy` transport from Rust to Python.
-- TOFU host-key policy behaving as strict known-hosts only.
-- Python placeholder modules for unimplemented NAPALM / Netmiko / diff /
-  rollback / state paths.
-- Rust dead renderer skeletons.
-- Python NETCONF backend helper sprawl in a single 1000+ line file.
-
-## Open P1 Items
-
-| Area | Item | Why it matters | Next action |
-| --- | --- | --- | --- |
-| Transactions | Crash/restart matrix still needs broader process-level chaos coverage | File-backed restart coverage now includes pending recovery, `ForceResolved` restart, successful shadow persistence, terminal `Committed` / `Failed` / `RolledBack` filtering, corrupt journal/shadow fail-closed behavior, `.tmp` residue handling, process children that exit during `Preparing`, `Committing`, `Verifying`, `FinalConfirming`, and `RollingBack`, a multi-device `Committing` recovery record with mixed adapter outcomes, and transient recover transport retry before `InDoubt`. Recovery now writes shadow before terminal `Committed` journal on roll-forward. Remaining gaps are longer multi-attempt reconnect/backoff sequences and real adapter behavior under session churn. | Extend reconnect/backoff coverage if needed; otherwise shift to persistent audit sink or daemon lifecycle integration. |
-| Rust API architecture | `AriaUnderlayService` still needs a thinner facade over time | Apply, recovery, and admin-operation coordinators now own the main orchestration flows. The remaining architecture work is to keep future flows from leaking back into the facade and to split drift audit if it grows. | Keep new transaction/admin logic in the coordinator modules; consider a dedicated drift coordinator if the audit loop expands. |
-| Operations | Audit/metrics still need production audit integration | Force-resolve, drift audit, GC, recovery, and transaction InDoubt events now map into service-queryable operation summaries and metrics counters. A JSONL file-backed `OperationSummaryStore` exists for restart-safe local persistence, with record-count/byte retention, archive rotation, fail-closed corrupt-record handling, daemon-scheduled compaction, `audit.write_failed` observability, service-level result filtering, aggregate overview counts, formal local `aria-underlay-ops` read commands, checked-in daemon config sample, operator runbook, internal JSONL operation alert storage with checkpointed dedupe, RBAC/product-audit enforcement for `force_resolve_transaction`, internal alert lifecycle actions, local and product-API worker config retention/schedule changes, reload-supervised `aria-underlay-worker` config adoption with atomic checkpoint states, local and product-facing worker reload status reads, product status bundle aggregation, `ProductOpsManager` RBAC gates for product-facing summary reads, reload status reads, status bundle reads, product audit export, and worker config changes, `ProductOpsApi` handler-facing request/session facade, framework-neutral `ProductHttpRouter` method/path/status/body JSON contract, `BearerTokenProductSessionExtractor` plus `ProductIdentityVerifier` identity boundary, internal `static_tokens` product API config, local and production-ingress product API config modes, and a local `ProductHttpServer` / `aria-underlay-product-api` HTTP/1.1 listener package with systemd/tmpfiles samples. Product decision: this is an internal system; SSO/OIDC/JWT/JWKS and external webhook/enterprise IM/PagerDuty/email delivery are intentionally out of scope. Remaining work is the real product audit database, internal token lifecycle/rotation tooling, production TLS/ingress implementation, product UI, and real installer packaging. | Keep privileged operation changes behind `AuthorizationPolicy` and `ProductAuditStore`; keep product API behind a production ingress or loopback listener until TLS/client-auth/rate-limit policy is selected. |
-| GC | GC still needs external deployment integration | `run_once`, retention policy, periodic worker entrypoint, event emission, deletion summaries, shared `UnderlayWorkerRuntime`, the `aria-underlay-worker` JSON-configured daemon binary, production-style JSON sample, systemd sample, tmpfiles.d sample, and offline `check-worker-config` preflight now exist. Production still needs real package installation, host user creation, service enablement, persistent audit policy, and site-specific disk quota policy. | Keep deployment samples tested; add real packaging only when target OS/package format is selected. |
-| Drift | Drift auditor still needs external deployment integration | One-shot audit, scheduler-facing summary, event emission, periodic worker entrypoint, shared `UnderlayWorkerRuntime`, the `aria-underlay-worker` JSON-configured daemon binary, internal alert lifecycle triage, production-style JSON sample, systemd sample, tmpfiles.d sample, and offline `check-worker-config` preflight now exist. Production still needs real package installation and system service ownership in the target environment. | Keep AutoReconcile fail-closed until explicitly designed; add real packaging only after target deployment platform is selected. |
-| Real NETCONF parser | Huawei/H3C state parsers are fixture-verified only | Fixture XML proves parser boundaries, not real device namespace and field behavior. | When hardware is available, collect running XML and promote only after validator + tests pass. |
-| Real NETCONF renderer | Huawei/H3C renderers are still skeletons | Snapshot rendering is useful, but real devices may reject the XML. Renderer skeletons now validate profile fields, reject production-ready skeleton markers, keep VLAN/interface namespaces distinct, and have snapshot negative coverage for invalid trunk mode. | Keep production prepare fail-closed; continue adding vendor profile/snapshot tests as samples arrive, then promote only after real-device validation. |
-
-## Open P2 Items
-
-| Area | Item | Why it matters | Next action |
-| --- | --- | --- | --- |
-| Host key policy | Fingerprint-only pinned host key is still unsupported | Rust can carry the policy, but Python ncclient exact pinning support does not match the stored fingerprint shape. | Design exact fingerprint verification or change model semantics; keep fail-closed until then. |
-| Drift policy | `AutoReconcile` remains explicitly unimplemented | This is correct for safety, but the enum exists and operators may expect behavior later. | Keep returning a clear unsupported error; design separately with approval gates. |
-| Vendor scope | Cisco/Ruijie renderer and parser are not implemented | Framework is ready, but no vendor samples/profiles exist. | Wait for samples or explicit profile requirements. |
-| Alternate backends | NAPALM / Netmiko / SSH CLI are not implemented | They are roadmap items, not current paths. | Add real modules only when there is a supported backend contract and tests. |
-| Force unlock | NETCONF force unlock / kill-session is not implemented | Current unsupported result is safer than pretending success, but it is an operations gap. | Design with device/session identity and audit requirements before implementation. |
-| Docs | `docs/device-capability-report.md` still contains TODO placeholders | This is not runtime risk, but it weakens operator documentation. | Fill or remove TODO sections once capability reporting semantics settle. |
-| Test hygiene | Some older low-risk test helpers rely on fragile assumptions | They do not block functionality but make future refactors noisier. | Clean opportunistically during related test work. |
-
-## Current Execution Plan
-
-The next no-real-switch sequence is:
-
-1. Design the product audit backend, including persistence, query shape,
-   integrity guarantees, and operator-facing retention policy.
-2. Design internal token lifecycle and rotation tooling for the existing
-   `static_tokens` identity model.
-3. Select the production ingress implementation for TLS, client authentication,
-   rate limiting, and proxy headers.
-4. Select target deployment packaging format before turning the systemd/tmpfiles
-   samples into an installer.
-5. Revisit real-device parser/renderer only after hardware or captured XML is
-   available.
+1. 没有真实交换机前，不推进 解析器/渲染器 生产化。
+2. 后续只做小范围清理和回归测试加固，不继续扩展产品平台能力。

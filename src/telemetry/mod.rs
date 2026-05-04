@@ -6,8 +6,10 @@ pub mod ops;
 pub mod sink;
 
 pub use audit::{
-    AuditRecord, InMemoryProductAuditStore, JsonFileProductAuditStore, NoopProductAuditStore,
-    ProductAuditRecord, ProductAuditStore,
+    AuditRecord, InMemoryProductAuditStore, JsonFileOperationAuditStore,
+    JsonFileProductAuditStore, NoopOperationAuditStore, NoopProductAuditStore,
+    OperationAuditCompactionReport, OperationAuditRecord, OperationAuditRetentionPolicy,
+    OperationAuditStore, ProductAuditRecord, ProductAuditStore,
 };
 pub use alerts::{
     InMemoryOperationAlertCheckpointStore, InMemoryOperationAlertLifecycleStore,

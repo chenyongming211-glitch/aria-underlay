@@ -16,6 +16,18 @@
       "run_immediately": true
     }
   },
+  "operation_audit": {
+    "path": "var/aria-underlay/ops/operation-audit.jsonl",
+    "retention": {
+      "max_records": 50000,
+      "max_bytes": 52428800,
+      "max_rotated_files": 5
+    },
+    "retention_schedule": {
+      "interval_secs": 3600,
+      "run_immediately": true
+    }
+  },
   "operation_alert": {
     "path": "var/aria-underlay/ops/operation-alerts.jsonl",
     "checkpoint_path": "var/aria-underlay/ops/operation-alert-checkpoint.json",

@@ -485,6 +485,7 @@ fn worker_config(temp: &std::path::Path) -> UnderlayWorkerDaemonConfig {
                 run_immediately: true,
             },
         }),
+        operation_audit: None,
         operation_alert: Some(OperationAlertDaemonConfig {
             path: temp.join("ops").join("alerts.jsonl"),
             checkpoint_path: temp.join("ops").join("alert-checkpoint.json"),
@@ -517,6 +518,10 @@ fn create_worker_dirs(config: &UnderlayWorkerDaemonConfig) {
     if let Some(operation_summary) = &config.operation_summary {
         fs::create_dir_all(operation_summary.path.parent().expect("summary parent"))
             .expect("summary parent should be created");
+    }
+    if let Some(operation_audit) = &config.operation_audit {
+        fs::create_dir_all(operation_audit.path.parent().expect("audit parent"))
+            .expect("audit parent should be created");
     }
     if let Some(operation_alert) = &config.operation_alert {
         fs::create_dir_all(operation_alert.path.parent().expect("alert parent"))

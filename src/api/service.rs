@@ -41,7 +41,8 @@ use crate::state::{
 };
 use crate::telemetry::{
     EventSink, InMemoryOperationSummaryStore, NoopEventSink, NoopProductAuditStore,
-    ProductAuditStore, RecordingEventSink, OperationSummaryStore, UnderlayEvent,
+    OperationAuditStore, OperationSummaryStore, ProductAuditStore, RecordingEventSink,
+    UnderlayEvent,
 };
 use crate::tx::recovery::RecoveryReport;
 use crate::tx::{
@@ -60,6 +61,7 @@ pub struct AriaUnderlayService {
     observed_store: Arc<dyn ShadowStateStore>,
     event_sink: Arc<dyn EventSink>,
     operation_summary_store: Arc<dyn OperationSummaryStore>,
+    operation_audit_store: Option<Arc<dyn OperationAuditStore>>,
     authorization_policy: Arc<dyn AuthorizationPolicy>,
     product_audit_store: Arc<dyn ProductAuditStore>,
     adapter_pool: AdapterClientPool,
@@ -77,6 +79,7 @@ impl AriaUnderlayService {
             observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
             operation_summary_store: Arc::new(InMemoryOperationSummaryStore::default()),
+            operation_audit_store: None,
             authorization_policy: Arc::new(PermitAllAuthorizationPolicy),
             product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
@@ -97,6 +100,7 @@ impl AriaUnderlayService {
             observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
             operation_summary_store: Arc::new(InMemoryOperationSummaryStore::default()),
+            operation_audit_store: None,
             authorization_policy: Arc::new(PermitAllAuthorizationPolicy),
             product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
@@ -118,6 +122,7 @@ impl AriaUnderlayService {
             observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
             operation_summary_store: Arc::new(InMemoryOperationSummaryStore::default()),
+            operation_audit_store: None,
             authorization_policy: Arc::new(PermitAllAuthorizationPolicy),
             product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
@@ -141,6 +146,7 @@ impl AriaUnderlayService {
             observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
             operation_summary_store: Arc::new(InMemoryOperationSummaryStore::default()),
+            operation_audit_store: None,
             authorization_policy: Arc::new(PermitAllAuthorizationPolicy),
             product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
@@ -165,6 +171,7 @@ impl AriaUnderlayService {
             observed_store: Arc::new(InMemoryShadowStateStore::default()),
             event_sink: Arc::new(NoopEventSink),
             operation_summary_store: Arc::new(InMemoryOperationSummaryStore::default()),
+            operation_audit_store: None,
             authorization_policy: Arc::new(PermitAllAuthorizationPolicy),
             product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
@@ -186,6 +193,14 @@ impl AriaUnderlayService {
         operation_summary_store: Arc<dyn OperationSummaryStore>,
     ) -> Self {
         self.operation_summary_store = operation_summary_store;
+        self
+    }
+
+    pub fn with_operation_audit_store(
+        mut self,
+        operation_audit_store: Arc<dyn OperationAuditStore>,
+    ) -> Self {
+        self.operation_audit_store = Some(operation_audit_store);
         self
     }
 
@@ -211,10 +226,16 @@ impl AriaUnderlayService {
     }
 
     fn operation_event_sink(&self) -> Arc<dyn EventSink> {
-        Arc::new(RecordingEventSink::new(
+        let sink = RecordingEventSink::new(
             self.event_sink.clone(),
             self.operation_summary_store.clone(),
-        ))
+        );
+        match &self.operation_audit_store {
+            Some(operation_audit_store) => {
+                Arc::new(sink.with_operation_audit_store(operation_audit_store.clone()))
+            }
+            None => Arc::new(sink),
+        }
     }
 
     fn emit_event(&self, event: UnderlayEvent) {

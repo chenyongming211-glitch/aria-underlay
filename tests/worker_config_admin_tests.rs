@@ -227,6 +227,7 @@ fn worker_config(temp: &std::path::Path) -> UnderlayWorkerDaemonConfig {
                 run_immediately: true,
             },
         }),
+        operation_audit: None,
         operation_alert: Some(OperationAlertDaemonConfig {
             path: temp.join("ops").join("alerts.jsonl"),
             checkpoint_path: temp.join("ops").join("alert-checkpoint.json"),

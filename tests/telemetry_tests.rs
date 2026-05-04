@@ -11,7 +11,8 @@ use aria_underlay::proto::adapter;
 use aria_underlay::state::drift::{DriftFinding, DriftReport, DriftType};
 use aria_underlay::telemetry::{
     AuditRecord, EventSink, InMemoryEventSink, InMemoryOperationSummaryStore,
-    JsonFileOperationSummaryStore, MetricName, Metrics, OperationSummary,
+    JsonFileOperationAuditStore, JsonFileOperationSummaryStore, MetricName, Metrics,
+    OperationAuditRecord, OperationAuditRetentionPolicy, OperationAuditStore, OperationSummary,
     OperationSummaryRetentionPolicy, OperationSummaryStore, RecordingEventSink, UnderlayEvent,
     UnderlayEventKind,
 };
@@ -105,6 +106,37 @@ fn audit_record_maps_force_resolved_transaction_event() {
     assert_eq!(record.action, "transaction.force_resolved");
     assert_eq!(record.result, "force_resolved");
     assert_eq!(record.tx_id.as_deref(), Some("tx-force"));
+}
+
+#[test]
+fn operation_audit_record_preserves_event_context_and_operator_fields() {
+    let event = UnderlayEvent::transaction_force_resolved(
+        "req-force",
+        "trace-force",
+        "tx-force",
+        TxPhase::InDoubt,
+        &[DeviceId("leaf-a".into()), DeviceId("leaf-b".into())],
+        "netops-a",
+        "validated device state out of band",
+    );
+
+    let record = OperationAuditRecord::from_event(&event);
+
+    assert_eq!(record.request_id, "req-force");
+    assert_eq!(record.trace_id, "trace-force");
+    assert_eq!(record.tx_id.as_deref(), Some("tx-force"));
+    assert_eq!(record.action, "transaction.force_resolved");
+    assert_eq!(record.result, "force_resolved");
+    assert_eq!(record.operator_id.as_deref(), Some("netops-a"));
+    assert_eq!(
+        record.reason.as_deref(),
+        Some("validated device state out of band")
+    );
+    assert_eq!(
+        record.fields.get("previous_phase").map(String::as_str),
+        Some("InDoubt")
+    );
+    assert!(record.appended_at_unix_secs > 0);
 }
 
 #[test]
@@ -539,6 +571,75 @@ fn recording_event_sink_emits_audit_write_failed_when_summary_persistence_fails(
 }
 
 #[test]
+fn recording_event_sink_persists_operation_audit_records() {
+    let inner = Arc::new(InMemoryEventSink::default());
+    let summary_store = Arc::new(InMemoryOperationSummaryStore::default());
+    let audit_path = temp_operation_audit_path("recording-sink-persists");
+    let audit_store = Arc::new(JsonFileOperationAuditStore::new(&audit_path));
+    let sink = RecordingEventSink::new(inner.clone(), summary_store)
+        .with_operation_audit_store(audit_store.clone());
+    let event = UnderlayEvent::transaction_result(
+        "req-committed",
+        "trace-committed",
+        "tx-committed",
+        Some(DeviceId("leaf-a".into())),
+        TxPhase::Committed,
+        Some(TransactionStrategy::ConfirmedCommit),
+        "success",
+    );
+
+    sink.emit(event.clone());
+
+    assert_eq!(inner.events(), vec![event]);
+    let records = audit_store
+        .list()
+        .expect("operation audit records should be readable");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].action, "transaction.completed");
+    assert_eq!(records[0].result, "success");
+    assert_eq!(records[0].tx_id.as_deref(), Some("tx-committed"));
+    assert_eq!(
+        records[0].device_id.as_ref().map(|device| device.0.as_str()),
+        Some("leaf-a")
+    );
+
+    remove_operation_audit_path(&audit_path);
+}
+
+#[test]
+fn recording_event_sink_emits_audit_write_failed_when_operation_audit_persistence_fails() {
+    let inner = Arc::new(InMemoryEventSink::default());
+    let summary_store = Arc::new(InMemoryOperationSummaryStore::default());
+    let sink = RecordingEventSink::new(inner.clone(), summary_store)
+        .with_operation_audit_store(Arc::new(FailingOperationAuditStore));
+    let event = recovery_event(1);
+
+    sink.emit(event.clone());
+
+    let events = inner.events();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].kind, UnderlayEventKind::UnderlayAuditWriteFailed);
+    assert_eq!(events[0].request_id, "req-1");
+    assert_eq!(events[0].trace_id, "trace-1");
+    assert_eq!(
+        events[0].error_code.as_deref(),
+        Some("OPERATION_AUDIT_WRITE_FAILED")
+    );
+    assert_eq!(
+        events[0].fields.get("failed_action").map(String::as_str),
+        Some("recovery.completed")
+    );
+    assert!(
+        events[0]
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("forced operation audit failure")
+    );
+    assert_eq!(events[1], event);
+}
+
+#[test]
 fn json_file_operation_summary_store_persists_operator_view_across_restarts() {
     let path = temp_operation_summary_path("persist-restart");
     let store = JsonFileOperationSummaryStore::new(&path);
@@ -608,6 +709,70 @@ fn json_file_operation_summary_store_persists_operator_view_across_restarts() {
 }
 
 #[test]
+fn json_file_operation_audit_store_persists_records_across_restarts() {
+    let path = temp_operation_audit_path("persist-restart");
+    let store = JsonFileOperationAuditStore::new(&path);
+    let committed = UnderlayEvent::transaction_result(
+        "req-committed",
+        "trace-committed",
+        "tx-committed",
+        Some(DeviceId("leaf-a".into())),
+        TxPhase::Committed,
+        Some(TransactionStrategy::ConfirmedCommit),
+        "success",
+    );
+    let forced = UnderlayEvent::transaction_force_resolved(
+        "req-force",
+        "trace-force",
+        "tx-force",
+        TxPhase::InDoubt,
+        &[DeviceId("leaf-a".into())],
+        "netops-a",
+        "manual check passed",
+    );
+
+    store
+        .record_event(&committed)
+        .expect("committed audit record should persist");
+    store
+        .record_event(&forced)
+        .expect("force-resolved audit record should persist");
+
+    let restarted = JsonFileOperationAuditStore::new(&path);
+    let records = restarted
+        .list()
+        .expect("restarted operation audit store should list records");
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].action, "transaction.completed");
+    assert_eq!(records[0].result, "success");
+    assert_eq!(records[1].action, "transaction.force_resolved");
+    assert_eq!(records[1].operator_id.as_deref(), Some("netops-a"));
+    assert_eq!(records[1].reason.as_deref(), Some("manual check passed"));
+
+    remove_operation_audit_path(&path);
+}
+
+#[test]
+fn json_file_operation_audit_store_fails_closed_on_corrupt_record() {
+    let path = temp_operation_audit_path("corrupt-record");
+    fs::create_dir_all(path.parent().expect("audit path should have parent"))
+        .expect("audit parent should be created");
+    fs::write(&path, "{not-json}\n").expect("corrupt audit record should be written");
+
+    let err = JsonFileOperationAuditStore::new(&path)
+        .list()
+        .expect_err("corrupt operation audit record should fail closed");
+    let message = format!("{err}");
+
+    assert!(
+        message.contains("operation audit") && message.contains("line 1"),
+        "unexpected corrupt audit error: {message}"
+    );
+
+    remove_operation_audit_path(&path);
+}
+
+#[test]
 fn json_file_operation_summary_store_fails_closed_on_corrupt_record() {
     let path = temp_operation_summary_path("corrupt-record");
     fs::create_dir_all(path.parent().expect("summary path should have parent"))
@@ -665,6 +830,43 @@ fn json_file_operation_summary_store_compacts_to_newest_records_and_rotates_arch
 }
 
 #[test]
+fn json_file_operation_audit_store_compacts_to_newest_records_and_rotates_archive() {
+    let path = temp_operation_audit_path("compact-records");
+    let store = JsonFileOperationAuditStore::new(&path);
+    for index in 1..=3 {
+        store
+            .record_event(&recovery_event(index))
+            .expect("operation audit should persist before compaction");
+    }
+
+    let report = store
+        .compact(OperationAuditRetentionPolicy {
+            max_records: Some(2),
+            max_bytes: None,
+            max_rotated_files: 2,
+        })
+        .expect("operation audit should compact");
+
+    assert!(report.compacted);
+    assert_eq!(report.records_before, 3);
+    assert_eq!(report.records_after, 2);
+    assert_eq!(report.records_dropped, 1);
+    assert_eq!(report.rotated_files, 1);
+
+    let records = store.list().expect("compacted audit records should list");
+    assert_eq!(audit_request_ids(&records), vec!["req-2", "req-3"]);
+
+    let archive_payload =
+        fs::read_to_string(operation_audit_archive_path(&path, 1))
+            .expect("pre-compaction audit JSONL should be archived");
+    assert!(archive_payload.contains("req-1"));
+    assert!(archive_payload.contains("req-2"));
+    assert!(archive_payload.contains("req-3"));
+
+    remove_operation_audit_path(&path);
+}
+
+#[test]
 fn json_file_operation_summary_store_compacts_to_max_bytes_without_partial_lines() {
     let path = temp_operation_summary_path("compact-bytes");
     let store = JsonFileOperationSummaryStore::new(&path);
@@ -700,6 +902,41 @@ fn json_file_operation_summary_store_compacts_to_max_bytes_without_partial_lines
 }
 
 #[test]
+fn json_file_operation_audit_store_compacts_to_max_bytes_without_partial_lines() {
+    let path = temp_operation_audit_path("compact-bytes");
+    let store = JsonFileOperationAuditStore::new(&path);
+    let events = (1..=4).map(padded_recovery_event).collect::<Vec<_>>();
+    for event in &events {
+        store
+            .record_event(event)
+            .expect("operation audit should persist before byte compaction");
+    }
+    let max_bytes = events[2..]
+        .iter()
+        .map(operation_audit_jsonl_len)
+        .sum::<usize>() as u64;
+
+    let report = store
+        .compact(OperationAuditRetentionPolicy {
+            max_records: None,
+            max_bytes: Some(max_bytes),
+            max_rotated_files: 0,
+        })
+        .expect("operation audit should compact by byte cap");
+
+    assert!(report.compacted);
+    assert!(report.bytes_after <= max_bytes);
+    assert_eq!(report.records_after, 2);
+    let payload = fs::read_to_string(&path).expect("compacted audit JSONL should be readable");
+    assert!(payload.lines().all(|line| !line.trim().is_empty()));
+
+    let records = store.list().expect("byte-compacted audit records should list");
+    assert_eq!(audit_request_ids(&records), vec!["req-3", "req-4"]);
+
+    remove_operation_audit_path(&path);
+}
+
+#[test]
 fn json_file_operation_summary_compaction_fails_closed_on_corrupt_record() {
     let path = temp_operation_summary_path("compact-corrupt-record");
     fs::create_dir_all(path.parent().expect("summary path should have parent"))
@@ -731,6 +968,38 @@ fn json_file_operation_summary_compaction_fails_closed_on_corrupt_record() {
     remove_operation_summary_path(&path);
 }
 
+#[test]
+fn json_file_operation_audit_compaction_fails_closed_on_corrupt_record() {
+    let path = temp_operation_audit_path("compact-corrupt-record");
+    fs::create_dir_all(path.parent().expect("audit path should have parent"))
+        .expect("audit parent should be created");
+    fs::write(&path, "{not-json}\n").expect("corrupt audit record should be written");
+
+    let err = JsonFileOperationAuditStore::new(&path)
+        .compact(OperationAuditRetentionPolicy {
+            max_records: Some(1),
+            max_bytes: None,
+            max_rotated_files: 1,
+        })
+        .expect_err("corrupt operation audit compaction should fail closed");
+    let message = format!("{err}");
+
+    assert!(
+        message.contains("operation audit") && message.contains("line 1"),
+        "unexpected corrupt audit compaction error: {message}"
+    );
+    assert_eq!(
+        fs::read_to_string(&path).expect("corrupt active audit file should remain"),
+        "{not-json}\n"
+    );
+    assert!(
+        !operation_audit_archive_path(&path, 1).exists(),
+        "corrupt audit compaction should not rotate unreadable input"
+    );
+
+    remove_operation_audit_path(&path);
+}
+
 #[tokio::test]
 async fn service_can_record_operation_summaries_to_persistent_store() {
     let adapter_endpoint = start_drift_adapter().await;
@@ -756,6 +1025,40 @@ async fn service_can_record_operation_summaries_to_persistent_store() {
     assert_eq!(summaries[1].action, "drift.audit_completed");
 
     remove_operation_summary_path(&path);
+}
+
+#[tokio::test]
+async fn service_can_record_operation_audit_to_persistent_store() {
+    let adapter_endpoint = start_drift_adapter().await;
+    let inventory = telemetry_inventory(adapter_endpoint);
+    let path = temp_operation_audit_path("service-persistent-store");
+    let audit_store = Arc::new(JsonFileOperationAuditStore::new(&path));
+    let service = AriaUnderlayService::new(inventory)
+        .with_operation_audit_store(audit_store.clone());
+
+    service
+        .run_drift_audit(DriftAuditRequest {
+            device_ids: vec![DeviceId("leaf-a".into())],
+        })
+        .await
+        .expect("drift audit should complete");
+
+    let restarted = JsonFileOperationAuditStore::new(&path);
+    let records = restarted
+        .list()
+        .expect("persistent audit should survive store recreation");
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].action, "drift.detected");
+    assert_eq!(records[1].action, "drift.audit_completed");
+    assert_eq!(
+        records[1]
+            .fields
+            .get("drifted_device_count")
+            .map(String::as_str),
+        Some("1")
+    );
+
+    remove_operation_audit_path(&path);
 }
 
 fn metric_value(samples: &[aria_underlay::telemetry::MetricSample], name: MetricName) -> f64 {
@@ -809,7 +1112,22 @@ fn temp_operation_summary_path(name: &str) -> std::path::PathBuf {
         .join("summaries.jsonl")
 }
 
+fn temp_operation_audit_path(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir()
+        .join(format!(
+            "aria-underlay-operation-audit-{name}-{}",
+            uuid::Uuid::new_v4()
+        ))
+        .join("audit.jsonl")
+}
+
 fn remove_operation_summary_path(path: &std::path::Path) {
+    if let Some(parent) = path.parent() {
+        fs::remove_dir_all(parent).ok();
+    }
+}
+
+fn remove_operation_audit_path(path: &std::path::Path) {
     if let Some(parent) = path.parent() {
         fs::remove_dir_all(parent).ok();
     }
@@ -844,10 +1162,25 @@ fn summary_request_ids(summaries: &[OperationSummary]) -> Vec<&str> {
         .collect()
 }
 
+fn audit_request_ids(records: &[OperationAuditRecord]) -> Vec<&str> {
+    records
+        .iter()
+        .map(|record| record.request_id.as_str())
+        .collect()
+}
+
 fn operation_summary_jsonl_len(event: &UnderlayEvent) -> usize {
     let summary = OperationSummary::from_event(event).expect("event should map to summary");
     serde_json::to_vec(&summary)
         .expect("summary should serialize")
+        .len()
+        + 1
+}
+
+fn operation_audit_jsonl_len(event: &UnderlayEvent) -> usize {
+    let record = OperationAuditRecord::from_event(event);
+    serde_json::to_vec(&record)
+        .expect("audit record should serialize")
         .len()
         + 1
 }
@@ -857,6 +1190,14 @@ fn operation_summary_archive_path(path: &std::path::Path, generation: usize) -> 
         .file_name()
         .and_then(|name| name.to_str())
         .expect("summary path should have file name");
+    path.with_file_name(format!("{file_name}.{generation}"))
+}
+
+fn operation_audit_archive_path(path: &std::path::Path, generation: usize) -> std::path::PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("audit path should have file name");
     path.with_file_name(format!("{file_name}.{generation}"))
 }
 
@@ -871,6 +1212,21 @@ impl OperationSummaryStore for FailingOperationSummaryStore {
     }
 
     fn list(&self) -> UnderlayResult<Vec<OperationSummary>> {
+        Ok(Vec::new())
+    }
+}
+
+#[derive(Debug)]
+struct FailingOperationAuditStore;
+
+impl OperationAuditStore for FailingOperationAuditStore {
+    fn record_event(&self, _event: &UnderlayEvent) -> UnderlayResult<()> {
+        Err(UnderlayError::Internal(
+            "forced operation audit failure".into(),
+        ))
+    }
+
+    fn list(&self) -> UnderlayResult<Vec<OperationAuditRecord>> {
         Ok(Vec::new())
     }
 }
