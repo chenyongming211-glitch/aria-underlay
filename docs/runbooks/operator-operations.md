@@ -62,7 +62,9 @@ Token 在 `product-api.local.json` 或 `product-api.production.json` 的 `static
 
 ## 工作进程部署样例
 
-仓库提供 systemd、tmpfiles 和 JSON 配置样例，但不生成 deb/rpm/tar 安装包。部署方负责用户创建、二进制放置、服务启用和目录权限；样例中的运行日志统一落到 `/var/log/aria/aria-underlay.log`。
+仓库提供 systemd、tmpfiles、logrotate 和 JSON 配置样例，但不生成 deb/rpm/tar 安装包。部署方负责用户创建、二进制放置、服务启用和目录权限；样例中的运行日志统一落到 `/var/log/aria/aria-underlay.log`。
+
+`docs/examples/logrotate.d/aria-underlay` 是运行日志轮转样例：默认每天轮转，保留 30 份，跳过空文件，使用 `copytruncate` 兼容当前 systemd `append:` 写法，避免日志文件无限增长。
 
 ## 告警处理
 

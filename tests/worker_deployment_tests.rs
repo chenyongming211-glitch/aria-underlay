@@ -58,6 +58,17 @@ fn checked_in_worker_deployment_samples_are_consistent() {
     assert!(tmpfiles.contains("/var/lib/aria-underlay/shadow/observed"));
     assert!(tmpfiles.contains("d /var/log/aria "));
     assert!(tmpfiles.contains("f /var/log/aria/aria-underlay.log "));
+
+    let logrotate = fs::read_to_string("docs/examples/logrotate.d/aria-underlay")
+        .expect("checked-in logrotate sample should exist");
+    assert!(logrotate.contains("/var/log/aria/aria-underlay.log"));
+    assert!(logrotate.contains("daily"));
+    assert!(logrotate.contains("rotate 30"));
+    assert!(logrotate.contains("missingok"));
+    assert!(logrotate.contains("notifempty"));
+    assert!(logrotate.contains("copytruncate"));
+    assert!(logrotate.contains("create 0640 aria-underlay aria-underlay"));
+    assert!(logrotate.contains("su aria-underlay aria-underlay"));
 }
 
 #[test]

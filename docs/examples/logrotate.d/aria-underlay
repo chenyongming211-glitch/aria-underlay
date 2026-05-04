@@ -1,0 +1,11 @@
+/var/log/aria/aria-underlay.log {
+    daily
+    rotate 30
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    create 0640 aria-underlay aria-underlay
+    su aria-underlay aria-underlay
+}
