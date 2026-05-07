@@ -206,9 +206,9 @@
 ### 批次 B：active-passive HA 最小闭环
 
 1. 启动期 active lease / lock，防止两个 Core 同时 active。（已实现到工作区，待 CI）
-2. 明确 journal/shadow/artifact 的共享或接管路径。（仍需部署 runbook）
+2. 明确 journal/shadow/artifact 的共享或接管路径。（已补 runbook，待 CI）
 3. 新 active 启动后先跑 `recover_pending_transactions`，再接受新 apply。（已实现到工作区，待 CI）
-4. 文档化 `EndpointLockTable` 只保证进程内互斥。（仍需补充部署说明）
+4. 文档化 `EndpointLockTable` 只保证进程内互斥。（已补 runbook，待 CI）
 5. 若 adapter 跨主机，补 TLS/mTLS 或明确要求外部安全隧道。（未实现，当前建议 loopback/sidecar）
 
 ### 批次 C：运维可见性和测试可信度
@@ -238,6 +238,7 @@
 ### 仍待后续批次
 
 - active-passive HA 最小代码边界已加入工作区：`ActiveLeaseGuard` 使用共享 lease 文件和 heartbeat 防双 active，`AriaUnderlayService::activate_active_passive()` 会先拿 lease、再执行 `recover_pending_transactions`，之后才返回 active wrapper。该项待 GitHub Actions 验证。
+- active-passive HA 部署手册已加入 `docs/runbooks/active-passive-ha.md`，覆盖共享 journal/shadow/artifact 路径、启动顺序、failover 顺序和 `EndpointLockTable` 进程内边界。该项待 GitHub Actions 验证。
 - `EndpointLockTable` 仍只保证进程内互斥；跨节点互斥依赖 active-passive lease/fencing，不支持 active-active。
 - Python adapter gRPC TLS/mTLS 尚未实现；跨主机部署仍需外部隧道/sidecar 或后续 TLS 配置。
 - Worker runtime 单 worker 失败隔离、GC 单文件错误隔离、drift auditor 单设备错误隔离尚未实现。
