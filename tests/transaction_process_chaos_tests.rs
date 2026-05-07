@@ -861,6 +861,7 @@ fn apply_request_with_vlan(vlan_id: u16) -> ApplyDomainIntentRequest {
             dry_run: false,
             allow_degraded_atomicity: false,
             drift_policy: DriftPolicy::ReportOnly,
+            ..Default::default()
         },
     }
 }

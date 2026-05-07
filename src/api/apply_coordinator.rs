@@ -7,6 +7,7 @@ use crate::api::apply::{
     degraded_strategy_warnings, device_error_result, failed_apply_phase, journal_error_fields,
 };
 use crate::api::drift_ops::drift_policy_error;
+use crate::api::request::ApplyReconcileMode;
 use crate::api::response::{ApplyIntentResponse, ApplyStatus, DeviceApplyResult};
 use crate::device::{DeviceInfo, DeviceInventory, DeviceLifecycleState};
 use crate::engine::dry_run::{build_dry_run_plan, DryRunPlan};
@@ -64,8 +65,11 @@ impl ApplyCoordinator {
     pub(crate) async fn dry_run_desired_states(
         &self,
         desired_states: &[DeviceDesiredState],
+        reconcile_mode: ApplyReconcileMode,
     ) -> UnderlayResult<DryRunPlan> {
-        let current_states = self.fetch_current_states(desired_states).await?;
+        let current_states = self
+            .fetch_current_states(desired_states, reconcile_mode)
+            .await?;
         build_dry_run_plan(desired_states, &current_states)
     }
 
@@ -76,6 +80,7 @@ impl ApplyCoordinator {
         desired_states: Vec<DeviceDesiredState>,
         allow_degraded_atomicity: bool,
         drift_policy: DriftPolicy,
+        reconcile_mode: ApplyReconcileMode,
     ) -> UnderlayResult<ApplyIntentResponse> {
         let mut device_results = Vec::with_capacity(desired_states.len());
 
@@ -87,6 +92,7 @@ impl ApplyCoordinator {
                     desired,
                     allow_degraded_atomicity,
                     drift_policy,
+                    reconcile_mode,
                 )
                 .await,
             );
@@ -152,16 +158,21 @@ impl ApplyCoordinator {
     async fn fetch_current_states(
         &self,
         desired_states: &[DeviceDesiredState],
+        reconcile_mode: ApplyReconcileMode,
     ) -> UnderlayResult<Vec<DeviceShadowState>> {
         let mut current_states = Vec::with_capacity(desired_states.len());
 
         for desired in desired_states {
             let managed = self.inventory.get(&desired.device_id)?;
             let mut client = self.adapter_pool.client(&managed.info.adapter_endpoint)?;
-            // Preflight diff needs an authoritative current view. If we scope this
-            // only to desired objects, absent desired resources cannot be detected
-            // as deletes. Post-commit verify is scoped by ChangeSet below.
-            let current = client.get_current_state(&managed.info).await?;
+            let current = match reconcile_mode {
+                ApplyReconcileMode::MergeUpsert => {
+                    client
+                        .get_current_state_for_desired(&managed.info, desired)
+                        .await?
+                }
+                ApplyReconcileMode::FullReplace => client.get_current_state(&managed.info).await?,
+            };
             self.observed_store.put(current.clone())?;
             current_states.push(current);
         }
@@ -191,6 +202,7 @@ impl ApplyCoordinator {
         desired: &DeviceDesiredState,
         allow_degraded_atomicity: bool,
         drift_policy: DriftPolicy,
+        reconcile_mode: ApplyReconcileMode,
     ) -> DeviceApplyResult {
         let _endpoint_guard = match self
             .endpoint_locks
@@ -214,7 +226,7 @@ impl ApplyCoordinator {
         }
 
         let plan = match self
-            .dry_run_desired_states(std::slice::from_ref(desired))
+            .dry_run_desired_states(std::slice::from_ref(desired), reconcile_mode)
             .await
         {
             Ok(plan) => plan,

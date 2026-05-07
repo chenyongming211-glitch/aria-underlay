@@ -25,7 +25,33 @@ pub struct ApplyOptions {
     pub dry_run: bool,
     pub allow_degraded_atomicity: bool,
     #[serde(default)]
+    pub reconcile_mode: ApplyReconcileMode,
+    #[serde(default)]
     pub drift_policy: DriftPolicy,
+}
+
+impl Default for ApplyOptions {
+    fn default() -> Self {
+        Self {
+            dry_run: false,
+            allow_degraded_atomicity: false,
+            reconcile_mode: ApplyReconcileMode::default(),
+            drift_policy: DriftPolicy::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplyReconcileMode {
+    MergeUpsert,
+    FullReplace,
+}
+
+impl Default for ApplyReconcileMode {
+    fn default() -> Self {
+        Self::MergeUpsert
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -328,6 +328,7 @@ impl AriaUnderlayService {
                 desired_states,
                 request.options.allow_degraded_atomicity,
                 request.options.drift_policy,
+                request.options.reconcile_mode,
             )
             .await
     }
@@ -339,7 +340,7 @@ impl AriaUnderlayService {
         let desired_states = plan_underlay_domain(&request.intent)?;
         let plan = self
             .apply_coordinator()
-            .dry_run_desired_states(&desired_states)
+            .dry_run_desired_states(&desired_states, request.options.reconcile_mode)
             .await?;
         Ok(DryRunResponse {
             device_results: device_results_from_plan(&plan),
@@ -458,6 +459,7 @@ impl UnderlayService for AriaUnderlayService {
                 desired_states,
                 request.options.allow_degraded_atomicity,
                 request.options.drift_policy,
+                request.options.reconcile_mode,
             )
             .await
     }
@@ -467,7 +469,7 @@ impl UnderlayService for AriaUnderlayService {
         let desired_states = plan_switch_pair(&request.intent);
         let plan = self
             .apply_coordinator()
-            .dry_run_desired_states(&desired_states)
+            .dry_run_desired_states(&desired_states, request.options.reconcile_mode)
             .await?;
         Ok(DryRunResponse {
             device_results: device_results_from_plan(&plan),

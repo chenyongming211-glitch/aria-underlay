@@ -15,6 +15,7 @@ use aria_underlay::intent::{
 };
 use aria_underlay::model::{AdminState, DeviceId, DeviceRole, PortMode, Vendor};
 use aria_underlay::planner::domain_plan::plan_underlay_domain;
+use aria_underlay::proto::adapter;
 use aria_underlay::state::drift::DriftPolicy;
 use aria_underlay::state::{
     DeviceShadowState, InMemoryShadowStateStore, JsonFileShadowStateStore, ShadowStateStore,
@@ -283,6 +284,69 @@ async fn confirmed_commit_timeout_is_taken_from_service_configuration() {
 }
 
 #[tokio::test]
+async fn preflight_fetches_only_desired_scope_to_avoid_unrelated_delete_ops() {
+    let current_state_scopes = Arc::new(Mutex::new(Vec::new()));
+    let endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_state_with_unrelated_objects()),
+        current_state_scopes: Some(current_state_scopes.clone()),
+        ..Default::default()
+    })
+    .await;
+    let inventory = inventory_with_endpoint_at(
+        "stack-mgmt",
+        DeviceLifecycleState::Ready,
+        endpoint,
+    );
+    let service = AriaUnderlayService::new(inventory);
+    let request = apply_request_with_vlan(200, DriftPolicy::ReportOnly);
+
+    let dry_run = service
+        .dry_run_domain(request.clone())
+        .await
+        .expect("dry-run should succeed");
+
+    assert!(
+        dry_run.change_sets[0]
+            .ops
+            .iter()
+            .all(|op| !matches!(
+                op,
+                aria_underlay::engine::diff::ChangeOp::DeleteVlan { .. }
+                    | aria_underlay::engine::diff::ChangeOp::DeleteInterfaceConfig { .. }
+            )),
+        "merge-upsert preflight should not plan deletes for unrelated observed state: {:?}",
+        dry_run.change_sets
+    );
+    let response = service
+        .apply_domain_intent(request)
+        .await
+        .expect("apply should succeed");
+    assert_eq!(response.status, ApplyStatus::Success);
+
+    let scopes = current_state_scopes
+        .lock()
+        .expect("current state scope recorder should not be poisoned");
+    let scope_summaries = scopes
+        .iter()
+        .map(|scope| {
+            format!(
+                "full={} vlans={:?} interfaces={:?}",
+                scope.full, scope.vlan_ids, scope.interface_names
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        scopes.iter().any(|scope| {
+            !scope.full
+                && scope.vlan_ids == vec![200]
+                && scope.interface_names == vec!["GE1/0/1".to_string()]
+        }),
+        "preflight should request only desired scope, got {scope_summaries}"
+    );
+}
+
+#[tokio::test]
 async fn successful_device_apply_marks_transaction_in_doubt_when_shadow_update_fails() {
     let endpoint = start_fake_adapter(AdapterFailurePoint::None).await;
     let inventory = inventory_with_endpoint_at(
@@ -501,6 +565,7 @@ fn apply_request_with_vlan(vlan_id: u16, drift_policy: DriftPolicy) -> ApplyDoma
             dry_run: false,
             allow_degraded_atomicity: false,
             drift_policy,
+            ..Default::default()
         },
     }
 }
@@ -544,6 +609,28 @@ fn desired_shadow_state(vlan_id: u16) -> DeviceShadowState {
         .next()
         .expect("domain intent should produce one device");
     DeviceShadowState::from_desired(&desired, 0)
+}
+
+fn observed_state_with_unrelated_objects() -> adapter::ObservedDeviceState {
+    adapter::ObservedDeviceState {
+        device_id: "stack-mgmt".into(),
+        vlans: vec![adapter::VlanConfig {
+            vlan_id: 999,
+            name: Some("unrelated".into()),
+            description: None,
+        }],
+        interfaces: vec![adapter::InterfaceConfig {
+            name: "GE1/0/2".into(),
+            admin_state: adapter::AdminState::Up as i32,
+            description: None,
+            mode: Some(adapter::PortMode {
+                kind: adapter::PortModeKind::Access as i32,
+                access_vlan: Some(999),
+                native_vlan: None,
+                allowed_vlans: Vec::new(),
+            }),
+        }],
+    }
 }
 
 fn temp_store_dir(name: &str) -> std::path::PathBuf {

@@ -39,8 +39,14 @@ impl Normalize for InterfaceConfig {
 
 pub fn canonical_interface_name(name: &str) -> String {
     let trimmed = name.trim();
-    if let Some(rest) = trimmed.strip_prefix("GigabitEthernet") {
-        return format!("GE{rest}");
+    for (long_name, short_name) in [
+        ("GigabitEthernet", "GE"),
+        ("Ten-GigabitEthernet", "XGE"),
+        ("FortyGigE", "FGE"),
+    ] {
+        if let Some(rest) = trimmed.strip_prefix(long_name) {
+            return format!("{short_name}{rest}");
+        }
     }
     trimmed.to_string()
 }

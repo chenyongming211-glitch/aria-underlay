@@ -117,6 +117,19 @@ fn canonical_interface_name_prevents_alias_diff() {
     assert!(change_set.is_empty());
 }
 
+#[test]
+fn canonical_interface_name_prevents_h3c_ten_gigabit_alias_diff() {
+    let desired = desired_state(vec![], vec![access_interface("XGE1/0/1", None, 100)]);
+    let current = shadow_state(
+        vec![],
+        vec![access_interface("Ten-GigabitEthernet1/0/1", None, 100)],
+    );
+
+    let change_set = compute_diff(&desired, &current);
+
+    assert!(change_set.is_empty());
+}
+
 fn desired_state(vlans: Vec<VlanConfig>, interfaces: Vec<InterfaceConfig>) -> DeviceDesiredState {
     DeviceDesiredState {
         device_id: DeviceId("leaf-a".into()),

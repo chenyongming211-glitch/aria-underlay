@@ -13,6 +13,7 @@ pub struct TestAdapter {
     pub capability: Option<adapter::DeviceCapability>,
     pub capability_warnings: Vec<String>,
     pub current_state: Option<adapter::ObservedDeviceState>,
+    pub current_state_scopes: Option<Arc<Mutex<Vec<adapter::StateScope>>>>,
     pub current_warnings: Vec<String>,
     pub dry_run_result: adapter::AdapterResult,
     pub prepare_result: adapter::AdapterResult,
@@ -32,6 +33,7 @@ impl Default for TestAdapter {
             capability: Some(confirmed_commit_capability()),
             capability_warnings: Vec::new(),
             current_state: None,
+            current_state_scopes: None,
             current_warnings: Vec::new(),
             dry_run_result: adapter_result(adapter::AdapterOperationStatus::NoChange),
             prepare_result: adapter_result(adapter::AdapterOperationStatus::Prepared),
@@ -154,10 +156,27 @@ impl UnderlayAdapter for TestAdapter {
 
     async fn get_current_state(
         &self,
-        _request: Request<adapter::GetCurrentStateRequest>,
+        request: Request<adapter::GetCurrentStateRequest>,
     ) -> Result<Response<adapter::GetCurrentStateResponse>, Status> {
+        let scope = request
+            .into_inner()
+            .scope
+            .unwrap_or_else(|| adapter::StateScope {
+                full: true,
+                vlan_ids: Vec::new(),
+                interface_names: Vec::new(),
+            });
+        if let Some(scopes) = &self.current_state_scopes {
+            scopes
+                .lock()
+                .expect("current state scope recorder should not be poisoned")
+                .push(scope.clone());
+        }
         Ok(Response::new(adapter::GetCurrentStateResponse {
-            state: self.current_state.clone(),
+            state: self
+                .current_state
+                .clone()
+                .map(|state| observed_state_for_scope(state, &scope)),
             warnings: self.current_warnings.clone(),
             errors: Vec::new(),
         }))
@@ -243,4 +262,24 @@ impl UnderlayAdapter for TestAdapter {
             result: Some(self.force_unlock_result.clone()),
         }))
     }
+}
+
+fn observed_state_for_scope(
+    mut state: adapter::ObservedDeviceState,
+    scope: &adapter::StateScope,
+) -> adapter::ObservedDeviceState {
+    if scope.full {
+        return state;
+    }
+
+    state
+        .vlans
+        .retain(|vlan| scope.vlan_ids.contains(&vlan.vlan_id));
+    state.interfaces.retain(|interface| {
+        scope
+            .interface_names
+            .iter()
+            .any(|name| name == &interface.name)
+    });
+    state
 }
