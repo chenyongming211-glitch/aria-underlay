@@ -140,9 +140,10 @@ class NcclientNetconfBackend:
             "hostkey_verify": self.hostkey_verify,
             "look_for_keys": self.look_for_keys,
             "allow_agent": False,
-            "passphrase": self.passphrase,
             "timeout": self.timeout_secs,
         }
+        if self.passphrase:
+            connect_args["passphrase"] = self.passphrase
 
         if self.tofu_known_hosts_path:
             return _connect_with_tofu(

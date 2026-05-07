@@ -131,6 +131,29 @@ def test_ncclient_backend_tofu_uses_strict_known_hosts_after_first_use(monkeypat
     )
 
 
+def test_ncclient_backend_omits_empty_passphrase_for_legacy_ncclient(
+    monkeypatch, tmp_path
+):
+    manager = _FakeManager([_FakeSession("ssh-ed25519", "AAAAC3NzaC1lZDI1NTE5AAAAfirst")])
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ncclient",
+        SimpleNamespace(manager=manager),
+    )
+    backend = NcclientNetconfBackend(
+        host="192.0.2.10",
+        port=830,
+        username="netconf",
+        password="secret",
+        hostkey_verify=True,
+        tofu_known_hosts_path=str(tmp_path / "known_hosts"),
+    )
+
+    backend._connect()
+
+    assert "passphrase" not in manager.calls[0]
+
+
 def test_ncclient_backend_tofu_fails_closed_when_trust_store_write_fails(
     monkeypatch, tmp_path
 ):
