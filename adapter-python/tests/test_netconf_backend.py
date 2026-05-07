@@ -27,6 +27,7 @@ from aria_underlay_adapter.drivers.netconf_backed import NetconfBackedDriver
 from aria_underlay_adapter.errors import AdapterError
 from aria_underlay_adapter.proto import aria_underlay_adapter_pb2 as pb2
 from aria_underlay_adapter.renderers.huawei import HuaweiRenderer
+from aria_underlay_adapter.state_parsers.h3c import H3cStateParser
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "state_parsers"
@@ -500,7 +501,7 @@ def test_netconf_driver_verify_succeeds_with_fixture_verified_parser_when_enable
                 "source": "running",
                 "filter": (
                     "subtree",
-                    '<filter type="subtree"><vlans><vlan><vlan-id>100</vlan-id></vlan></vlans><interfaces><interface><name>GE1/0/1</name></interface></interfaces></filter>',
+                    "<vlans><vlan><vlan-id>100</vlan-id></vlan></vlans><interfaces><interface><name>GE1/0/1</name></interface></interfaces>",
                 ),
             },
         )
@@ -556,7 +557,7 @@ def test_netconf_driver_get_state_scopes_fixture_verified_parser_when_enabled():
                 "source": "running",
                 "filter": (
                     "subtree",
-                    '<filter type="subtree"><vlans><vlan><vlan-id>100</vlan-id></vlan></vlans><interfaces><interface><name>GE1/0/1</name></interface></interfaces></filter>',
+                    "<vlans><vlan><vlan-id>100</vlan-id></vlan></vlans><interfaces><interface><name>GE1/0/1</name></interface></interfaces>",
                 ),
             },
         )
@@ -1021,7 +1022,6 @@ def test_build_state_filter_deduplicates_sorts_and_escapes_scope_values():
     )
 
     assert build_state_filter(scope) == (
-        '<filter type="subtree">'
         "<vlans>"
         "<vlan><vlan-id>100</vlan-id></vlan>"
         "<vlan><vlan-id>200</vlan-id></vlan>"
@@ -1030,7 +1030,18 @@ def test_build_state_filter_deduplicates_sorts_and_escapes_scope_values():
         "<interface><name>GE1/0/1&amp;backup</name></interface>"
         "<interface><name>GE1/0/2</name></interface>"
         "</interfaces>"
-        "</filter>"
+    )
+
+
+def test_build_state_filter_uses_h3c_vlan_subtree_for_scoped_reads():
+    scope = _Scope(
+        full=False,
+        vlan_ids=[6, 1003],
+        interface_names=["Ten-GigabitEthernet1/0/47"],
+    )
+
+    assert build_state_filter(scope, parser=H3cStateParser(model_hint="S6800-54QF")) == (
+        '<top xmlns="http://www.h3c.com/netconf/config:1.0"><VLAN/></top>'
     )
 
 
@@ -1093,7 +1104,7 @@ def test_get_current_state_reads_running_with_scoped_filter_then_fails_parser_cl
                 "source": "running",
                 "filter": (
                     "subtree",
-                    '<filter type="subtree"><vlans><vlan><vlan-id>100</vlan-id></vlan></vlans></filter>',
+                    "<vlans><vlan><vlan-id>100</vlan-id></vlan></vlans>",
                 ),
             },
         )
@@ -1145,7 +1156,7 @@ def test_verify_running_reads_running_with_scope_then_fails_parser_closed():
                 "source": "running",
                 "filter": (
                     "subtree",
-                    '<filter type="subtree"><interfaces><interface><name>GE1/0/1</name></interface></interfaces></filter>',
+                    "<interfaces><interface><name>GE1/0/1</name></interface></interfaces>",
                 ),
             },
         )
@@ -1173,6 +1184,52 @@ def test_get_current_state_uses_configured_production_parser():
     assert state["vlans"][0]["vlan_id"] == 100
     assert parser.calls[0][0] == "<data><vlan>100</vlan></data>"
     assert parser.calls[0][1].vlan_ids == [100]
+
+
+def test_get_current_state_uses_h3c_vlan_subtree_filter_for_scoped_reads():
+    session = _RecordingSession(
+        reply=_Reply(
+            """
+            <data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+              <top xmlns="http://www.h3c.com/netconf/config:1.0">
+                <VLAN>
+                  <AccessInterfaces>
+                    <Interface><IfIndex>47</IfIndex><PVID>6</PVID></Interface>
+                  </AccessInterfaces>
+                  <VLANs>
+                    <VLANID><ID>6</ID></VLANID>
+                  </VLANs>
+                </VLAN>
+              </top>
+            </data>
+            """
+        )
+    )
+    backend = _BackendWithSession(
+        session,
+        state_parser=H3cStateParser(model_hint="S6800-54QF"),
+    )
+
+    state = backend.get_current_state(
+        scope=_Scope(False, [6], ["Ten-GigabitEthernet1/0/47"])
+    )
+
+    assert [vlan["vlan_id"] for vlan in state["vlans"]] == [6]
+    assert [interface["name"] for interface in state["interfaces"]] == [
+        "Ten-GigabitEthernet1/0/47"
+    ]
+    assert session.calls == [
+        (
+            "get_config",
+            {
+                "source": "running",
+                "filter": (
+                    "subtree",
+                    '<top xmlns="http://www.h3c.com/netconf/config:1.0"><VLAN/></top>',
+                ),
+            },
+        )
+    ]
 
 
 def test_get_current_state_rejects_non_production_parser():
@@ -1228,7 +1285,7 @@ def test_verify_running_succeeds_with_matching_parsed_state():
                 "source": "running",
                 "filter": (
                     "subtree",
-                    '<filter type="subtree"><vlans><vlan><vlan-id>100</vlan-id></vlan></vlans><interfaces><interface><name>GE1/0/1</name></interface></interfaces></filter>',
+                    "<vlans><vlan><vlan-id>100</vlan-id></vlan></vlans><interfaces><interface><name>GE1/0/1</name></interface></interfaces>",
                 ),
             },
         )

@@ -138,6 +138,7 @@ class NetconfBackedDriver:
         parser = state_parser_for_vendor(
             device.vendor_hint,
             allow_fixture_verified=self._allow_fixture_verified_parser,
+            model_hint=getattr(device, "model_hint", ""),
         )
         return self._replace_backend(
             state_parser=parser,

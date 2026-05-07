@@ -50,6 +50,7 @@ def state_parser_for_vendor(
     *,
     allow_skeleton: bool = False,
     allow_fixture_verified: bool = False,
+    model_hint: str | None = None,
 ) -> RunningStateParser:
     vendor_value = _vendor_value(vendor)
     parser_type = _PARSERS.get(vendor_value)
@@ -64,7 +65,10 @@ def state_parser_for_vendor(
             retryable=False,
         )
 
-    parser = parser_type()
+    try:
+        parser = parser_type(model_hint=model_hint)
+    except TypeError:
+        parser = parser_type()
     if getattr(parser, "production_ready", False):
         return parser
     if allow_skeleton:

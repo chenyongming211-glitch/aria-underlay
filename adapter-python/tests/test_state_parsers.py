@@ -70,6 +70,116 @@ def test_h3c_parser_reads_fixture_vlan_and_interfaces():
     }
 
 
+def test_h3c_parser_reads_real_comware_vlan_shape_with_model_hint():
+    state = H3cStateParser(model_hint="S5560-54C-EI").parse_running(
+        """
+        <data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+          <top xmlns="http://www.h3c.com/netconf/config:1.0">
+            <Ifmgr>
+              <Interfaces>
+                <Interface>
+                  <IfIndex>13</IfIndex>
+                  <Description>server access</Description>
+                </Interface>
+                <Interface>
+                  <IfIndex>14</IfIndex>
+                  <Description>core trunk</Description>
+                </Interface>
+              </Interfaces>
+            </Ifmgr>
+            <VLAN>
+              <AccessInterfaces>
+                <Interface>
+                  <IfIndex>13</IfIndex>
+                  <PVID>144</PVID>
+                </Interface>
+              </AccessInterfaces>
+              <TrunkInterfaces>
+                <Interface>
+                  <IfIndex>14</IfIndex>
+                  <PermitVlanList>30,50,1150-1153</PermitVlanList>
+                </Interface>
+              </TrunkInterfaces>
+              <VLANs>
+                <VLANID>
+                  <ID>144</ID>
+                  <Name>tenant-access</Name>
+                </VLANID>
+                <VLANID>
+                  <ID>1150</ID>
+                </VLANID>
+              </VLANs>
+            </VLAN>
+          </top>
+        </data>
+        """
+    )
+
+    assert state["vlans"] == [
+        {"vlan_id": 144, "name": "tenant-access", "description": None},
+        {"vlan_id": 1150, "name": None, "description": None},
+    ]
+    assert state["interfaces"] == [
+        {
+            "name": "GigabitEthernet1/0/13",
+            "admin_state": None,
+            "description": "server access",
+            "mode": {
+                "kind": "access",
+                "access_vlan": 144,
+                "native_vlan": None,
+                "allowed_vlans": [],
+            },
+        },
+        {
+            "name": "GigabitEthernet1/0/14",
+            "admin_state": None,
+            "description": "core trunk",
+            "mode": {
+                "kind": "trunk",
+                "access_vlan": None,
+                "native_vlan": None,
+                "allowed_vlans": [30, 50, 1150, 1151, 1152, 1153],
+            },
+        },
+    ]
+
+
+def test_h3c_parser_maps_s6800_physical_ifindex_ranges():
+    state = H3cStateParser(model_hint="S6800-54QF").parse_running(
+        """
+        <data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+          <top xmlns="http://www.h3c.com/netconf/config:1.0">
+            <VLAN>
+              <AccessInterfaces>
+                <Interface>
+                  <IfIndex>47</IfIndex>
+                  <PVID>6</PVID>
+                </Interface>
+              </AccessInterfaces>
+              <TrunkInterfaces>
+                <Interface>
+                  <IfIndex>49</IfIndex>
+                  <PermitVlanList>1,1003-1004</PermitVlanList>
+                </Interface>
+              </TrunkInterfaces>
+              <VLANs>
+                <VLANID><ID>6</ID></VLANID>
+                <VLANID><ID>1003</ID></VLANID>
+                <VLANID><ID>1004</ID></VLANID>
+              </VLANs>
+            </VLAN>
+          </top>
+        </data>
+        """
+    )
+
+    assert [interface["name"] for interface in state["interfaces"]] == [
+        "Ten-GigabitEthernet1/0/47",
+        "FortyGigE1/0/49",
+    ]
+
+
 @pytest.mark.parametrize(
     ("parser", "fixture", "interface_name", "mode"),
     [

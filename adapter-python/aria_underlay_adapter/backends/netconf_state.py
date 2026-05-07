@@ -7,7 +7,10 @@ from aria_underlay_adapter.errors import AdapterError
 from aria_underlay_adapter.normalization import admin_state_to_text as _admin_state_to_text
 
 
-def build_state_filter(scope=None):
+H3C_COMWARE_CONFIG_NS = "http://www.h3c.com/netconf/config:1.0"
+
+
+def build_state_filter(scope=None, *, parser=None):
     if scope is None or getattr(scope, "full", False):
         return None
 
@@ -16,7 +19,10 @@ def build_state_filter(scope=None):
     if not vlan_ids and not interface_names:
         return None
 
-    parts = ['<filter type="subtree">']
+    if _parser_vendor(parser) == "h3c":
+        return f'<top xmlns="{H3C_COMWARE_CONFIG_NS}"><VLAN/></top>'
+
+    parts = []
     if vlan_ids:
         parts.append("<vlans>")
         for vlan_id in vlan_ids:
@@ -27,12 +33,11 @@ def build_state_filter(scope=None):
         for name in interface_names:
             parts.append(f"<interface><name>{escape(name)}</name></interface>")
         parts.append("</interfaces>")
-    parts.append("</filter>")
     return "".join(parts)
 
 
-def read_running_config(session, scope=None):
-    filter_xml = build_state_filter(scope)
+def read_running_config(session, scope=None, parser=None):
+    filter_xml = build_state_filter(scope, parser=parser)
     kwargs = {"source": "running"}
     if filter_xml is not None:
         kwargs["filter"] = ("subtree", filter_xml)
@@ -59,6 +64,14 @@ def _running_xml_from_reply(reply) -> str:
     if data is not None:
         return str(data)
     return str(reply)
+
+
+def _parser_vendor(parser) -> str | None:
+    profile = getattr(parser, "profile", None)
+    vendor = getattr(profile, "vendor", None)
+    if vendor is None:
+        return None
+    return str(vendor).strip().lower() or None
 
 
 def parse_running_state(

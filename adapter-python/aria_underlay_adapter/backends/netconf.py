@@ -170,7 +170,7 @@ class NcclientNetconfBackend:
 
         try:
             with self._connect() as session:
-                xml = _read_running_config(session, scope)
+                xml = _read_running_config(session, scope, self.state_parser)
         except AdapterError:
             raise
         except Exception as exc:
@@ -503,7 +503,7 @@ class NcclientNetconfBackend:
 
         try:
             with self._connect() as session:
-                xml = _read_running_config(session, scope)
+                xml = _read_running_config(session, scope, self.state_parser)
         except AdapterError:
             raise
         except Exception as exc:
