@@ -423,7 +423,7 @@ pub struct AdapterClientPool {
 impl AdapterClientPool {
     pub fn client(&self, endpoint: &str) -> UnderlayResult<AdapterClient> {
         match self.channels.entry(endpoint.to_string()) {
-            Entry::Occupied(entry) => Ok(AdapterClient::from_channel(entry.value().clone())),
+            Entry::Occupied(entry) => Ok(AdapterClient::from_channel(entry.get().clone())),
             Entry::Vacant(entry) => {
                 Channel::from_shared(endpoint.to_string())
                     .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))
