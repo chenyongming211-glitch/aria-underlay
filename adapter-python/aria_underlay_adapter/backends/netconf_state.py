@@ -224,19 +224,23 @@ def verify_vlans(desired_state, observed: dict, scope=None) -> None:
 
 
 def verify_interfaces(desired_state, observed: dict, scope=None) -> None:
-    observed_by_name = {interface["name"]: interface for interface in observed["interfaces"]}
+    observed_by_name = {
+        _interface_alias_key(interface["name"]): interface
+        for interface in observed["interfaces"]
+    }
     desired_by_name = {
-        _field(interface, "name"): interface
+        _interface_alias_key(_field(interface, "name")): interface
         for interface in getattr(desired_state, "interfaces", [])
     }
     for name in _scoped_interface_names(scope, observed):
-        if name not in desired_by_name and name in observed_by_name:
+        key = _interface_alias_key(name)
+        if key not in desired_by_name and key in observed_by_name:
             raise _verify_mismatch(
                 f"interface {name} should be absent but exists in observed scoped state",
             )
     for desired_interface in _desired_interfaces_in_scope(desired_state, scope):
         name = _field(desired_interface, "name")
-        observed_interface = observed_by_name.get(name)
+        observed_interface = observed_by_name.get(_interface_alias_key(name))
         if observed_interface is None:
             raise _verify_mismatch(
                 f"interface {name} missing from observed scoped state",
@@ -245,10 +249,14 @@ def verify_interfaces(desired_state, observed: dict, scope=None) -> None:
         expected_description = _optional_field(desired_interface, "description")
         expected_mode = _mode_to_dict(_field(desired_interface, "mode"))
 
-        if observed_interface.get("admin_state") != expected_admin_state:
+        observed_admin_state = observed_interface.get("admin_state")
+        if (
+            observed_admin_state is not None
+            and observed_admin_state != expected_admin_state
+        ):
             raise _verify_mismatch(
                 f"interface {name} admin state mismatch: expected "
-                f"{expected_admin_state!r}, got {observed_interface.get('admin_state')!r}",
+                f"{expected_admin_state!r}, got {observed_admin_state!r}",
             )
         if observed_interface.get("description") != expected_description:
             raise _verify_mismatch(
@@ -287,13 +295,15 @@ def _desired_interfaces_in_scope(desired_state, scope=None):
     ):
         return
     interface_names = (
-        set(getattr(scope, "interface_names", [])) if scope is not None else set()
+        {_interface_alias_key(name) for name in getattr(scope, "interface_names", [])}
+        if scope is not None
+        else set()
     )
     for interface in getattr(desired_state, "interfaces", []):
         if (
             getattr(scope, "full", False)
             or scope is None
-            or _field(interface, "name") in interface_names
+            or _interface_alias_key(_field(interface, "name")) in interface_names
         ):
             yield interface
 
@@ -359,6 +369,19 @@ def _normalize_mode(mode) -> dict:
         "native_vlan": mode.get("native_vlan"),
         "allowed_vlans": sorted(set(mode.get("allowed_vlans", []))),
     }
+
+
+def _interface_alias_key(name) -> str:
+    text = str(name).strip()
+    aliases = (
+        ("GigabitEthernet", "GE"),
+        ("Ten-GigabitEthernet", "XGE"),
+        ("FortyGigE", "FGE"),
+    )
+    for long_name, short_name in aliases:
+        if text.startswith(long_name):
+            return f"{short_name}{text[len(long_name):]}"
+    return text
 
 
 def _verify_mismatch(message: str) -> AdapterError:

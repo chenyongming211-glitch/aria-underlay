@@ -1340,6 +1340,69 @@ def test_verify_running_succeeds_with_matching_parsed_state():
     ]
 
 
+def test_verify_running_accepts_interface_alias_names_from_scoped_state():
+    session = _RecordingSession()
+    parser = _StaticStateParser(
+        state={
+            "vlans": [
+                {
+                    "vlan_id": 100,
+                    "name": "prod",
+                    "description": "production vlan",
+                }
+            ],
+            "interfaces": [
+                {
+                    "name": "GE1/0/1",
+                    "admin_state": "up",
+                    "description": "server uplink",
+                    "mode": {
+                        "kind": "access",
+                        "access_vlan": 100,
+                        "native_vlan": None,
+                        "allowed_vlans": [],
+                    },
+                }
+            ],
+        }
+    )
+    backend = _BackendWithSession(session, state_parser=parser)
+    desired = _desired_state(interface_name="GigabitEthernet1/0/1")
+
+    backend.verify_running(desired, scope=_Scope(False, [100], ["GE1/0/1"]))
+
+
+def test_verify_running_treats_missing_observed_admin_state_as_unknown():
+    session = _RecordingSession()
+    parser = _StaticStateParser(
+        state={
+            "vlans": [
+                {
+                    "vlan_id": 100,
+                    "name": "prod",
+                    "description": "production vlan",
+                }
+            ],
+            "interfaces": [
+                {
+                    "name": "GE1/0/1",
+                    "admin_state": None,
+                    "description": "server uplink",
+                    "mode": {
+                        "kind": "access",
+                        "access_vlan": 100,
+                        "native_vlan": None,
+                        "allowed_vlans": [],
+                    },
+                }
+            ],
+        }
+    )
+    backend = _BackendWithSession(session, state_parser=parser)
+
+    backend.verify_running(_desired_state(), scope=_Scope(False, [100], ["GE1/0/1"]))
+
+
 def test_verify_running_fails_with_parsed_vlan_mismatch():
     session = _RecordingSession()
     parser = _StaticStateParser(
@@ -1540,7 +1603,7 @@ def _parsed_interface(name, admin_state):
     }
 
 
-def _desired_state():
+def _desired_state(interface_name="GE1/0/1"):
     class _Desired:
         vlans = [
             type(
@@ -1558,7 +1621,7 @@ def _desired_state():
                 "Interface",
                 (),
                 {
-                    "name": "GE1/0/1",
+                    "name": interface_name,
                     "admin_state": 1,
                     "description": "server uplink",
                     "mode": {
