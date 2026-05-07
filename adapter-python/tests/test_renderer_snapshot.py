@@ -32,6 +32,33 @@ def _write_desired_state(path, *, vlan_id=100, mode=None):
     )
 
 
+def _write_h3c_desired_state(path, *, vlan_id=100, mode=None):
+    if mode is None:
+        mode = {
+            "kind": "access",
+            "access_vlan": 100,
+        }
+    path.write_text(
+        json.dumps(
+            {
+                "vlans": [
+                    {
+                        "vlan_id": vlan_id,
+                        "name": "prod",
+                    }
+                ],
+                "interfaces": [
+                    {
+                        "name": "GigabitEthernet1/0/13",
+                        "admin_state": "up",
+                        "mode": mode,
+                    }
+                ],
+            }
+        )
+    )
+
+
 def test_render_snapshot_outputs_xml_report_for_huawei(tmp_path, capsys):
     desired_state = tmp_path / "desired.json"
     _write_desired_state(desired_state)
@@ -57,7 +84,7 @@ def test_render_snapshot_outputs_xml_report_for_huawei(tmp_path, capsys):
 
 def test_render_snapshot_pretty_prints_json(tmp_path, capsys):
     desired_state = tmp_path / "desired.json"
-    _write_desired_state(desired_state)
+    _write_h3c_desired_state(desired_state)
 
     result = snapshot.main(
         [
@@ -76,7 +103,11 @@ def test_render_snapshot_pretty_prints_json(tmp_path, capsys):
     assert captured.err == ""
     assert captured.out.startswith("{\n")
     assert report["vendor"] == "h3c"
-    assert report["profile_name"] == "comware7-skeleton"
+    assert report["profile_name"] == "comware7-vlan-real"
+    assert report["production_ready"] is True
+    assert ":VLAN" in report["xml"]
+    assert "GigabitEthernet1/0/13" not in report["xml"]
+    assert "<ns0:IfIndex>13</ns0:IfIndex>" in report["xml"]
 
 
 def test_render_snapshot_returns_structured_error_for_renderer_validation(
@@ -102,7 +133,7 @@ def test_render_snapshot_returns_structured_error_for_invalid_trunk_mode(
     tmp_path, capsys
 ):
     desired_state = tmp_path / "desired.json"
-    _write_desired_state(
+    _write_h3c_desired_state(
         desired_state,
         mode={
             "kind": "trunk",

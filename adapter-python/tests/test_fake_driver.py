@@ -170,7 +170,7 @@ def test_service_dry_run_calls_driver_and_returns_no_change_for_empty_desired():
 
     assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_NO_CHANGE
     assert response.result.changed is False
-    assert response.result.errors == []
+    assert list(response.result.errors) == []
 
 
 def test_service_dry_run_reports_changed_for_fake_desired_update():
@@ -188,7 +188,7 @@ def test_service_dry_run_reports_changed_for_fake_desired_update():
 
     assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_NO_CHANGE
     assert response.result.changed is True
-    assert response.result.errors == []
+    assert list(response.result.errors) == []
 
 
 def test_service_recover_requires_explicit_recovery_action():

@@ -294,7 +294,7 @@ def test_netconf_driver_dry_run_uses_configured_renderer_without_device_read():
 
     assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_NO_CHANGE
     assert response.result.changed is True
-    assert response.result.errors == []
+    assert list(response.result.errors) == []
     assert any(
         "candidate config rendered successfully" in warning
         for warning in response.result.warnings
@@ -313,7 +313,7 @@ def test_netconf_driver_dry_run_returns_no_change_for_empty_desired_without_rend
 
     assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_NO_CHANGE
     assert response.result.changed is False
-    assert response.result.errors == []
+    assert list(response.result.errors) == []
     assert "desired state contains no VLAN or interface changes" in response.result.warnings
     assert session.calls == []
 
@@ -365,7 +365,7 @@ def test_netconf_driver_get_state_can_use_fixture_verified_parser_when_enabled()
         )
     )
 
-    assert response.errors == []
+    assert list(response.errors) == []
     assert response.state.device_id == "leaf-a"
     assert [(vlan.vlan_id, vlan.name, vlan.description) for vlan in response.state.vlans] == [
         (100, "prod", "production vlan"),
@@ -394,7 +394,7 @@ def test_netconf_driver_get_state_can_use_h3c_fixture_verified_parser_when_enabl
         )
     )
 
-    assert response.errors == []
+    assert list(response.errors) == []
     assert response.state.device_id == "leaf-b"
     assert [vlan.vlan_id for vlan in response.state.vlans] == [100, 200]
     assert [interface.name for interface in response.state.interfaces] == [
@@ -421,7 +421,7 @@ def test_netconf_driver_get_state_normalizes_observed_admin_state():
         pb2.GetCurrentStateRequest(device=pb2.DeviceRef(device_id="leaf-a"))
     )
 
-    assert response.errors == []
+    assert list(response.errors) == []
     assert [interface.admin_state for interface in response.state.interfaces] == [
         pb2.ADMIN_STATE_UP,
         pb2.ADMIN_STATE_UP,
@@ -493,7 +493,7 @@ def test_netconf_driver_verify_succeeds_with_fixture_verified_parser_when_enable
     )
 
     assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_NO_CHANGE
-    assert response.result.errors == []
+    assert list(response.result.errors) == []
     assert session.calls == [
         (
             "get_config",
@@ -547,7 +547,7 @@ def test_netconf_driver_get_state_scopes_fixture_verified_parser_when_enabled():
         )
     )
 
-    assert response.errors == []
+    assert list(response.errors) == []
     assert [vlan.vlan_id for vlan in response.state.vlans] == [100]
     assert [interface.name for interface in response.state.interfaces] == ["GE1/0/1"]
     assert session.calls == [
@@ -578,9 +578,9 @@ def test_netconf_driver_get_state_empty_scope_skips_fixture_parser_device_read()
         )
     )
 
-    assert response.errors == []
-    assert response.state.vlans == []
-    assert response.state.interfaces == []
+    assert list(response.errors) == []
+    assert list(response.state.vlans) == []
+    assert list(response.state.interfaces) == []
     assert session.calls == []
 
 

@@ -30,15 +30,26 @@ def test_renderer_registry_can_return_skeleton_when_explicitly_allowed(
     renderer = renderer_for_vendor(vendor, allow_skeleton=True)
 
     assert isinstance(renderer, renderer_type)
-    assert renderer.production_ready is False
+    if isinstance(renderer, H3cRenderer):
+        assert renderer.production_ready is True
+    else:
+        assert renderer.production_ready is False
 
 
-@pytest.mark.parametrize("vendor", [VENDOR_HUAWEI, "huawei", VENDOR_H3C, "h3c"])
+@pytest.mark.parametrize("vendor", [VENDOR_HUAWEI, "huawei"])
 def test_renderer_registry_rejects_skeletons_by_default(vendor):
     with pytest.raises(AdapterError) as exc:
         renderer_for_vendor(vendor)
 
     assert exc.value.code == "RENDERER_NOT_PRODUCTION_READY"
+
+
+@pytest.mark.parametrize("vendor", [VENDOR_H3C, "h3c"])
+def test_renderer_registry_returns_h3c_renderer_by_default(vendor):
+    renderer = renderer_for_vendor(vendor)
+
+    assert isinstance(renderer, H3cRenderer)
+    assert renderer.production_ready is True
 
 
 @pytest.mark.parametrize("vendor", [VENDOR_CISCO, VENDOR_UNKNOWN, "ruijie", "unknown"])

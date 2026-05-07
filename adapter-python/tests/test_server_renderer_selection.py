@@ -42,6 +42,32 @@ def test_real_server_driver_selection_rejects_skeleton_renderer():
     assert response.result.errors[0].code == "RENDERER_NOT_PRODUCTION_READY"
 
 
+def test_real_server_driver_selection_allows_h3c_production_renderer_for_dry_run():
+    driver = _netconf_driver_from_device(_device(pb2.VENDOR_H3C), _SecretProvider())
+
+    response = driver.dry_run(
+        device=_device(pb2.VENDOR_H3C),
+        desired_state=pb2.DesiredDeviceState(
+            device_id="leaf-h3c",
+            vlans=[pb2.VlanConfig(vlan_id=144, name="tenant")],
+            interfaces=[
+                pb2.InterfaceConfig(
+                    name="GigabitEthernet1/0/13",
+                    admin_state=pb2.ADMIN_STATE_UP,
+                    mode=pb2.PortMode(
+                        kind=pb2.PORT_MODE_KIND_ACCESS,
+                        access_vlan=144,
+                    ),
+                )
+            ],
+        ),
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_NO_CHANGE
+    assert response.result.changed is True
+    assert list(response.result.errors) == []
+
+
 def test_real_server_driver_selection_rejects_unregistered_vendor():
     driver = _netconf_driver_from_device(_device(pb2.VENDOR_CISCO), _SecretProvider())
 
