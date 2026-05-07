@@ -1,6 +1,10 @@
 import json
+from xml.etree import ElementTree
 
 from aria_underlay_adapter.renderers import snapshot
+from aria_underlay_adapter.renderers.h3c import H3C_COMWARE_CONFIG_NAMESPACE
+from aria_underlay_adapter.renderers.huawei import HuaweiRenderer
+from aria_underlay_adapter.renderers.xml import NETCONF_BASE_NAMESPACE
 
 
 def _write_desired_state(path, *, vlan_id=100, mode=None):
@@ -77,9 +81,12 @@ def test_render_snapshot_outputs_xml_report_for_huawei(tmp_path, capsys):
     assert report["production_ready"] is False
     assert report["vlan_count"] == 1
     assert report["interface_count"] == 1
-    assert "<config" in report["xml"]
-    assert "<ns0:id>100</ns0:id>" in report["xml"]
-    assert "<ns1:name>GE1/0/1</ns1:name>" in report["xml"]
+
+    root = ElementTree.fromstring(report["xml"])
+    renderer = HuaweiRenderer()
+    assert root.tag == f"{{{NETCONF_BASE_NAMESPACE}}}config"
+    assert root.find(f".//{{{renderer.VLAN_NAMESPACE}}}id").text == "100"
+    assert root.find(f".//{{{renderer.IFACE_NAMESPACE}}}name").text == "GE1/0/1"
 
 
 def test_render_snapshot_pretty_prints_json(tmp_path, capsys):
@@ -105,9 +112,12 @@ def test_render_snapshot_pretty_prints_json(tmp_path, capsys):
     assert report["vendor"] == "h3c"
     assert report["profile_name"] == "comware7-vlan-real"
     assert report["production_ready"] is True
-    assert ":VLAN" in report["xml"]
     assert "GigabitEthernet1/0/13" not in report["xml"]
-    assert "<ns0:IfIndex>13</ns0:IfIndex>" in report["xml"]
+
+    root = ElementTree.fromstring(report["xml"])
+    assert root.tag == f"{{{NETCONF_BASE_NAMESPACE}}}config"
+    assert root.find(f".//{{{H3C_COMWARE_CONFIG_NAMESPACE}}}VLAN") is not None
+    assert root.find(f".//{{{H3C_COMWARE_CONFIG_NAMESPACE}}}IfIndex").text == "13"
 
 
 def test_render_snapshot_returns_structured_error_for_renderer_validation(

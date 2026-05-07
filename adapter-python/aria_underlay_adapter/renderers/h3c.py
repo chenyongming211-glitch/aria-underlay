@@ -89,6 +89,7 @@ class H3cRenderer:
         return render_xml(
             XmlElement(
                 "config",
+                namespace=NETCONF_BASE_NAMESPACE,
                 children=[
                     XmlElement(
                         "top",

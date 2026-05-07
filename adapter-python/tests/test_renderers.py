@@ -269,6 +269,7 @@ def test_h3c_renderer_builds_real_comware_edit_config_document():
     root = ElementTree.fromstring(xml)
     ns = H3cRenderer().VLAN_NAMESPACE
 
+    assert root.tag == f"{{{NETCONF_BASE_NAMESPACE}}}config"
     vlan = root.find(f".//{{{ns}}}VLANID")
     assert vlan.find(f"{{{ns}}}ID").text == "144"
     assert vlan.find(f"{{{ns}}}Name").text == "tenant"
@@ -307,17 +308,17 @@ def test_vendor_renderer_builds_single_edit_config_document(renderer):
         )
     )
 
-    assert xml.startswith("<config")
-    assert xml.count("<ns0:vlan") == 2
-    assert xml.count("<ns1:interface") == 1
-    assert "<ns0:id>100</ns0:id>" in xml
-    assert "<ns0:id>200</ns0:id>" in xml
-    assert "<ns1:admin-state>up</ns1:admin-state>" in xml
-    assert "<ns1:vlan-id>100</ns1:vlan-id>" in xml
-
     root = ElementTree.fromstring(xml)
-    assert root.find(f".//{{{renderer.VLAN_NAMESPACE}}}vlan") is not None
-    assert root.find(f".//{{{renderer.IFACE_NAMESPACE}}}interface") is not None
+    assert root.tag == f"{{{NETCONF_BASE_NAMESPACE}}}config"
+    vlan_nodes = root.findall(f".//{{{renderer.VLAN_NAMESPACE}}}vlan")
+    assert [node.find(f"{{{renderer.VLAN_NAMESPACE}}}id").text for node in vlan_nodes] == [
+        "100",
+        "200",
+    ]
+    interface = root.find(f".//{{{renderer.IFACE_NAMESPACE}}}interface")
+    assert interface is not None
+    assert interface.find(f"{{{renderer.IFACE_NAMESPACE}}}admin-state").text == "up"
+    assert interface.find(f".//{{{renderer.IFACE_NAMESPACE}}}vlan-id").text == "100"
     assert root.find(f".//{{{renderer.IFACE_NAMESPACE}}}vlan") is None
     assert root.find(f".//{{{renderer.VLAN_NAMESPACE}}}interface") is None
 

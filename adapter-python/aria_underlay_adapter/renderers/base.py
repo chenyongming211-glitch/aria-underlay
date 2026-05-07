@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from aria_underlay_adapter.errors import AdapterError
+from aria_underlay_adapter.renderers.xml import NETCONF_BASE_NAMESPACE
 from aria_underlay_adapter.renderers.xml import XmlElement
 from aria_underlay_adapter.renderers.xml import render_xml
 
@@ -35,4 +36,6 @@ def render_edit_config_document(renderer: VendorRenderer, desired_state) -> str:
             retryable=False,
         )
 
-    return render_xml(XmlElement("config", children=children))
+    return render_xml(
+        XmlElement("config", namespace=NETCONF_BASE_NAMESPACE, children=children)
+    )
