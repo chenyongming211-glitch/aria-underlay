@@ -21,7 +21,7 @@ jobs:
       - name: Cargo check
         run: |
           set +e
-          cargo check --all-targets 2>&1 | tee /tmp/cargo-check.log
+          RUSTFLAGS="-Awarnings" cargo check --all-targets 2>&1 | tee /tmp/cargo-check.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             python3 - <<'PY'
@@ -36,7 +36,7 @@ jobs:
       - name: Cargo test
         run: |
           set +e
-          cargo test --quiet 2>&1 | tee /tmp/cargo-test.log
+          RUSTFLAGS="-Awarnings" cargo test --quiet 2>&1 | tee /tmp/cargo-test.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             python3 - <<'PY'
