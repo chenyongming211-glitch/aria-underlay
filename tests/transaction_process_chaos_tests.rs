@@ -568,7 +568,7 @@ async fn process_restart_recovers_verifying_tx_when_adapter_reports_committed() 
 }
 
 #[tokio::test]
-async fn process_restart_recovers_rolling_back_tx_to_rolled_back_without_shadow() {
+async fn process_restart_recovers_rollback_rpc_crash_to_rolled_back_without_shadow() {
     let temp = temp_store_dir("rolling-back-recover");
     let journal_root = temp.join("journal");
     let shadow_root = temp.join("shadow");
@@ -585,9 +585,9 @@ async fn process_restart_recovers_rolling_back_tx_to_rolled_back_without_shadow(
     let journal = Arc::new(JsonFileTxJournalStore::new(&journal_root));
     let pending_before = journal
         .list_recoverable()
-        .expect("journal scan after rolling-back crash should succeed");
+        .expect("journal scan after rollback-rpc crash should succeed");
     assert_eq!(pending_before.len(), 1);
-    assert_eq!(pending_before[0].phase, TxPhase::RollingBack);
+    assert_eq!(pending_before[0].phase, TxPhase::Verifying);
     let tx_id = pending_before[0].tx_id.clone();
 
     let shadow = Arc::new(JsonFileShadowStateStore::new(&shadow_root));
@@ -617,7 +617,7 @@ async fn process_restart_recovers_rolling_back_tx_to_rolled_back_without_shadow(
     let report = service
         .recover_pending_transactions()
         .await
-        .expect("rolling-back recovery should complete as rolled back");
+        .expect("rollback-rpc crash recovery should complete as rolled back");
 
     assert_eq!(report.recovered, 1);
     assert_eq!(report.pending, 0);
@@ -625,15 +625,15 @@ async fn process_restart_recovers_rolling_back_tx_to_rolled_back_without_shadow(
 
     let record = journal
         .get(&tx_id)
-        .expect("journal read after rolling-back recovery should succeed")
+        .expect("journal read after rollback-rpc crash recovery should succeed")
         .expect("journal record should remain readable");
     assert_eq!(record.phase, TxPhase::RolledBack);
     assert!(
         shadow
             .get(&DeviceId("stack-mgmt".into()))
-            .expect("shadow read after rolling-back recovery should succeed")
+            .expect("shadow read after rollback-rpc crash recovery should succeed")
             .is_none(),
-        "rolling-back recovery must not persist desired shadow"
+        "rollback-rpc crash recovery must not persist desired shadow"
     );
 
     std::fs::remove_dir_all(temp).ok();
