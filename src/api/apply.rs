@@ -59,6 +59,13 @@ pub(super) fn aggregate_apply_status(device_results: &[DeviceApplyResult]) -> Ap
         ApplyStatus::RolledBack
     } else if device_results.len() == 1 {
         device_results[0].status.clone()
+    } else if device_results.iter().any(|result| {
+        matches!(
+            result.status,
+            ApplyStatus::Success | ApplyStatus::SuccessWithWarning | ApplyStatus::NoOpSuccess
+        )
+    }) {
+        ApplyStatus::PartialSuccess
     } else {
         ApplyStatus::Failed
     }
@@ -204,23 +211,23 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_partial_failure_is_failed() {
+    fn aggregate_partial_failure_is_partial_success() {
         let status = aggregate_apply_status(&[
             result(ApplyStatus::Success),
             result(ApplyStatus::Failed),
         ]);
 
-        assert_eq!(status, ApplyStatus::Failed);
+        assert_eq!(status, ApplyStatus::PartialSuccess);
     }
 
     #[test]
-    fn aggregate_partial_rollback_is_failed() {
+    fn aggregate_partial_rollback_is_partial_success() {
         let status = aggregate_apply_status(&[
             result(ApplyStatus::Success),
             result(ApplyStatus::RolledBack),
         ]);
 
-        assert_eq!(status, ApplyStatus::Failed);
+        assert_eq!(status, ApplyStatus::PartialSuccess);
     }
 
     #[test]

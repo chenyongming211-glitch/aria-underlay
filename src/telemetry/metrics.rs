@@ -39,7 +39,9 @@ impl Metrics {
     pub fn record_transaction_status(&mut self, status: &ApplyStatus) {
         self.increment(MetricName::TransactionTotal);
         match status {
-            ApplyStatus::Failed => self.increment(MetricName::TransactionFailedTotal),
+            ApplyStatus::PartialSuccess | ApplyStatus::Failed => {
+                self.increment(MetricName::TransactionFailedTotal)
+            }
             ApplyStatus::RolledBack => self.increment(MetricName::TransactionRollbackTotal),
             ApplyStatus::InDoubt => self.increment(MetricName::TransactionInDoubtTotal),
             ApplyStatus::NoOpSuccess | ApplyStatus::Success | ApplyStatus::SuccessWithWarning => {}

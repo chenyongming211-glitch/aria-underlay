@@ -10,6 +10,7 @@ pub enum ApplyStatus {
     NoOpSuccess,
     Success,
     SuccessWithWarning,
+    PartialSuccess,
     Failed,
     RolledBack,
     InDoubt,

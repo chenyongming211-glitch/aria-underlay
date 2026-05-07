@@ -21,7 +21,7 @@ use crate::tx::{
     EndpointLockTable, LockAcquisitionPolicy, TransactionStrategy, TxContext, TxJournalRecord,
     TxJournalStore, TxPhase,
 };
-use crate::{UnderlayError, UnderlayResult};
+use crate::{AdapterErrorDetail, UnderlayError, UnderlayResult};
 
 #[derive(Clone)]
 pub(crate) struct ApplyCoordinator {
@@ -492,20 +492,33 @@ impl ApplyCoordinator {
         let prepare = match client.prepare_with_context(device, context, desired).await {
             Ok(prepare) => prepare,
             Err(err) => {
-                self.rollback_after_endpoint_failure(client, device, context, journal_record)
-                    .await?;
-                return Err(err);
+                return self
+                    .rollback_after_endpoint_failure_preserving_primary(
+                        client,
+                        device,
+                        context,
+                        journal_record,
+                        err,
+                    )
+                    .await;
             }
         };
         if prepare.status != AdapterOperationStatus::Prepared {
-            self.rollback_after_endpoint_failure(client, device, context, journal_record)
-                .await?;
-            return Err(UnderlayError::AdapterOperation {
+            let err = UnderlayError::AdapterOperation {
                 code: "UNEXPECTED_PREPARE_STATUS".into(),
                 message: format!("adapter returned prepare status {:?}", prepare.status),
                 retryable: false,
                 errors: Vec::new(),
-            });
+            };
+            return self
+                .rollback_after_endpoint_failure_preserving_primary(
+                    client,
+                    device,
+                    context,
+                    journal_record,
+                    err,
+                )
+                .await;
         }
         *journal_record = journal_record.clone().with_phase(TxPhase::Prepared);
         self.journal.put(journal_record)?;
@@ -533,19 +546,30 @@ impl ApplyCoordinator {
         {
             Ok(commit) if commit_status_matches_strategy(commit.status, strategy) => Ok(()),
             Ok(commit) => {
-                self.rollback_after_endpoint_failure(client, device, context, journal_record)
-                    .await?;
-                Err(UnderlayError::AdapterOperation {
+                let err = UnderlayError::AdapterOperation {
                     code: "UNEXPECTED_COMMIT_STATUS".into(),
                     message: format!("adapter returned commit status {:?}", commit.status),
                     retryable: false,
                     errors: Vec::new(),
-                })
+                };
+                self.rollback_after_endpoint_failure_preserving_primary(
+                    client,
+                    device,
+                    context,
+                    journal_record,
+                    err,
+                )
+                .await
             }
             Err(err) => {
-                self.rollback_after_endpoint_failure(client, device, context, journal_record)
-                    .await?;
-                Err(err)
+                self.rollback_after_endpoint_failure_preserving_primary(
+                    client,
+                    device,
+                    context,
+                    journal_record,
+                    err,
+                )
+                .await
             }
         }
     }
@@ -574,19 +598,30 @@ impl ApplyCoordinator {
                 Ok(())
             }
             Ok(verify) => {
-                self.rollback_after_endpoint_failure(client, device, context, journal_record)
-                    .await?;
-                Err(UnderlayError::AdapterOperation {
+                let err = UnderlayError::AdapterOperation {
                     code: "UNEXPECTED_VERIFY_STATUS".into(),
                     message: format!("adapter returned verify status {:?}", verify.status),
                     retryable: false,
                     errors: Vec::new(),
-                })
+                };
+                self.rollback_after_endpoint_failure_preserving_primary(
+                    client,
+                    device,
+                    context,
+                    journal_record,
+                    err,
+                )
+                .await
             }
             Err(err) => {
-                self.rollback_after_endpoint_failure(client, device, context, journal_record)
-                    .await?;
-                Err(err)
+                self.rollback_after_endpoint_failure_preserving_primary(
+                    client,
+                    device,
+                    context,
+                    journal_record,
+                    err,
+                )
+                .await
             }
         }
     }
@@ -603,9 +638,7 @@ impl ApplyCoordinator {
         match client.final_confirm_with_context(device, context).await {
             Ok(confirm) if confirm.status == AdapterOperationStatus::Committed => Ok(()),
             Ok(confirm) => {
-                self.rollback_after_endpoint_failure(client, device, context, journal_record)
-                    .await?;
-                Err(UnderlayError::AdapterOperation {
+                let err = UnderlayError::AdapterOperation {
                     code: "UNEXPECTED_FINAL_CONFIRM_STATUS".into(),
                     message: format!(
                         "adapter returned final confirm status {:?}",
@@ -613,13 +646,43 @@ impl ApplyCoordinator {
                     ),
                     retryable: false,
                     errors: Vec::new(),
-                })
+                };
+                self.rollback_after_endpoint_failure_preserving_primary(
+                    client,
+                    device,
+                    context,
+                    journal_record,
+                    err,
+                )
+                .await
             }
             Err(err) => {
-                self.rollback_after_endpoint_failure(client, device, context, journal_record)
-                    .await?;
-                Err(err)
+                self.rollback_after_endpoint_failure_preserving_primary(
+                    client,
+                    device,
+                    context,
+                    journal_record,
+                    err,
+                )
+                .await
             }
+        }
+    }
+
+    async fn rollback_after_endpoint_failure_preserving_primary(
+        &self,
+        client: &mut AdapterClient,
+        device: &DeviceInfo,
+        context: &RequestContext,
+        journal_record: &mut TxJournalRecord,
+        primary: UnderlayError,
+    ) -> UnderlayResult<()> {
+        match self
+            .rollback_after_endpoint_failure(client, device, context, journal_record)
+            .await
+        {
+            Ok(()) => Err(primary),
+            Err(rollback_err) => Err(with_rollback_failure_context(primary, rollback_err)),
         }
     }
 
@@ -701,5 +764,46 @@ impl ApplyCoordinator {
             retryable: false,
             errors: Vec::new(),
         })
+    }
+}
+
+fn with_rollback_failure_context(
+    primary: UnderlayError,
+    rollback_err: UnderlayError,
+) -> UnderlayError {
+    let (rollback_code, rollback_message) = journal_error_fields(&rollback_err);
+    let secondary = AdapterErrorDetail {
+        code: rollback_code.clone(),
+        message: format!("rollback after endpoint failure also failed: {rollback_message}"),
+    };
+
+    match primary {
+        UnderlayError::AdapterOperation {
+            code,
+            message,
+            retryable,
+            mut errors,
+        } => {
+            errors.push(secondary);
+            UnderlayError::AdapterOperation {
+                code,
+                message: format!(
+                    "{message}; rollback after endpoint failure also failed: {rollback_code}: {rollback_message}"
+                ),
+                retryable,
+                errors,
+            }
+        }
+        other => {
+            let (code, message) = journal_error_fields(&other);
+            UnderlayError::AdapterOperation {
+                code,
+                message: format!(
+                    "{message}; rollback after endpoint failure also failed: {rollback_code}: {rollback_message}"
+                ),
+                retryable: false,
+                errors: vec![secondary],
+            }
+        }
     }
 }

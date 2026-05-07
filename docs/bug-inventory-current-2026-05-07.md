@@ -243,3 +243,28 @@
 - Python adapter gRPC TLS/mTLS 尚未实现；跨主机部署仍需外部隧道/sidecar 或后续 TLS 配置。
 - Worker runtime 单 worker 失败隔离、GC 单文件错误隔离、drift auditor 单设备错误隔离尚未实现。
 - Product API 动作级 RBAC、顶层 `PartialSuccess` 语义、真实设备 parser/renderer 验证仍为后续项。
+
+## 2026-05-07 follow-up status update
+
+This section supersedes earlier "working-tree / pending CI" wording for this branch.
+
+### Fixed and CI-verified
+
+- Batch A transaction correctness fixes passed GitHub Actions on branch `codex/fix-transaction-correctness-may-bugs`.
+- Active-passive HA minimal code boundary passed GitHub Actions: `ActiveLeaseGuard` prevents double-active service entry, and `AriaUnderlayService::activate_active_passive()` acquires the lease and runs `recover_pending_transactions()` before returning the active wrapper.
+- Active-passive HA runbook was added at `docs/runbooks/active-passive-ha.md`.
+
+### Fixed in current working tree, pending CI
+
+- Rollback cleanup no longer replaces the original endpoint error when rollback itself fails. The original prepare/commit/verify/final-confirm error stays primary, and rollback failure is appended as secondary diagnostic context while the transaction remains `InDoubt`.
+- Multi-device mixed outcomes now aggregate as `ApplyStatus::PartialSuccess` when at least one device succeeds or no-ops and another device fails or rolls back.
+
+### Still open or intentionally bounded
+
+- `JsonFileTxJournalStore` still has only in-process per-tx mutexes. Cross-process safety is provided by the active-passive service lease, not by the journal store itself.
+- `EndpointLockTable` remains process-local. Cross-node mutual exclusion depends on active-passive lease/fencing; active-active is not supported.
+- Multi-device apply is still not an atomic cross-device transaction. Each endpoint has its own transaction and journal.
+- Python adapter gRPC TLS/mTLS is not implemented in-repo. Current deployment guidance remains loopback adapter binding or an external tunnel/sidecar.
+- Product API action-level RBAC remains open.
+- Worker runtime single-worker failure isolation, journal GC single-file failure isolation, and drift auditor per-device failure isolation remain open.
+- `_persist_id_already_consumed` remains a string-based compatibility fallback rather than a protocol-level verdict.

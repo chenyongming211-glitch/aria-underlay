@@ -200,6 +200,59 @@ async fn rollback_rpc_is_attempted_even_when_rolling_back_journal_write_fails() 
 }
 
 #[tokio::test]
+async fn rollback_failure_preserves_prepare_failure_as_primary_error() {
+    let endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-mgmt", 100)),
+        prepare_result: failed_result("PREPARE_FAILED"),
+        rollback_result: failed_result("ROLLBACK_FAILED"),
+        ..Default::default()
+    })
+    .await;
+    let inventory = inventory_with_endpoint_at(
+        "stack-mgmt",
+        DeviceLifecycleState::Ready,
+        endpoint,
+    );
+    let journal = Arc::new(InMemoryTxJournalStore::default());
+    let service = AriaUnderlayService::new_with_journal(inventory, journal.clone());
+
+    let response = service
+        .apply_domain_intent(apply_request_with_vlan(200, DriftPolicy::ReportOnly))
+        .await
+        .expect("apply should return per-device rollback failure context");
+
+    assert_eq!(response.status, ApplyStatus::InDoubt);
+    assert_eq!(
+        response.device_results[0].error_code.as_deref(),
+        Some("PREPARE_FAILED")
+    );
+    let message = response.device_results[0]
+        .error_message
+        .as_deref()
+        .expect("error message should include rollback context");
+    assert!(message.contains("rollback after endpoint failure also failed"));
+    assert!(message.contains("ROLLBACK_FAILED"));
+
+    let tx_id = response.device_results[0]
+        .tx_id
+        .as_deref()
+        .expect("in-doubt transaction should include tx_id");
+    let record = journal
+        .get(tx_id)
+        .expect("journal get should succeed")
+        .expect("journal record should exist");
+    assert_eq!(record.phase, TxPhase::InDoubt);
+    assert_eq!(record.error_code.as_deref(), Some("PREPARE_FAILED"));
+    assert!(
+        record
+            .error_history
+            .iter()
+            .any(|event| event.code == "ROLLBACK_FAILED"),
+        "journal should retain rollback failure as secondary history"
+    );
+}
+
+#[tokio::test]
 async fn confirmed_commit_timeout_is_taken_from_service_configuration() {
     let commit_timeouts = Arc::new(Mutex::new(Vec::new()));
     let endpoint = start_test_adapter(TestAdapter {

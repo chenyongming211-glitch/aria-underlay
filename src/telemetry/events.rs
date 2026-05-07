@@ -381,7 +381,7 @@ fn tx_phase_for_apply_status(status: &ApplyStatus) -> Option<TxPhase> {
         ApplyStatus::Success | ApplyStatus::SuccessWithWarning => Some(TxPhase::Committed),
         ApplyStatus::RolledBack => Some(TxPhase::RolledBack),
         ApplyStatus::InDoubt => Some(TxPhase::InDoubt),
-        ApplyStatus::Failed => Some(TxPhase::Failed),
+        ApplyStatus::PartialSuccess | ApplyStatus::Failed => Some(TxPhase::Failed),
         ApplyStatus::NoOpSuccess => None,
     }
 }
@@ -391,6 +391,7 @@ fn apply_result_name(status: &ApplyStatus) -> &'static str {
         ApplyStatus::NoOpSuccess => "no_op_success",
         ApplyStatus::Success => "success",
         ApplyStatus::SuccessWithWarning => "success_with_warning",
+        ApplyStatus::PartialSuccess => "partial_success",
         ApplyStatus::Failed => "failed",
         ApplyStatus::RolledBack => "rolled_back",
         ApplyStatus::InDoubt => "in_doubt",
