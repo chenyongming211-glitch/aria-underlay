@@ -190,9 +190,7 @@ def test_validator_manifest_outputs_batch_summary_for_successful_samples(
     assert report["samples"][0]["summary"]["vendor"] == "huawei"
     assert report["samples"][0]["summary"]["vlan_count"] == 1
     assert report["samples"][0]["summary"]["interface_count"] == 1
-    assert report["samples"][1]["summary"]["profile_name"] == (
-        "comware7-state-fixture"
-    )
+    assert report["samples"][1]["summary"]["profile_name"] == "comware7-state-real"
 
 
 def test_validator_manifest_resolves_xml_paths_relative_to_manifest(tmp_path, capsys):
