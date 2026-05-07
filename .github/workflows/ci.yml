@@ -48,6 +48,16 @@ jobs:
             exit "$status"
           fi
 
+      - name: Build real device apply probe
+        run: cargo build --release --example real_domain_apply_probe
+
+      - name: Upload real device apply probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-domain-apply-probe-linux-x86_64
+          path: target/release/examples/real_domain_apply_probe
+          if-no-files-found: error
+
   python:
     name: Python Adapter
     runs-on: ubuntu-latest
