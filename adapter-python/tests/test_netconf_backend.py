@@ -843,6 +843,28 @@ def test_netconf_driver_adapter_recovery_treats_consumed_persist_id_as_committed
     assert backend.rollback_calls == []
 
 
+def test_netconf_driver_adapter_recovery_uses_structured_consumed_persist_id_code():
+    backend = _RecordingRecoveryBackend(
+        final_confirm_error=AdapterError(
+            code="NETCONF_PERSIST_ID_ALREADY_CONSUMED",
+            message="confirmed commit persist-id is no longer pending",
+            retryable=False,
+        )
+    )
+    driver = NetconfBackedDriver(backend)
+
+    response = driver.recover(
+        tx_id="tx-1",
+        device=pb2.DeviceRef(device_id="leaf-a"),
+        strategy=pb2.TRANSACTION_STRATEGY_CONFIRMED_COMMIT,
+        action=pb2.RECOVERY_ACTION_ADAPTER_RECOVER,
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_COMMITTED
+    assert backend.final_confirm_calls == ["tx-1"]
+    assert backend.rollback_calls == []
+
+
 def test_ncclient_authorization_error_is_not_authentication_failure():
     error = _adapter_error_from_ncclient_exception(RuntimeError("authorization denied"))
 

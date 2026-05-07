@@ -522,6 +522,18 @@ def _unexpected_error(exc: Exception) -> AdapterError:
 
 
 def _persist_id_already_consumed(error: AdapterError) -> bool:
+    if error.code in {
+        "NETCONF_PERSIST_ID_ALREADY_CONSUMED",
+        "NETCONF_PERSIST_ID_NOT_FOUND",
+    }:
+        return True
+    if error.normalized_error in {
+        "persist-id already consumed",
+        "persist-id not found",
+        "unknown persist-id",
+    }:
+        return True
+
     text = " ".join(
         part
         for part in [
