@@ -7,6 +7,9 @@ on:
     branches: ["main", "master"]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   rust:
     name: Rust
@@ -57,6 +60,24 @@ jobs:
           name: real-domain-apply-probe-linux-x86_64
           path: target/release/examples/real_domain_apply_probe
           if-no-files-found: error
+
+      - name: Publish real device apply probe branch
+        if: github.ref == 'refs/heads/codex/fix-transaction-correctness-may-bugs'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/aria-probe-publish
+          cp target/release/examples/real_domain_apply_probe /tmp/aria-probe-publish/
+          chmod +x /tmp/aria-probe-publish/real_domain_apply_probe
+          cd /tmp/aria-probe-publish
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b codex/probe-artifact
+          git add real_domain_apply_probe
+          git commit -m "build: real domain apply probe [skip ci]"
+          git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" codex/probe-artifact
 
   python:
     name: Python Adapter
