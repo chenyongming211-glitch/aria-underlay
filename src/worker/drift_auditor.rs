@@ -31,18 +31,28 @@ pub trait DriftObservationSource: std::fmt::Debug + Send + Sync {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DriftAuditRunSummary {
     pub audited_devices: usize,
+    pub failed_devices: Vec<DeviceId>,
     pub drifted_devices: Vec<DeviceId>,
     pub reports: Vec<DriftReport>,
 }
 
 impl DriftAuditRunSummary {
     fn from_reports(audited_devices: usize, reports: Vec<DriftReport>) -> Self {
+        Self::from_reports_and_failures(audited_devices, reports, Vec::new())
+    }
+
+    fn from_reports_and_failures(
+        audited_devices: usize,
+        reports: Vec<DriftReport>,
+        failed_devices: Vec<DeviceId>,
+    ) -> Self {
         let drifted_devices = reports
             .iter()
             .map(|report| report.device_id.clone())
             .collect::<Vec<_>>();
         Self {
             audited_devices,
+            failed_devices,
             drifted_devices,
             reports,
         }
@@ -108,18 +118,25 @@ impl DriftAuditor {
         {
             let expected_states = expected_store.list()?;
             let mut reports = Vec::new();
+            let mut failed_devices = Vec::new();
             for expected in &expected_states {
-                let observed = observed_source
-                    .get_observed_state(&expected.device_id)
-                    .await?;
+                let observed = match observed_source.get_observed_state(&expected.device_id).await
+                {
+                    Ok(observed) => observed,
+                    Err(_) => {
+                        failed_devices.push(expected.device_id.clone());
+                        continue;
+                    }
+                };
                 let report = detect_drift(expected, &observed);
                 if report.drift_detected {
                     reports.push(report);
                 }
             }
-            return Ok(DriftAuditRunSummary::from_reports(
+            return Ok(DriftAuditRunSummary::from_reports_and_failures(
                 expected_states.len(),
                 reports,
+                failed_devices,
             ));
         }
 

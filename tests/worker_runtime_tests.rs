@@ -3,7 +3,7 @@ use std::fs;
 use std::sync::Arc;
 
 use aria_underlay::model::{DeviceId, InterfaceConfig, VlanConfig};
-use aria_underlay::state::DeviceShadowState;
+use aria_underlay::state::{DeviceShadowState, ShadowStateStore};
 use aria_underlay::telemetry::{
     InMemoryEventSink, InMemoryOperationAlertCheckpointStore, InMemoryOperationAlertSink,
     InMemoryOperationSummaryStore, OperationAlertSeverity, UnderlayEvent, UnderlayEventKind,
@@ -12,6 +12,7 @@ use aria_underlay::tx::recovery::RecoveryReport;
 use aria_underlay::tx::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase};
 use aria_underlay::worker::drift_auditor::{
     DriftAuditSchedule, DriftAuditSnapshot, DriftAuditWorker, DriftAuditor,
+    DriftObservationSource,
 };
 use aria_underlay::worker::gc::{
     JournalGc, JournalGcReport, JournalGcSchedule, JournalGcWorker, RetentionPolicy,
@@ -20,6 +21,8 @@ use aria_underlay::worker::operation_alerts::{
     OperationAlertDeliverySchedule, OperationAlertDeliveryWorker,
 };
 use aria_underlay::worker::runtime::UnderlayWorkerRuntime;
+use aria_underlay::{UnderlayError, UnderlayResult};
+use async_trait::async_trait;
 
 #[tokio::test]
 async fn worker_runtime_runs_gc_and_drift_workers_under_one_shutdown() {
@@ -246,6 +249,109 @@ async fn worker_runtime_rejects_invalid_schedule_before_spawning_workers() {
     fs::remove_dir_all(temp).ok();
 }
 
+#[tokio::test]
+async fn worker_runtime_keeps_other_workers_running_when_one_worker_fails() {
+    let temp = temp_test_dir("runtime-isolates-worker-error");
+    let failing_journal_root = temp.join("journal-root-is-file");
+    fs::create_dir_all(&temp).expect("temp root should be created");
+    fs::write(&failing_journal_root, b"not a directory")
+        .expect("failing journal root marker should be written");
+
+    let sink = Arc::new(InMemoryEventSink::default());
+    let gc_worker = JournalGcWorker::new(
+        JournalGc::new(&failing_journal_root),
+        RetentionPolicy::default(),
+        sink.clone(),
+    );
+    let drift_worker = DriftAuditWorker::new(
+        DriftAuditor::new(vec![DriftAuditSnapshot {
+            expected: shadow_state("leaf-a", vec![vlan(100, "prod")], vec![]),
+            observed: shadow_state("leaf-a", vec![], vec![]),
+        }]),
+        sink,
+    );
+
+    let report = UnderlayWorkerRuntime::new()
+        .with_journal_gc(
+            gc_worker,
+            JournalGcSchedule {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+        )
+        .with_drift_audit(
+            drift_worker,
+            DriftAuditSchedule {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+        )
+        .run_until_shutdown(async {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        })
+        .await
+        .expect("runtime should isolate worker errors");
+
+    assert_eq!(report.worker_errors.len(), 1);
+    assert!(report.worker_errors[0].contains("journal_gc"));
+    assert_eq!(
+        report
+            .drift_audit
+            .expect("healthy drift worker should still report")
+            .runs,
+        1
+    );
+
+    fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn journal_gc_skips_malformed_journal_file_and_continues() {
+    let temp = temp_test_dir("gc-skips-malformed-journal");
+    let journal_root = temp.join("journal");
+    let journal = JsonFileTxJournalStore::new(&journal_root);
+    journal
+        .put(&journal_record("tx-old", TxPhase::Committed, 100))
+        .expect("old terminal journal should be stored");
+    fs::write(journal_root.join("bad.json"), b"{not-json")
+        .expect("malformed journal file should be written");
+
+    let report = JournalGc::new(&journal_root)
+        .with_now_unix_secs(100 + 31 * 24 * 60 * 60)
+        .run_once(RetentionPolicy::default())
+        .await
+        .expect("GC should skip one malformed file and continue");
+
+    assert_eq!(report.journals_deleted, 1);
+    assert_eq!(report.journal_deleted_tx_ids, vec!["tx-old".to_string()]);
+    assert_eq!(report.journals_failed, 1);
+    assert_eq!(report.failed_journal_refs, vec!["bad.json".to_string()]);
+
+    fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn drift_audit_skips_failed_device_observation_and_continues() {
+    let expected_store = Arc::new(aria_underlay::state::InMemoryShadowStateStore::default());
+    expected_store
+        .put(shadow_state("leaf-a", vec![vlan(100, "prod")], vec![]))
+        .expect("leaf-a expected state should be stored");
+    expected_store
+        .put(shadow_state("leaf-b", vec![vlan(200, "prod")], vec![]))
+        .expect("leaf-b expected state should be stored");
+    let observed_source = Arc::new(PartiallyFailingObservationSource);
+    let auditor = DriftAuditor::from_source(expected_store, observed_source);
+
+    let summary = auditor
+        .run_once_with_summary()
+        .await
+        .expect("drift audit should continue after one device observation error");
+
+    assert_eq!(summary.audited_devices, 2);
+    assert_eq!(summary.failed_devices, vec![DeviceId("leaf-b".into())]);
+    assert_eq!(summary.drifted_devices, vec![DeviceId("leaf-a".into())]);
+}
+
 fn recovery_event(request_id: &str, in_doubt: usize) -> UnderlayEvent {
     UnderlayEvent::recovery_completed(
         request_id,
@@ -258,6 +364,21 @@ fn recovery_event(request_id: &str, in_doubt: usize) -> UnderlayEvent {
             decisions: Vec::new(),
         },
     )
+}
+
+#[derive(Debug)]
+struct PartiallyFailingObservationSource;
+
+#[async_trait]
+impl DriftObservationSource for PartiallyFailingObservationSource {
+    async fn get_observed_state(&self, device_id: &DeviceId) -> UnderlayResult<DeviceShadowState> {
+        if device_id.0 == "leaf-b" {
+            return Err(UnderlayError::AdapterTransport(
+                "leaf-b observation failed".into(),
+            ));
+        }
+        Ok(shadow_state(&device_id.0, vec![], vec![]))
+    }
 }
 
 fn journal_record(tx_id: &str, phase: TxPhase, updated_at_unix_secs: u64) -> TxJournalRecord {

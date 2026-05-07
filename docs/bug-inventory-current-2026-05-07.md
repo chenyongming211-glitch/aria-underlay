@@ -259,6 +259,9 @@ This section supersedes earlier "working-tree / pending CI" wording for this bra
 - Rollback cleanup no longer replaces the original endpoint error when rollback itself fails. The original prepare/commit/verify/final-confirm error stays primary, and rollback failure is appended as secondary diagnostic context while the transaction remains `InDoubt`.
 - Multi-device mixed outcomes now aggregate as `ApplyStatus::PartialSuccess` when at least one device succeeds or no-ops and another device fails or rolls back.
 - NETCONF confirmed-commit recovery now recognizes structured consumed-persist-id error codes before falling back to vendor string matching.
+- Worker runtime now records a single worker's returned error in `worker_errors` instead of stopping all other workers.
+- Journal GC now skips malformed/unreadable individual journal files and records `journals_failed` / `failed_journal_refs` while continuing cleanup.
+- Drift audit from stores now records per-device observation failures in `failed_devices` and continues auditing other devices.
 
 ### Still open or intentionally bounded
 
@@ -267,5 +270,5 @@ This section supersedes earlier "working-tree / pending CI" wording for this bra
 - Multi-device apply is still not an atomic cross-device transaction. Each endpoint has its own transaction and journal.
 - Python adapter gRPC TLS/mTLS is not implemented in-repo. Current deployment guidance remains loopback adapter binding or an external tunnel/sidecar.
 - Product API action-level RBAC remains open.
-- Worker runtime single-worker failure isolation, journal GC single-file failure isolation, and drift auditor per-device failure isolation remain open.
+- Worker runtime join/panic failures can still terminate the runtime, but normal worker-returned errors are now isolated. Journal GC still treats directory-level failures as global. Drift audit still treats expected-store listing failures as global.
 - `_persist_id_already_consumed` still keeps vendor string matching as a compatibility fallback, but structured adapter error codes are now preferred.

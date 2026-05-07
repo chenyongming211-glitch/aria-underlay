@@ -40,6 +40,7 @@ pub struct UnderlayWorkerRuntimeReport {
     pub operation_alert_delivery: Option<OperationAlertDeliverySchedulerReport>,
     pub operation_summary_compaction: Option<OperationSummaryCompactionSchedulerReport>,
     pub operation_audit_compaction: Option<OperationAuditCompactionSchedulerReport>,
+    pub worker_errors: Vec<String>,
 }
 
 enum RuntimeWorkerOutcome {
@@ -177,7 +178,7 @@ impl UnderlayWorkerRuntime {
                     let _ = shutdown_tx.send(true);
                     while let Some(joined) = tasks.join_next().await {
                         let outcome = joined.map_err(runtime_join_error)?;
-                        record_worker_outcome(outcome, &mut report)?;
+                        record_worker_outcome(outcome, &mut report);
                     }
                     return Ok(report);
                 }
@@ -187,11 +188,7 @@ impl UnderlayWorkerRuntime {
                     };
                     match joined {
                         Ok(outcome) => {
-                            if let Err(err) = record_worker_outcome(outcome, &mut report) {
-                                let _ = shutdown_tx.send(true);
-                                drain_workers(&mut tasks).await;
-                                return Err(err);
-                            }
+                            record_worker_outcome(outcome, &mut report);
                             if tasks.is_empty() {
                                 return Ok(report);
                             }
@@ -250,25 +247,37 @@ async fn wait_for_shutdown(mut shutdown_rx: watch::Receiver<bool>) {
 fn record_worker_outcome(
     outcome: RuntimeWorkerOutcome,
     report: &mut UnderlayWorkerRuntimeReport,
-) -> UnderlayResult<()> {
+) {
     match outcome {
-        RuntimeWorkerOutcome::JournalGc(worker_report) => {
-            report.journal_gc = Some(worker_report?);
-        }
-        RuntimeWorkerOutcome::DriftAudit(worker_report) => {
-            report.drift_audit = Some(worker_report?);
-        }
-        RuntimeWorkerOutcome::OperationAlertDelivery(worker_report) => {
-            report.operation_alert_delivery = Some(worker_report?);
-        }
-        RuntimeWorkerOutcome::OperationSummaryCompaction(worker_report) => {
-            report.operation_summary_compaction = Some(worker_report?);
-        }
-        RuntimeWorkerOutcome::OperationAuditCompaction(worker_report) => {
-            report.operation_audit_compaction = Some(worker_report?);
-        }
+        RuntimeWorkerOutcome::JournalGc(worker_report) => match worker_report {
+            Ok(worker_report) => report.journal_gc = Some(worker_report),
+            Err(err) => record_worker_error(report, "journal_gc", err),
+        },
+        RuntimeWorkerOutcome::DriftAudit(worker_report) => match worker_report {
+            Ok(worker_report) => report.drift_audit = Some(worker_report),
+            Err(err) => record_worker_error(report, "drift_audit", err),
+        },
+        RuntimeWorkerOutcome::OperationAlertDelivery(worker_report) => match worker_report {
+            Ok(worker_report) => report.operation_alert_delivery = Some(worker_report),
+            Err(err) => record_worker_error(report, "operation_alert_delivery", err),
+        },
+        RuntimeWorkerOutcome::OperationSummaryCompaction(worker_report) => match worker_report {
+            Ok(worker_report) => report.operation_summary_compaction = Some(worker_report),
+            Err(err) => record_worker_error(report, "operation_summary_compaction", err),
+        },
+        RuntimeWorkerOutcome::OperationAuditCompaction(worker_report) => match worker_report {
+            Ok(worker_report) => report.operation_audit_compaction = Some(worker_report),
+            Err(err) => record_worker_error(report, "operation_audit_compaction", err),
+        },
     }
-    Ok(())
+}
+
+fn record_worker_error(
+    report: &mut UnderlayWorkerRuntimeReport,
+    worker_name: &str,
+    err: UnderlayError,
+) {
+    report.worker_errors.push(format!("{worker_name}: {err}"));
 }
 
 async fn drain_workers(tasks: &mut JoinSet<RuntimeWorkerOutcome>) {

@@ -456,8 +456,10 @@ fn metrics_record_operator_events() {
         &JournalGcReport {
             journals_deleted: 1,
             journals_retained: 2,
+            journals_failed: 0,
             artifacts_deleted: 1,
             journal_deleted_tx_ids: vec!["tx-old".into()],
+            failed_journal_refs: Vec::new(),
             artifact_deleted_refs: vec!["leaf-a/tx-old".into()],
         },
     );
@@ -689,8 +691,10 @@ fn json_file_operation_summary_store_persists_operator_view_across_restarts() {
         &JournalGcReport {
             journals_deleted: 1,
             journals_retained: 2,
+            journals_failed: 0,
             artifacts_deleted: 0,
             journal_deleted_tx_ids: vec!["tx-old".into()],
+            failed_journal_refs: Vec::new(),
             artifact_deleted_refs: Vec::new(),
         },
     );

@@ -55,8 +55,10 @@ pub struct JournalGc {
 pub struct JournalGcReport {
     pub journals_deleted: usize,
     pub journals_retained: usize,
+    pub journals_failed: usize,
     pub artifacts_deleted: usize,
     pub journal_deleted_tx_ids: Vec<String>,
+    pub failed_journal_refs: Vec<String>,
     pub artifact_deleted_refs: Vec<String>,
 }
 
@@ -67,6 +69,7 @@ impl JournalGcReport {
 
     fn sort_details(&mut self) {
         self.journal_deleted_tx_ids.sort();
+        self.failed_journal_refs.sort();
         self.artifact_deleted_refs.sort();
     }
 }
@@ -210,7 +213,14 @@ impl JournalGc {
                 continue;
             }
 
-            let record = read_journal_record(&path)?;
+            let record = match read_journal_record(&path) {
+                Ok(record) => record,
+                Err(_) => {
+                    report.journals_failed += 1;
+                    report.failed_journal_refs.push(path_ref(&path));
+                    continue;
+                }
+            };
             if !is_terminal_phase(&record.phase) {
                 report.journals_retained += 1;
                 continue;
@@ -351,6 +361,13 @@ fn read_journal_record(path: &Path) -> UnderlayResult<TxJournalRecord> {
     let payload = fs::read(path).map_err(gc_io_error)?;
     serde_json::from_slice(&payload)
         .map_err(|err| UnderlayError::Internal(format!("parse tx journal {:?}: {err}", path)))
+}
+
+fn path_ref(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 fn is_terminal_phase(phase: &TxPhase) -> bool {

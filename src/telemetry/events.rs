@@ -118,6 +118,10 @@ impl UnderlayEvent {
             report.journals_retained.to_string(),
         );
         fields.insert(
+            "journals_failed".into(),
+            report.journals_failed.to_string(),
+        );
+        fields.insert(
             "artifacts_deleted".into(),
             report.artifacts_deleted.to_string(),
         );
@@ -132,6 +136,12 @@ impl UnderlayEvent {
             fields.insert(
                 "artifact_deleted_refs".into(),
                 report.artifact_deleted_refs.join(","),
+            );
+        }
+        if !report.failed_journal_refs.is_empty() {
+            fields.insert(
+                "failed_journal_refs".into(),
+                report.failed_journal_refs.join(","),
             );
         }
 

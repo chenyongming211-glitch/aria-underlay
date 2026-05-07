@@ -20,8 +20,10 @@ fn journal_gc_completed_event_includes_cleanup_counts() {
     let report = JournalGcReport {
         journals_deleted: 2,
         journals_retained: 3,
+        journals_failed: 1,
         artifacts_deleted: 4,
         journal_deleted_tx_ids: vec!["tx-old".into()],
+        failed_journal_refs: vec!["bad.json".into()],
         artifact_deleted_refs: vec!["leaf-a/tx-old".into()],
     };
 
@@ -37,6 +39,10 @@ fn journal_gc_completed_event_includes_cleanup_counts() {
     assert_eq!(
         event.fields.get("journals_retained").map(String::as_str),
         Some("3")
+    );
+    assert_eq!(
+        event.fields.get("journals_failed").map(String::as_str),
+        Some("1")
     );
     assert_eq!(
         event.fields.get("artifacts_deleted").map(String::as_str),
@@ -59,6 +65,10 @@ fn journal_gc_completed_event_includes_cleanup_counts() {
             .get("artifact_deleted_refs")
             .map(String::as_str),
         Some("leaf-a/tx-old")
+    );
+    assert_eq!(
+        event.fields.get("failed_journal_refs").map(String::as_str),
+        Some("bad.json")
     );
 }
 
