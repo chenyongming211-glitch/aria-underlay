@@ -62,6 +62,7 @@ ROLLBACK_ON_ERROR = "urn:ietf:params:netconf:capability:rollback-on-error:1.0"
 WRITABLE_RUNNING = "urn:ietf:params:netconf:capability:writable-running:1.0"
 TRANSACTION_STRATEGY_CONFIRMED_COMMIT = 1
 TRANSACTION_STRATEGY_CANDIDATE_COMMIT = 2
+TRANSACTION_STRATEGY_RUNNING_ROLLBACK_ON_ERROR = 3
 
 
 class CandidateConfigRenderer(Protocol):
@@ -217,6 +218,27 @@ class NcclientNetconfBackend:
 
         try:
             with self._connect() as session:
+                capability = capability_from_raw(
+                    str(capability) for capability in session.server_capabilities
+                )
+                if (
+                    not capability.supports_candidate
+                    and capability.supports_writable_running
+                    and capability.supports_rollback_on_error
+                ):
+                    self._edit_running_with_rollback_on_error(session, desired_state)
+                    return
+                if not capability.supports_candidate:
+                    raise AdapterError(
+                        code="NETCONF_PREPARE_STRATEGY_UNSUPPORTED",
+                        message="NETCONF prepare requires candidate or writable-running rollback-on-error",
+                        normalized_error="prepare strategy unsupported",
+                        raw_error_summary=(
+                            "device lacks candidate and rollback-on-error writable-running "
+                            "capabilities"
+                        ),
+                        retryable=False,
+                    )
                 self._lock_candidate(session)
                 original_error = None
                 candidate_changed = False
@@ -317,6 +339,24 @@ class NcclientNetconfBackend:
                 retryable=False,
             ) from exc
 
+    def _edit_running_with_rollback_on_error(self, session, desired_state) -> None:
+        config_xml = self._render_candidate_config(desired_state)
+
+        try:
+            session.edit_config(
+                target="running",
+                config=config_xml,
+                default_operation="merge",
+                error_option="rollback-on-error",
+            )
+        except Exception as exc:
+            raise _adapter_operation_error(
+                code="NETCONF_EDIT_RUNNING_FAILED",
+                message="NETCONF edit-config running failed",
+                exc=exc,
+                retryable=False,
+            ) from exc
+
     def _render_candidate_config(self, desired_state) -> str:
         if self.config_renderer is None:
             raise AdapterError(
@@ -403,6 +443,9 @@ class NcclientNetconfBackend:
                     exc=exc,
                     retryable=True,
                 ) from exc
+            return
+
+        if strategy == TRANSACTION_STRATEGY_RUNNING_ROLLBACK_ON_ERROR:
             return
 
         if strategy != TRANSACTION_STRATEGY_CANDIDATE_COMMIT:

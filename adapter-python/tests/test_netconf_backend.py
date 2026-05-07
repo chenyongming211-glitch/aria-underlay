@@ -13,6 +13,7 @@ from aria_underlay_adapter.backends.netconf import (
     ROLLBACK_ON_ERROR,
     TRANSACTION_STRATEGY_CANDIDATE_COMMIT,
     TRANSACTION_STRATEGY_CONFIRMED_COMMIT,
+    TRANSACTION_STRATEGY_RUNNING_ROLLBACK_ON_ERROR,
     VALIDATE_10,
     VALIDATE_11,
     WRITABLE_RUNNING,
@@ -690,6 +691,41 @@ def test_prepare_candidate_edits_and_validates_when_renderer_is_configured():
     ]
 
 
+def test_prepare_candidate_edits_running_for_rollback_on_error_devices():
+    session = _RecordingSession(
+        server_capabilities=[BASE_10, WRITABLE_RUNNING, ROLLBACK_ON_ERROR]
+    )
+    backend = _BackendWithSession(session, config_renderer=_StaticRenderer("<config/>"))
+
+    backend.prepare_candidate(desired_state=object())
+
+    assert session.calls == [
+        (
+            "edit_config",
+            {
+                "target": "running",
+                "config": "<config/>",
+                "default_operation": "merge",
+                "error_option": "rollback-on-error",
+            },
+        )
+    ]
+
+
+def test_prepare_candidate_rejects_devices_without_transactional_edit_target():
+    session = _RecordingSession(server_capabilities=[BASE_10, WRITABLE_RUNNING])
+    backend = _BackendWithSession(session, config_renderer=_StaticRenderer("<config/>"))
+
+    try:
+        backend.prepare_candidate(desired_state=object())
+    except AdapterError as error:
+        assert error.code == "NETCONF_PREPARE_STRATEGY_UNSUPPORTED"
+    else:
+        raise AssertionError("prepare must fail closed without candidate or rollback-on-error")
+
+    assert session.calls == []
+
+
 def test_prepare_candidate_rejects_skeleton_vendor_renderer_before_edit_config():
     session = _RecordingSession()
     backend = _BackendWithSession(session, config_renderer=HuaweiRenderer())
@@ -905,6 +941,18 @@ def test_commit_candidate_commits_for_candidate_strategy():
     )
 
     assert session.calls == [("commit", {})]
+
+
+def test_commit_candidate_noops_for_running_rollback_on_error_strategy():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    backend.commit_candidate(
+        strategy=TRANSACTION_STRATEGY_RUNNING_ROLLBACK_ON_ERROR,
+        tx_id="tx-1",
+    )
+
+    assert session.calls == []
 
 
 def test_commit_candidate_starts_confirmed_commit_with_persist_token():
@@ -1367,6 +1415,7 @@ class _RecordingSession:
         fail_discard=False,
         fail_unlock=False,
         reply="<data/>",
+        server_capabilities=None,
     ):
         self.calls = []
         self.fail_lock = fail_lock
@@ -1374,7 +1423,7 @@ class _RecordingSession:
         self.fail_discard = fail_discard
         self.fail_unlock = fail_unlock
         self.reply = reply
-        self.server_capabilities = [BASE_10, CANDIDATE]
+        self.server_capabilities = server_capabilities or [BASE_10, CANDIDATE]
 
     def __enter__(self):
         return self
