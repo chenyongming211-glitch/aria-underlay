@@ -205,7 +205,7 @@ def test_service_recover_requires_explicit_recovery_action():
     assert response.result.errors[0].code == "RECOVERY_ACTION_UNSUPPORTED"
 
 
-def test_service_recover_cancels_pending_confirmed_commit():
+def test_service_recover_confirms_pending_confirmed_commit():
     service = UnderlayAdapterService(_Registry(FakeDriver(profile="confirmed")))
 
     prepare = service.Prepare(
@@ -242,7 +242,7 @@ def test_service_recover_cancels_pending_confirmed_commit():
         context=None,
     )
 
-    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_ROLLED_BACK
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_COMMITTED
     assert response.result.changed is True
     assert not response.result.errors
 

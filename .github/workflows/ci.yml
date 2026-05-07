@@ -34,7 +34,19 @@ jobs:
           fi
 
       - name: Cargo test
-        run: cargo test
+        run: |
+          set +e
+          cargo test 2>&1 | tee /tmp/cargo-test.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          text = Path("/tmp/cargo-test.log").read_text(errors="replace")[-6000:]
+          text = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=cargo test failed::{text}")
+          PY
+            exit "$status"
+          fi
 
   python:
     name: Python Adapter
