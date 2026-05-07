@@ -84,6 +84,8 @@ def _parse_real_interfaces(root, vlan_node, *, model_hint: str, scope) -> list[d
 
     for interface in _children(_first_child(vlan_node, "AccessInterfaces"), "Interface"):
         ifindex = _parse_ifindex(interface)
+        if not _scope_includes_ifindex(scope, scope_names, ifindex):
+            continue
         name = _interface_name(ifindex, model_hint=model_hint, scope_names=scope_names)
         if name in seen:
             raise _parse_error(f"duplicate interface {name}")
@@ -106,6 +108,8 @@ def _parse_real_interfaces(root, vlan_node, *, model_hint: str, scope) -> list[d
 
     for interface in _children(_first_child(vlan_node, "TrunkInterfaces"), "Interface"):
         ifindex = _parse_ifindex(interface)
+        if not _scope_includes_ifindex(scope, scope_names, ifindex):
+            continue
         name = _interface_name(ifindex, model_hint=model_hint, scope_names=scope_names)
         if name in seen:
             raise _parse_error(f"duplicate interface {name}")
@@ -192,6 +196,14 @@ def _scope_names_by_ifindex(scope) -> dict[int, str]:
         if match:
             names[int(match.group(1))] = text
     return names
+
+
+def _scope_includes_ifindex(scope, scope_names: dict[int, str], ifindex: int) -> bool:
+    if scope is None or getattr(scope, "full", False):
+        return True
+    if not getattr(scope, "interface_names", []):
+        return False
+    return ifindex in scope_names
 
 
 def _interface_name(ifindex: int, *, model_hint: str, scope_names: dict[int, str]) -> str:

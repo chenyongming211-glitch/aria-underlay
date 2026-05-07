@@ -145,6 +145,47 @@ def test_h3c_parser_reads_real_comware_vlan_shape_with_model_hint():
     ]
 
 
+def test_h3c_scoped_parser_skips_unrequested_ifindex_without_model_hint():
+    scope = SimpleNamespace(
+        full=False,
+        vlan_ids=[4093],
+        interface_names=["GigabitEthernet1/0/1"],
+    )
+
+    state = H3cStateParser().parse_running(
+        """
+        <data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+          <top xmlns="http://www.h3c.com/netconf/config:1.0">
+            <VLAN>
+              <AccessInterfaces>
+                <Interface>
+                  <IfIndex>1</IfIndex>
+                  <PVID>1</PVID>
+                </Interface>
+                <Interface>
+                  <IfIndex>13</IfIndex>
+                  <PVID>144</PVID>
+                </Interface>
+              </AccessInterfaces>
+              <VLANs>
+                <VLANID><ID>144</ID></VLANID>
+                <VLANID><ID>4093</ID></VLANID>
+              </VLANs>
+            </VLAN>
+          </top>
+        </data>
+        """,
+        scope=scope,
+    )
+
+    assert state["vlans"] == [
+        {"vlan_id": 4093, "name": None, "description": None},
+    ]
+    assert [interface["name"] for interface in state["interfaces"]] == [
+        "GigabitEthernet1/0/1",
+    ]
+
+
 def test_h3c_parser_maps_s6800_physical_ifindex_ranges():
     state = H3cStateParser(model_hint="S6800-54QF").parse_running(
         """
