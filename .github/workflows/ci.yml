@@ -19,7 +19,19 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cargo check
-        run: cargo check --all-targets
+        run: |
+          set +e
+          cargo check --all-targets 2>&1 | tee /tmp/cargo-check.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          text = Path("/tmp/cargo-check.log").read_text(errors="replace")[-6000:]
+          text = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=cargo check failed::{text}")
+          PY
+            exit "$status"
+          fi
 
       - name: Cargo test
         run: cargo test
@@ -46,7 +58,19 @@ jobs:
 
       - name: Python tests
         working-directory: adapter-python
-        run: python -m pytest
+        run: |
+          set +e
+          python -m pytest 2>&1 | tee /tmp/python-pytest.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            python - <<'PY'
+          from pathlib import Path
+          text = Path("/tmp/python-pytest.log").read_text(errors="replace")[-6000:]
+          text = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=pytest failed::{text}")
+          PY
+            exit "$status"
+          fi
 
   sprint0-integration:
     name: Sprint 0 Integration
