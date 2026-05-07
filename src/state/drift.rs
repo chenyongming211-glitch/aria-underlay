@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::engine::normalize::normalize_shadow_state;
 use crate::model::{DeviceId, InterfaceConfig, VlanConfig};
 use crate::state::shadow::DeviceShadowState;
 
@@ -73,6 +74,8 @@ impl DriftReport {
 }
 
 pub fn detect_drift(expected: &DeviceShadowState, observed: &DeviceShadowState) -> DriftReport {
+    let expected = normalize_shadow_state(expected.clone());
+    let observed = normalize_shadow_state(observed.clone());
     let mut findings = Vec::new();
 
     for (vlan_id, expected_vlan) in &expected.vlans {

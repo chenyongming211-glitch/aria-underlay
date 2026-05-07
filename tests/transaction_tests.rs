@@ -275,7 +275,7 @@ fn file_journal_ignores_tmp_crash_residue_after_store_recreation() {
 }
 
 #[test]
-fn file_journal_sanitizes_transaction_id_path() {
+fn file_journal_rejects_invalid_transaction_id_path() {
     let root = temp_journal_dir("sanitize");
     let store = JsonFileTxJournalStore::new(&root);
     let context = TxContext {
@@ -285,10 +285,20 @@ fn file_journal_sanitizes_transaction_id_path() {
     };
     let record = TxJournalRecord::started(&context, vec![DeviceId("leaf-a".into())]);
 
-    store.put(&record).expect("journal put should succeed");
+    let err = store
+        .put(&record)
+        .expect_err("invalid tx_id should be rejected instead of sanitized");
 
-    assert!(root.join("___bad_tx.json").exists());
-    assert!(store.get("../bad/tx").expect("journal get should succeed").is_some());
+    assert!(
+        format!("{err}").contains("invalid for file journal store"),
+        "unexpected tx_id validation error: {err}"
+    );
+    assert!(!root.join("___bad_tx.json").exists());
+    assert!(store
+        .get("../bad/tx")
+        .expect_err("invalid get should fail")
+        .to_string()
+        .contains("invalid"));
 
     std::fs::remove_dir_all(root).ok();
 }

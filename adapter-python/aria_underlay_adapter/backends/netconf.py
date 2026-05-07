@@ -217,18 +217,35 @@ class NcclientNetconfBackend:
         try:
             with self._connect() as session:
                 self._lock_candidate(session)
+                original_error = None
+                candidate_changed = False
+
                 try:
                     self._edit_candidate(session, desired_state)
+                    candidate_changed = True
                     self._validate_candidate(session)
                 except AdapterError as exc:
-                    self._discard_candidate_preserving_error(session, exc)
-                    raise exc
+                    original_error = exc
+                    self._discard_candidate_preserving_error(session, original_error)
                 except Exception as exc:
-                    adapter_error = _adapter_error_from_ncclient_exception(exc)
-                    self._discard_candidate_preserving_error(session, adapter_error)
-                    raise adapter_error from exc
-                finally:
+                    original_error = _adapter_error_from_ncclient_exception(exc)
+                    self._discard_candidate_preserving_error(session, original_error)
+
+                unlock_error = None
+                try:
                     self._unlock_candidate(session)
+                except AdapterError as exc:
+                    unlock_error = exc
+
+                if original_error is not None:
+                    if unlock_error is not None:
+                        _append_secondary_error(original_error, "unlock", unlock_error)
+                    raise original_error
+
+                if unlock_error is not None:
+                    if candidate_changed:
+                        self._discard_candidate_preserving_error(session, unlock_error)
+                    raise unlock_error
         except AdapterError:
             raise
         except Exception as exc:
@@ -499,6 +516,18 @@ class NcclientNetconfBackend:
         )
         _verify_vlans(desired_state, observed, scope)
         _verify_interfaces(desired_state, observed, scope)
+
+
+def _append_secondary_error(
+    original_error: AdapterError,
+    operation: str,
+    secondary_error: AdapterError,
+) -> None:
+    original_raw = original_error.raw_error_summary or original_error.message
+    secondary_raw = secondary_error.raw_error_summary or secondary_error.message
+    original_error.raw_error_summary = (
+        f"{original_raw}; {operation} also failed: {secondary_raw}"
+    )
 
 
 NetconfBackend = NcclientNetconfBackend

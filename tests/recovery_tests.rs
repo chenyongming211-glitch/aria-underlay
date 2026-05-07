@@ -515,7 +515,7 @@ async fn force_resolve_transaction_marks_in_doubt_record_terminal() {
 }
 
 #[tokio::test]
-async fn list_in_doubt_transactions_returns_only_in_doubt_records() {
+async fn list_in_doubt_transactions_returns_all_recoverable_records() {
     let journal = Arc::new(InMemoryTxJournalStore::default());
     journal
         .put(
@@ -536,13 +536,15 @@ async fn list_in_doubt_transactions_returns_only_in_doubt_records() {
         .await
         .expect("in-doubt listing should succeed");
 
-    assert_eq!(response.transactions.len(), 1);
+    assert_eq!(response.transactions.len(), 2);
     let summary = &response.transactions[0];
     assert_eq!(summary.tx_id, "tx-in-doubt");
     assert_eq!(summary.phase, TxPhase::InDoubt);
     assert_eq!(summary.devices, vec![DeviceId("leaf-a".into())]);
     assert_eq!(summary.error_code.as_deref(), Some("COMMIT_UNKNOWN"));
     assert_eq!(summary.error_history.len(), 1);
+    assert_eq!(response.transactions[1].tx_id, "tx-prepared");
+    assert_eq!(response.transactions[1].phase, TxPhase::Prepared);
 }
 
 #[tokio::test]
@@ -689,17 +691,22 @@ impl TxJournalStore for StaleListJournalStore {
 }
 
 #[test]
-fn in_doubt_records_for_devices_only_returns_blocking_devices() {
+fn recoverable_records_for_devices_returns_all_blocking_recoverable_phases() {
     let records = vec![
         journal_record("tx-leaf-a", TxPhase::InDoubt, "leaf-a"),
         journal_record("tx-leaf-b", TxPhase::Prepared, "leaf-b"),
         journal_record("tx-leaf-c", TxPhase::InDoubt, "leaf-c"),
+        journal_record("tx-leaf-d", TxPhase::Committed, "leaf-a"),
     ];
 
-    let blocking = in_doubt_records_for_devices(&records, &[DeviceId("leaf-a".into())]);
+    let blocking = in_doubt_records_for_devices(
+        &records,
+        &[DeviceId("leaf-a".into()), DeviceId("leaf-b".into())],
+    );
 
-    assert_eq!(blocking.len(), 1);
+    assert_eq!(blocking.len(), 2);
     assert_eq!(blocking[0].tx_id, "tx-leaf-a");
+    assert_eq!(blocking[1].tx_id, "tx-leaf-b");
 }
 
 fn journal_record(tx_id: &str, phase: TxPhase, device_id: &str) -> TxJournalRecord {

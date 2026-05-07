@@ -29,6 +29,8 @@ class NetconfBackedDriver:
             capability = self._backend.get_capabilities()
         except AdapterError as error:
             return pb2.GetCapabilitiesResponse(errors=[error.to_proto(pb2)])
+        except Exception as exc:
+            return pb2.GetCapabilitiesResponse(errors=[_unexpected_error(exc).to_proto(pb2)])
 
         return pb2.GetCapabilitiesResponse(
             capability=pb2.DeviceCapability(
@@ -60,6 +62,8 @@ class NetconfBackedDriver:
             )
         except AdapterError as error:
             return pb2.GetCurrentStateResponse(errors=[error.to_proto(pb2)])
+        except Exception as exc:
+            return pb2.GetCurrentStateResponse(errors=[_unexpected_error(exc).to_proto(pb2)])
 
         return pb2.GetCurrentStateResponse(state=observed_state)
 
@@ -68,13 +72,7 @@ class NetconfBackedDriver:
             backend = self._backend_for_dry_run(device, desired_state)
             result = backend.dry_run_candidate(desired_state)
         except AdapterError as error:
-            return pb2.DryRunResponse(
-                result=pb2.AdapterResult(
-                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
-                    changed=False,
-                    errors=[error.to_proto(pb2)],
-                )
-            )
+            return pb2.DryRunResponse(result=_failed_result(error))
         except AttributeError as exc:
             error = AdapterError(
                 code="DRY_RUN_NOT_SUPPORTED",
@@ -83,13 +81,9 @@ class NetconfBackedDriver:
                 raw_error_summary=str(exc),
                 retryable=False,
             )
-            return pb2.DryRunResponse(
-                result=pb2.AdapterResult(
-                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
-                    changed=False,
-                    errors=[error.to_proto(pb2)],
-                )
-            )
+            return pb2.DryRunResponse(result=_failed_result(error))
+        except Exception as exc:
+            return pb2.DryRunResponse(result=_failed_result(_unexpected_error(exc)))
 
         return pb2.DryRunResponse(
             result=pb2.AdapterResult(
@@ -104,13 +98,9 @@ class NetconfBackedDriver:
             backend = self._backend_for_prepare(request)
             backend.prepare_candidate(getattr(request, "desired_state", None))
         except AdapterError as error:
-            return pb2.PrepareResponse(
-                result=pb2.AdapterResult(
-                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
-                    changed=False,
-                    errors=[error.to_proto(pb2)],
-                )
-            )
+            return pb2.PrepareResponse(result=_failed_result(error))
+        except Exception as exc:
+            return pb2.PrepareResponse(result=_failed_result(_unexpected_error(exc)))
 
         return pb2.PrepareResponse(
             result=pb2.AdapterResult(
@@ -171,13 +161,9 @@ class NetconfBackedDriver:
                 confirm_timeout_secs=confirm_timeout_secs or 120,
             )
         except AdapterError as error:
-            return pb2.CommitResponse(
-                result=pb2.AdapterResult(
-                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
-                    changed=False,
-                    errors=[error.to_proto(pb2)],
-                )
-            )
+            return pb2.CommitResponse(result=_failed_result(error))
+        except Exception as exc:
+            return pb2.CommitResponse(result=_failed_result(_unexpected_error(exc)))
 
         return pb2.CommitResponse(
             result=pb2.AdapterResult(
@@ -194,13 +180,9 @@ class NetconfBackedDriver:
         try:
             self._backend.final_confirm(tx_id=tx_id)
         except AdapterError as error:
-            return pb2.FinalConfirmResponse(
-                result=pb2.AdapterResult(
-                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
-                    changed=False,
-                    errors=[error.to_proto(pb2)],
-                )
-            )
+            return pb2.FinalConfirmResponse(result=_failed_result(error))
+        except Exception as exc:
+            return pb2.FinalConfirmResponse(result=_failed_result(_unexpected_error(exc)))
 
         return pb2.FinalConfirmResponse(
             result=pb2.AdapterResult(
@@ -213,13 +195,9 @@ class NetconfBackedDriver:
         try:
             self._backend.rollback_candidate(strategy=strategy, tx_id=tx_id)
         except AdapterError as error:
-            return pb2.RollbackResponse(
-                result=pb2.AdapterResult(
-                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
-                    changed=False,
-                    errors=[error.to_proto(pb2)],
-                )
-            )
+            return pb2.RollbackResponse(result=_failed_result(error))
+        except Exception as exc:
+            return pb2.RollbackResponse(result=_failed_result(_unexpected_error(exc)))
 
         return pb2.RollbackResponse(
             result=pb2.AdapterResult(
@@ -233,13 +211,9 @@ class NetconfBackedDriver:
             backend = self._backend_for_state_read(device)
             backend.verify_running(desired_state, scope=_message_or_none(scope))
         except AdapterError as error:
-            return pb2.VerifyResponse(
-                result=pb2.AdapterResult(
-                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
-                    changed=False,
-                    errors=[error.to_proto(pb2)],
-                )
-            )
+            return pb2.VerifyResponse(result=_failed_result(error))
+        except Exception as exc:
+            return pb2.VerifyResponse(result=_failed_result(_unexpected_error(exc)))
 
         return pb2.VerifyResponse(
             result=pb2.AdapterResult(
@@ -250,7 +224,7 @@ class NetconfBackedDriver:
 
     def recover(self, tx_id, device, strategy=None, action=None):
         if action == pb2.RECOVERY_ACTION_DISCARD_PREPARED_CHANGES:
-            rollback_strategy = pb2.TRANSACTION_STRATEGY_CANDIDATE_COMMIT
+            rollback_strategy = strategy
         elif action == pb2.RECOVERY_ACTION_ADAPTER_RECOVER:
             rollback_strategy = strategy
         else:
@@ -293,16 +267,32 @@ class NetconfBackedDriver:
                 )
             )
 
+        if (
+            action == pb2.RECOVERY_ACTION_ADAPTER_RECOVER
+            and strategy == pb2.TRANSACTION_STRATEGY_CONFIRMED_COMMIT
+        ):
+            try:
+                self._backend.final_confirm(tx_id=tx_id)
+            except AdapterError as error:
+                if _persist_id_already_consumed(error):
+                    return _recover_response(
+                        pb2.ADAPTER_OPERATION_STATUS_COMMITTED,
+                        changed=True,
+                    )
+            except Exception as exc:
+                return pb2.RecoverResponse(result=_failed_result(_unexpected_error(exc)))
+            else:
+                return _recover_response(
+                    pb2.ADAPTER_OPERATION_STATUS_COMMITTED,
+                    changed=True,
+                )
+
         try:
             self._backend.rollback_candidate(strategy=rollback_strategy, tx_id=tx_id)
         except AdapterError as error:
-            return pb2.RecoverResponse(
-                result=pb2.AdapterResult(
-                    status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
-                    changed=False,
-                    errors=[error.to_proto(pb2)],
-                )
-            )
+            return pb2.RecoverResponse(result=_failed_result(error))
+        except Exception as exc:
+            return pb2.RecoverResponse(result=_failed_result(_unexpected_error(exc)))
 
         return pb2.RecoverResponse(
             result=pb2.AdapterResult(
@@ -501,4 +491,47 @@ def _parsed_state_error(summary: str) -> AdapterError:
         normalized_error="invalid parsed state",
         raw_error_summary=summary,
         retryable=False,
+    )
+
+
+def _failed_result(error: AdapterError):
+    return pb2.AdapterResult(
+        status=pb2.ADAPTER_OPERATION_STATUS_FAILED,
+        changed=False,
+        errors=[error.to_proto(pb2)],
+    )
+
+
+def _recover_response(status, *, changed: bool):
+    return pb2.RecoverResponse(
+        result=pb2.AdapterResult(
+            status=status,
+            changed=changed,
+        )
+    )
+
+
+def _unexpected_error(exc: Exception) -> AdapterError:
+    return AdapterError(
+        code="ADAPTER_INTERNAL_ERROR",
+        message="adapter operation raised an unexpected exception",
+        normalized_error="unexpected adapter exception",
+        raw_error_summary=f"{type(exc).__name__}: {exc}",
+        retryable=False,
+    )
+
+
+def _persist_id_already_consumed(error: AdapterError) -> bool:
+    text = " ".join(
+        part
+        for part in [
+            error.code,
+            error.message,
+            error.normalized_error,
+            error.raw_error_summary,
+        ]
+        if part
+    ).lower()
+    return "persist" in text and any(
+        marker in text for marker in ["unknown", "not found", "consumed"]
     )

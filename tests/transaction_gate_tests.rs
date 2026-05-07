@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use aria_underlay::api::request::{
     ApplyDomainIntentRequest, ApplyOptions, DriftAuditRequest, RefreshStateRequest,
@@ -56,6 +58,38 @@ async fn apply_is_blocked_before_adapter_when_endpoint_has_in_doubt_transaction(
     assert_eq!(
         response.device_results[0].error_code.as_deref(),
         Some("TX_IN_DOUBT")
+    );
+    assert!(!response.device_results[0].changed);
+}
+
+#[tokio::test]
+async fn apply_is_blocked_before_adapter_when_endpoint_has_pending_recoverable_transaction() {
+    let inventory = inventory_with_endpoint("stack-mgmt", DeviceLifecycleState::Ready);
+    let journal = Arc::new(InMemoryTxJournalStore::default());
+    journal
+        .put(
+            &TxJournalRecord::started(
+                &TxContext {
+                    tx_id: "tx-prepared".into(),
+                    request_id: "req-old".into(),
+                    trace_id: "trace-old".into(),
+                },
+                vec![DeviceId("stack-mgmt".into())],
+            )
+            .with_phase(TxPhase::Prepared),
+        )
+        .expect("prepared journal record should be stored");
+    let service = AriaUnderlayService::new_with_journal(inventory, journal);
+
+    let response = service
+        .apply_domain_intent(apply_request(DriftPolicy::ReportOnly))
+        .await
+        .expect("apply should return per-device blocking result");
+
+    assert_eq!(response.status, ApplyStatus::InDoubt);
+    assert_eq!(
+        response.device_results[0].error_code.as_deref(),
+        Some("TX_REQUIRES_RECOVERY")
     );
     assert!(!response.device_results[0].changed);
 }
@@ -133,6 +167,66 @@ async fn verify_failure_rolls_back_and_records_rolled_back_phase() {
         TxPhase::RolledBack,
     )
     .await;
+}
+
+#[tokio::test]
+async fn rollback_rpc_is_attempted_even_when_rolling_back_journal_write_fails() {
+    let rollback_calls = Arc::new(AtomicUsize::new(0));
+    let mut adapter = TestAdapter {
+        current_state: Some(observed_access_state("stack-mgmt", 100)),
+        commit_result: failed_result("COMMIT_FAILED"),
+        rollback_calls: Some(rollback_calls.clone()),
+        ..Default::default()
+    };
+    adapter.rollback_result = common::adapter_result(
+        aria_underlay::proto::adapter::AdapterOperationStatus::RolledBack,
+    );
+    let endpoint = start_test_adapter(adapter).await;
+    let inventory = inventory_with_endpoint_at(
+        "stack-mgmt",
+        DeviceLifecycleState::Ready,
+        endpoint,
+    );
+    let journal = Arc::new(FailingRollingBackJournalStore::default());
+    let service = AriaUnderlayService::new_with_journal(inventory, journal);
+
+    let response = service
+        .apply_domain_intent(apply_request_with_vlan(200, DriftPolicy::ReportOnly))
+        .await
+        .expect("apply should return a per-device result even when journal write fails");
+
+    assert_eq!(rollback_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(response.status, ApplyStatus::Failed);
+}
+
+#[tokio::test]
+async fn confirmed_commit_timeout_is_taken_from_service_configuration() {
+    let commit_timeouts = Arc::new(Mutex::new(Vec::new()));
+    let endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-mgmt", 100)),
+        commit_confirm_timeouts: Some(commit_timeouts.clone()),
+        ..Default::default()
+    })
+    .await;
+    let inventory = inventory_with_endpoint_at(
+        "stack-mgmt",
+        DeviceLifecycleState::Ready,
+        endpoint,
+    );
+    let service = AriaUnderlayService::new(inventory).with_confirmed_commit_timeout_secs(45);
+
+    let response = service
+        .apply_domain_intent(apply_request_with_vlan(200, DriftPolicy::ReportOnly))
+        .await
+        .expect("apply should succeed");
+
+    assert_eq!(response.status, ApplyStatus::Success);
+    assert_eq!(
+        *commit_timeouts
+            .lock()
+            .expect("timeout recorder should not be poisoned"),
+        vec![45]
+    );
 }
 
 #[tokio::test]
@@ -478,5 +572,27 @@ impl ShadowStateStore for FailingDesiredShadowStore {
 
     fn list(&self) -> UnderlayResult<Vec<DeviceShadowState>> {
         Ok(Vec::new())
+    }
+}
+
+#[derive(Debug, Default)]
+struct FailingRollingBackJournalStore {
+    inner: InMemoryTxJournalStore,
+}
+
+impl TxJournalStore for FailingRollingBackJournalStore {
+    fn put(&self, record: &TxJournalRecord) -> UnderlayResult<()> {
+        if record.phase == TxPhase::RollingBack {
+            return Err(UnderlayError::Internal("journal unavailable during rollback".into()));
+        }
+        self.inner.put(record)
+    }
+
+    fn get(&self, tx_id: &str) -> UnderlayResult<Option<TxJournalRecord>> {
+        self.inner.get(tx_id)
+    }
+
+    fn list_recoverable(&self) -> UnderlayResult<Vec<TxJournalRecord>> {
+        self.inner.list_recoverable()
     }
 }

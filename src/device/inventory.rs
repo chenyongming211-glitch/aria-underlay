@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
+use dashmap::mapref::entry::Entry;
 
 use crate::device::{DeviceCapabilityProfile, DeviceInfo, DeviceLifecycleState};
 use crate::model::DeviceId;
@@ -19,18 +20,16 @@ pub struct DeviceInventory {
 
 impl DeviceInventory {
     pub fn insert(&self, info: DeviceInfo) -> UnderlayResult<()> {
-        if self.inner.contains_key(&info.id) {
-            return Err(UnderlayError::DeviceAlreadyExists(info.id.0));
+        match self.inner.entry(info.id.clone()) {
+            Entry::Occupied(entry) => Err(UnderlayError::DeviceAlreadyExists(entry.key().0.clone())),
+            Entry::Vacant(entry) => {
+                entry.insert(ManagedDevice {
+                    info,
+                    capability: None,
+                });
+                Ok(())
+            }
         }
-
-        self.inner.insert(
-            info.id.clone(),
-            ManagedDevice {
-                info,
-                capability: None,
-            },
-        );
-        Ok(())
     }
 
     pub fn get(&self, device_id: &DeviceId) -> UnderlayResult<ManagedDevice> {

@@ -1,5 +1,7 @@
 # 当前缺陷 / 技术债清单 — 2026-05-05
 
+> 2026-05-07 已按“单 active Core + 可选 active-passive HA + NETCONF 事务下发”目标补充复核清单：见 `docs/bug-inventory-current-2026-05-07.md`。本文保留完整源码审查结果和历史证据。
+
 ## 当前基线
 
 最新有效基线：`main` / `e87fe41 test: harden vendor fixture boundaries`。

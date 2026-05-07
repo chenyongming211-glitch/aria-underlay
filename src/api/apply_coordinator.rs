@@ -33,6 +33,7 @@ pub(crate) struct ApplyCoordinator {
     observed_store: Arc<dyn ShadowStateStore>,
     event_sink: Arc<dyn EventSink>,
     adapter_pool: AdapterClientPool,
+    confirmed_commit_timeout_secs: u32,
 }
 
 impl ApplyCoordinator {
@@ -45,6 +46,7 @@ impl ApplyCoordinator {
         observed_store: Arc<dyn ShadowStateStore>,
         event_sink: Arc<dyn EventSink>,
         adapter_pool: AdapterClientPool,
+        confirmed_commit_timeout_secs: u32,
     ) -> Self {
         Self {
             inventory,
@@ -55,6 +57,7 @@ impl ApplyCoordinator {
             observed_store,
             event_sink,
             adapter_pool,
+            confirmed_commit_timeout_secs: confirmed_commit_timeout_secs.max(1),
         }
     }
 
@@ -279,12 +282,30 @@ impl ApplyCoordinator {
         strategy: TransactionStrategy,
     ) -> DeviceApplyResult {
         let mut warnings = degraded_strategy_warnings(strategy);
+        journal_record = journal_record
+            .with_strategy(strategy)
+            .with_phase(TxPhase::Committed);
+        if let Err(err) = self.journal.put(&journal_record) {
+            let (code, message) = journal_error_fields(&err);
+            return DeviceApplyResult {
+                device_id: desired.device_id.clone(),
+                changed: true,
+                status: ApplyStatus::InDoubt,
+                tx_id: Some(tx_context.tx_id),
+                strategy: Some(strategy),
+                error_code: Some(code),
+                error_message: Some(format!(
+                    "adapter committed, \
+                     but terminal journal write failed: {message}"
+                )),
+                warnings,
+            };
+        }
         let shadow_state = DeviceShadowState::from_desired(desired, 0);
         if let Err(err) = self.shadow_store.put(shadow_state) {
             let (code, message) = journal_error_fields(&err);
             let error_message = format!("shadow state stale after successful apply: {message}");
             journal_record = journal_record
-                .with_strategy(strategy)
                 .with_phase(TxPhase::InDoubt)
                 .with_error(code.clone(), error_message.clone());
             if let Err(journal_err) = self.journal.put(&journal_record) {
@@ -311,25 +332,6 @@ impl ApplyCoordinator {
                 strategy: Some(strategy),
                 error_code: Some(code),
                 error_message: Some(error_message),
-                warnings,
-            };
-        }
-        journal_record = journal_record
-            .with_strategy(strategy)
-            .with_phase(TxPhase::Committed);
-        if let Err(err) = self.journal.put(&journal_record) {
-            let (code, message) = journal_error_fields(&err);
-            return DeviceApplyResult {
-                device_id: desired.device_id.clone(),
-                changed: true,
-                status: ApplyStatus::InDoubt,
-                tx_id: Some(tx_context.tx_id),
-                strategy: Some(strategy),
-                error_code: Some(code),
-                error_message: Some(format!(
-                    "adapter committed and shadow was updated, \
-                     but terminal journal write failed: {message}"
-                )),
                 warnings,
             };
         }
@@ -520,7 +522,15 @@ impl ApplyCoordinator {
     ) -> UnderlayResult<()> {
         *journal_record = journal_record.clone().with_phase(TxPhase::Committing);
         self.journal.put(journal_record)?;
-        match client.commit_with_context(device, context, strategy).await {
+        match client
+            .commit_with_context(
+                device,
+                context,
+                strategy,
+                self.confirmed_commit_timeout_secs,
+            )
+            .await
+        {
             Ok(commit) if commit_status_matches_strategy(commit.status, strategy) => Ok(()),
             Ok(commit) => {
                 self.rollback_after_endpoint_failure(client, device, context, journal_record)
@@ -620,13 +630,14 @@ impl ApplyCoordinator {
         context: &RequestContext,
         journal_record: &mut TxJournalRecord,
     ) -> UnderlayResult<()> {
+        let rollback_result = client
+            .rollback_with_context(device, context, journal_record.strategy)
+            .await;
+
         *journal_record = journal_record.clone().with_phase(TxPhase::RollingBack);
         self.journal.put(journal_record)?;
 
-        match client
-            .rollback_with_context(device, context, journal_record.strategy)
-            .await
-        {
+        match rollback_result {
             Ok(outcome)
                 if matches!(
                     outcome.status,
@@ -637,6 +648,12 @@ impl ApplyCoordinator {
                 self.journal.put(journal_record)?;
             }
             Ok(outcome) => {
+                let error = UnderlayError::AdapterOperation {
+                    code: "UNEXPECTED_ROLLBACK_STATUS".into(),
+                    message: format!("adapter returned rollback status {:?}", outcome.status),
+                    retryable: true,
+                    errors: Vec::new(),
+                };
                 *journal_record = journal_record
                     .clone()
                     .with_phase(TxPhase::InDoubt)
@@ -645,6 +662,7 @@ impl ApplyCoordinator {
                         format!("adapter returned rollback status {:?}", outcome.status),
                     );
                 self.journal.put(journal_record)?;
+                return Err(error);
             }
             Err(err) => {
                 let (code, message) = journal_error_fields(&err);
@@ -653,6 +671,7 @@ impl ApplyCoordinator {
                     .with_phase(TxPhase::InDoubt)
                     .with_error(code, message);
                 self.journal.put(journal_record)?;
+                return Err(err);
             }
         }
 
@@ -671,9 +690,14 @@ impl ApplyCoordinator {
             .map(|record| record.tx_id.as_str())
             .collect::<Vec<_>>()
             .join(",");
+        let code = if blocking.iter().all(|record| record.phase == TxPhase::InDoubt) {
+            "TX_IN_DOUBT"
+        } else {
+            "TX_REQUIRES_RECOVERY"
+        };
         Err(UnderlayError::AdapterOperation {
-            code: "TX_IN_DOUBT".into(),
-            message: format!("endpoint has unresolved in-doubt transaction(s): {tx_ids}"),
+            code: code.into(),
+            message: format!("endpoint has unresolved recoverable transaction(s): {tx_ids}"),
             retryable: false,
             errors: Vec::new(),
         })

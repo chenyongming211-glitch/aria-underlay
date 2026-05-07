@@ -722,6 +722,127 @@ def test_prepare_candidate_preserves_original_error_when_discard_fails():
     ]
 
 
+def test_prepare_candidate_preserves_original_error_when_unlock_fails():
+    session = _RecordingSession(fail_unlock=True)
+    backend = _BackendWithSession(session)
+
+    try:
+        backend.prepare_candidate(desired_state=object())
+    except AdapterError as error:
+        assert error.code == "NETCONF_RENDERER_NOT_CONFIGURED"
+        assert "unlock also failed" in error.raw_error_summary
+        assert "unlock failed" in error.raw_error_summary
+    else:
+        raise AssertionError("original prepare error should be preserved")
+
+    assert session.calls == [
+        ("lock", "candidate"),
+        ("discard_changes",),
+        ("unlock", "candidate"),
+    ]
+
+
+def test_prepare_candidate_discards_successful_candidate_when_unlock_fails():
+    session = _RecordingSession(fail_unlock=True)
+    backend = _BackendWithSession(session, config_renderer=_StaticRenderer("<config/>"))
+
+    try:
+        backend.prepare_candidate(desired_state=object())
+    except AdapterError as error:
+        assert error.code == "NETCONF_UNLOCK_FAILED"
+    else:
+        raise AssertionError("unlock failure after successful validate should fail closed")
+
+    assert session.calls == [
+        ("lock", "candidate"),
+        (
+            "edit_config",
+            {
+                "target": "candidate",
+                "config": "<config/>",
+                "default_operation": "merge",
+                "error_option": "rollback-on-error",
+            },
+        ),
+        ("validate", "candidate"),
+        ("unlock", "candidate"),
+        ("discard_changes",),
+    ]
+
+
+def test_netconf_driver_prepare_converts_unexpected_exception_to_failed_result():
+    driver = NetconfBackedDriver(_UnexpectedPrepareBackend())
+
+    response = driver.prepare(
+        pb2.PrepareRequest(
+            device=pb2.DeviceRef(device_id="leaf-a"),
+            desired_state=pb2.DesiredDeviceState(device_id="leaf-a"),
+        )
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
+    assert response.result.changed is False
+    assert response.result.errors[0].code == "ADAPTER_INTERNAL_ERROR"
+    assert "RuntimeError" in response.result.errors[0].raw_error_summary
+
+
+def test_netconf_driver_discard_recovery_preserves_confirmed_commit_strategy():
+    backend = _RecordingRecoveryBackend()
+    driver = NetconfBackedDriver(backend)
+
+    response = driver.recover(
+        tx_id="tx-1",
+        device=pb2.DeviceRef(device_id="leaf-a"),
+        strategy=pb2.TRANSACTION_STRATEGY_CONFIRMED_COMMIT,
+        action=pb2.RECOVERY_ACTION_DISCARD_PREPARED_CHANGES,
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_ROLLED_BACK
+    assert backend.rollback_calls == [
+        (pb2.TRANSACTION_STRATEGY_CONFIRMED_COMMIT, "tx-1")
+    ]
+
+
+def test_netconf_driver_adapter_recovery_confirms_pending_confirmed_commit():
+    backend = _RecordingRecoveryBackend()
+    driver = NetconfBackedDriver(backend)
+
+    response = driver.recover(
+        tx_id="tx-1",
+        device=pb2.DeviceRef(device_id="leaf-a"),
+        strategy=pb2.TRANSACTION_STRATEGY_CONFIRMED_COMMIT,
+        action=pb2.RECOVERY_ACTION_ADAPTER_RECOVER,
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_COMMITTED
+    assert backend.final_confirm_calls == ["tx-1"]
+    assert backend.rollback_calls == []
+
+
+def test_netconf_driver_adapter_recovery_treats_consumed_persist_id_as_committed():
+    backend = _RecordingRecoveryBackend(
+        final_confirm_error=AdapterError(
+            code="NETCONF_FINAL_CONFIRM_FAILED",
+            message="NETCONF final confirm failed",
+            normalized_error="final confirm failed",
+            raw_error_summary="unknown persist-id tx-1",
+            retryable=True,
+        )
+    )
+    driver = NetconfBackedDriver(backend)
+
+    response = driver.recover(
+        tx_id="tx-1",
+        device=pb2.DeviceRef(device_id="leaf-a"),
+        strategy=pb2.TRANSACTION_STRATEGY_CONFIRMED_COMMIT,
+        action=pb2.RECOVERY_ACTION_ADAPTER_RECOVER,
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_COMMITTED
+    assert backend.final_confirm_calls == ["tx-1"]
+    assert backend.rollback_calls == []
+
+
 def test_ncclient_authorization_error_is_not_authentication_failure():
     error = _adapter_error_from_ncclient_exception(RuntimeError("authorization denied"))
 
@@ -1142,12 +1263,14 @@ class _RecordingSession:
         fail_lock=False,
         fail_commit=False,
         fail_discard=False,
+        fail_unlock=False,
         reply="<data/>",
     ):
         self.calls = []
         self.fail_lock = fail_lock
         self.fail_commit = fail_commit
         self.fail_discard = fail_discard
+        self.fail_unlock = fail_unlock
         self.reply = reply
         self.server_capabilities = [BASE_10, CANDIDATE]
 
@@ -1172,6 +1295,8 @@ class _RecordingSession:
 
     def unlock(self, target):
         self.calls.append(("unlock", target))
+        if self.fail_unlock:
+            raise RuntimeError("unlock failed")
 
     def validate(self, source):
         self.calls.append(("validate", source))
@@ -1223,6 +1348,26 @@ class _ParsedStateBackend:
 
     def get_current_state(self, scope=None):
         return self.state
+
+
+class _UnexpectedPrepareBackend:
+    def prepare_candidate(self, desired_state=None):
+        raise RuntimeError("unexpected backend failure")
+
+
+class _RecordingRecoveryBackend:
+    def __init__(self, final_confirm_error=None):
+        self.final_confirm_error = final_confirm_error
+        self.final_confirm_calls = []
+        self.rollback_calls = []
+
+    def final_confirm(self, tx_id=None):
+        self.final_confirm_calls.append(tx_id)
+        if self.final_confirm_error is not None:
+            raise self.final_confirm_error
+
+    def rollback_candidate(self, strategy=None, tx_id=None):
+        self.rollback_calls.append((strategy, tx_id))
 
 
 class _Reply:

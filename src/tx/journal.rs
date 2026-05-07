@@ -223,8 +223,9 @@ impl JsonFileTxJournalStore {
         &self.root
     }
 
-    fn path_for(&self, tx_id: &str) -> PathBuf {
-        self.root.join(format!("{}.json", journal_file_stem(tx_id)))
+    fn path_for(&self, tx_id: &str) -> UnderlayResult<PathBuf> {
+        validate_journal_tx_id(tx_id)?;
+        Ok(self.root.join(format!("{tx_id}.json")))
     }
 
     fn lock_for(&self, tx_id: &str) -> Arc<Mutex<()>> {
@@ -243,7 +244,7 @@ impl TxJournalStore for JsonFileTxJournalStore {
             .lock()
             .map_err(|_| UnderlayError::Internal("tx journal mutex poisoned".into()))?;
 
-        let path = self.path_for(&record.tx_id);
+        let path = self.path_for(&record.tx_id)?;
         let payload = serde_json::to_vec_pretty(record)
             .map_err(|err| UnderlayError::Internal(format!("serialize tx journal: {err}")))?;
 
@@ -252,7 +253,7 @@ impl TxJournalStore for JsonFileTxJournalStore {
     }
 
     fn get(&self, tx_id: &str) -> UnderlayResult<Option<TxJournalRecord>> {
-        let path = self.path_for(tx_id);
+        let path = self.path_for(tx_id)?;
         if !path.exists() {
             return Ok(None);
         }
@@ -287,17 +288,17 @@ fn read_journal_record(path: &Path) -> UnderlayResult<TxJournalRecord> {
         .map_err(|err| UnderlayError::Internal(format!("parse tx journal {:?}: {err}", path)))
 }
 
-fn journal_file_stem(tx_id: &str) -> String {
-    tx_id
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect()
+fn validate_journal_tx_id(tx_id: &str) -> UnderlayResult<()> {
+    if tx_id.is_empty()
+        || !tx_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+    {
+        return Err(UnderlayError::InvalidIntent(format!(
+            "tx_id {tx_id:?} is invalid for file journal store"
+        )));
+    }
+    Ok(())
 }
 
 fn journal_io_error(err: std::io::Error) -> UnderlayError {

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use crate::adapter_client::AdapterClientPool;
+use crate::adapter_client::{AdapterClientPool, DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS};
 use crate::authz::{AuthorizationPolicy, PermitAllAuthorizationPolicy};
 use crate::api::admin_ops::AdminOps;
 use crate::api::apply::device_results_from_plan;
@@ -65,6 +65,7 @@ pub struct AriaUnderlayService {
     authorization_policy: Arc<dyn AuthorizationPolicy>,
     product_audit_store: Arc<dyn ProductAuditStore>,
     adapter_pool: AdapterClientPool,
+    confirmed_commit_timeout_secs: u32,
 }
 
 impl AriaUnderlayService {
@@ -83,6 +84,7 @@ impl AriaUnderlayService {
             authorization_policy: Arc::new(PermitAllAuthorizationPolicy),
             product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
+            confirmed_commit_timeout_secs: DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
         }
     }
 
@@ -104,6 +106,7 @@ impl AriaUnderlayService {
             authorization_policy: Arc::new(PermitAllAuthorizationPolicy),
             product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
+            confirmed_commit_timeout_secs: DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
         }
     }
 
@@ -126,6 +129,7 @@ impl AriaUnderlayService {
             authorization_policy: Arc::new(PermitAllAuthorizationPolicy),
             product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
+            confirmed_commit_timeout_secs: DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
         }
     }
 
@@ -150,6 +154,7 @@ impl AriaUnderlayService {
             authorization_policy: Arc::new(PermitAllAuthorizationPolicy),
             product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
+            confirmed_commit_timeout_secs: DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
         }
     }
 
@@ -175,6 +180,7 @@ impl AriaUnderlayService {
             authorization_policy: Arc::new(PermitAllAuthorizationPolicy),
             product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
+            confirmed_commit_timeout_secs: DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
         }
     }
 
@@ -206,6 +212,11 @@ impl AriaUnderlayService {
 
     pub fn with_adapter_pool(mut self, adapter_pool: AdapterClientPool) -> Self {
         self.adapter_pool = adapter_pool;
+        self
+    }
+
+    pub fn with_confirmed_commit_timeout_secs(mut self, timeout_secs: u32) -> Self {
+        self.confirmed_commit_timeout_secs = timeout_secs.max(1);
         self
     }
 
@@ -252,6 +263,7 @@ impl AriaUnderlayService {
             self.observed_store.clone(),
             self.operation_event_sink(),
             self.adapter_pool.clone(),
+            self.confirmed_commit_timeout_secs,
         )
     }
 

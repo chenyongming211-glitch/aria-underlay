@@ -54,6 +54,65 @@ fn detects_interface_attribute_mismatch_as_drift() {
     assert_eq!(report.findings[0].path, "interfaces.GE1/0/1");
 }
 
+#[test]
+fn normalized_equivalent_state_is_not_drift() {
+    let expected = DeviceShadowState {
+        device_id: DeviceId("leaf-a".into()),
+        revision: 1,
+        vlans: BTreeMap::from([(
+            100,
+            VlanConfig {
+                vlan_id: 100,
+                name: Some("".into()),
+                description: Some("".into()),
+            },
+        )]),
+        interfaces: BTreeMap::from([(
+            "GigabitEthernet1/0/1".into(),
+            InterfaceConfig {
+                name: "GigabitEthernet1/0/1".into(),
+                admin_state: AdminState::Up,
+                description: Some("".into()),
+                mode: PortMode::Trunk {
+                    native_vlan: None,
+                    allowed_vlans: vec![200, 100, 100],
+                },
+            },
+        )]),
+        warnings: Vec::new(),
+    };
+    let observed = DeviceShadowState {
+        device_id: DeviceId("leaf-a".into()),
+        revision: 7,
+        vlans: BTreeMap::from([(
+            100,
+            VlanConfig {
+                vlan_id: 100,
+                name: None,
+                description: None,
+            },
+        )]),
+        interfaces: BTreeMap::from([(
+            "GE1/0/1".into(),
+            InterfaceConfig {
+                name: "GE1/0/1".into(),
+                admin_state: AdminState::Up,
+                description: None,
+                mode: PortMode::Trunk {
+                    native_vlan: None,
+                    allowed_vlans: vec![100, 200],
+                },
+            },
+        )]),
+        warnings: Vec::new(),
+    };
+
+    let report = detect_drift(&expected, &observed);
+
+    assert!(!report.drift_detected, "unexpected drift findings: {:?}", report.findings);
+    assert!(report.findings.is_empty());
+}
+
 #[tokio::test]
 async fn drift_auditor_reports_only_drifted_snapshots() {
     let clean = DriftAuditSnapshot {

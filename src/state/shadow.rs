@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use dashmap::DashMap;
+use dashmap::mapref::entry::Entry;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{DeviceId, InterfaceConfig, VlanConfig};
@@ -55,13 +56,17 @@ impl ShadowStateStore for InMemoryShadowStateStore {
     }
 
     fn put(&self, mut state: DeviceShadowState) -> UnderlayResult<DeviceShadowState> {
-        let next_revision = self
-            .inner
-            .get(&state.device_id)
-            .map(|entry| entry.revision.saturating_add(1))
-            .unwrap_or_else(|| state.revision.max(1));
-        state.revision = next_revision;
-        self.inner.insert(state.device_id.clone(), state.clone());
+        let device_id = state.device_id.clone();
+        match self.inner.entry(device_id) {
+            Entry::Occupied(mut entry) => {
+                state.revision = entry.get().revision.saturating_add(1);
+                entry.insert(state.clone());
+            }
+            Entry::Vacant(entry) => {
+                state.revision = state.revision.max(1);
+                entry.insert(state.clone());
+            }
+        }
         Ok(state)
     }
 

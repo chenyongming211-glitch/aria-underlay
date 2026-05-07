@@ -42,7 +42,7 @@ pub fn in_doubt_records_for_devices(
     let requested = device_ids.iter().collect::<BTreeSet<_>>();
     records
         .iter()
-        .filter(|record| record.phase == TxPhase::InDoubt)
+        .filter(|record| record.phase.requires_recovery())
         .filter(|record| record.devices.iter().any(|device_id| requested.contains(device_id)))
         .cloned()
         .collect()

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use tonic::transport::Channel;
 
@@ -20,6 +21,8 @@ use crate::proto::adapter::{
 use crate::state::DeviceShadowState;
 use crate::tx::{RecoveryAction, TransactionStrategy, TxContext};
 use crate::{UnderlayError, UnderlayResult};
+
+pub const DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS: u32 = 120;
 
 #[derive(Debug, Clone)]
 pub struct AdapterClient {
@@ -170,8 +173,13 @@ impl AdapterClient {
         device: &DeviceInfo,
         strategy: TransactionStrategy,
     ) -> UnderlayResult<AdapterOutcome> {
-        self.commit_with_context(device, &request_context(device), strategy)
-            .await
+        self.commit_with_context(
+            device,
+            &request_context(device),
+            strategy,
+            DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
+        )
+        .await
     }
 
     pub async fn commit_with_context(
@@ -179,6 +187,7 @@ impl AdapterClient {
         device: &DeviceInfo,
         context: &RequestContext,
         strategy: TransactionStrategy,
+        confirm_timeout_secs: u32,
     ) -> UnderlayResult<AdapterOutcome> {
         let response = self
             .inner
@@ -186,7 +195,7 @@ impl AdapterClient {
                 context: Some(context.clone()),
                 device: Some(device_ref_from_info(device)),
                 strategy: strategy_to_proto(strategy) as i32,
-                confirm_timeout_secs: 120,
+                confirm_timeout_secs,
             })
             .await
             .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?
@@ -413,19 +422,18 @@ pub struct AdapterClientPool {
 
 impl AdapterClientPool {
     pub fn client(&self, endpoint: &str) -> UnderlayResult<AdapterClient> {
-        if let Some(channel) = self.channels.get(endpoint) {
-            return Ok(AdapterClient::from_channel(channel.value().clone()));
+        match self.channels.entry(endpoint.to_string()) {
+            Entry::Occupied(entry) => Ok(AdapterClient::from_channel(entry.value().clone())),
+            Entry::Vacant(entry) => {
+                Channel::from_shared(endpoint.to_string())
+                    .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))
+                    .map(|endpoint| endpoint.connect_lazy())
+                    .map(|channel| {
+                        entry.insert(channel.clone());
+                        AdapterClient::from_channel(channel)
+                    })
+            }
         }
-
-        let channel = Channel::from_shared(endpoint.to_string())
-            .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?
-            .connect_lazy();
-        let entry = self
-            .channels
-            .entry(endpoint.to_string())
-            .or_insert(channel);
-
-        Ok(AdapterClient::from_channel(entry.value().clone()))
     }
 
     pub fn invalidate(&self, endpoint: &str) {

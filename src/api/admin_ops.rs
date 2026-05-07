@@ -57,7 +57,7 @@ impl AdminOps {
             .journal
             .list_recoverable()?
             .into_iter()
-            .filter(|record| record.phase == TxPhase::InDoubt)
+            .filter(|record| record.phase.requires_recovery())
             .filter(|record| {
                 request
                     .device_id

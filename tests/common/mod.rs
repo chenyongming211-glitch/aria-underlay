@@ -3,6 +3,9 @@ use aria_underlay::proto::adapter;
 use aria_underlay::proto::adapter::underlay_adapter_server::{
     UnderlayAdapter, UnderlayAdapterServer,
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::Mutex;
 use tonic::{Request, Response, Status};
 
 #[derive(Debug, Clone)]
@@ -14,8 +17,10 @@ pub struct TestAdapter {
     pub dry_run_result: adapter::AdapterResult,
     pub prepare_result: adapter::AdapterResult,
     pub commit_result: adapter::AdapterResult,
+    pub commit_confirm_timeouts: Option<Arc<Mutex<Vec<u32>>>>,
     pub final_confirm_result: adapter::AdapterResult,
     pub rollback_result: adapter::AdapterResult,
+    pub rollback_calls: Option<Arc<AtomicUsize>>,
     pub verify_result: adapter::AdapterResult,
     pub recover_result: adapter::AdapterResult,
     pub force_unlock_result: adapter::AdapterResult,
@@ -33,8 +38,10 @@ impl Default for TestAdapter {
             commit_result: adapter_result(
                 adapter::AdapterOperationStatus::ConfirmedCommitPending,
             ),
+            commit_confirm_timeouts: None,
             final_confirm_result: adapter_result(adapter::AdapterOperationStatus::Committed),
             rollback_result: adapter_result(adapter::AdapterOperationStatus::RolledBack),
+            rollback_calls: None,
             verify_result: adapter_result(adapter::AdapterOperationStatus::Committed),
             recover_result: adapter_result(adapter::AdapterOperationStatus::NoChange),
             force_unlock_result: adapter_result(adapter::AdapterOperationStatus::Committed),
@@ -176,8 +183,14 @@ impl UnderlayAdapter for TestAdapter {
 
     async fn commit(
         &self,
-        _request: Request<adapter::CommitRequest>,
+        request: Request<adapter::CommitRequest>,
     ) -> Result<Response<adapter::CommitResponse>, Status> {
+        if let Some(timeouts) = &self.commit_confirm_timeouts {
+            timeouts
+                .lock()
+                .expect("commit timeout recorder should not be poisoned")
+                .push(request.into_inner().confirm_timeout_secs);
+        }
         Ok(Response::new(adapter::CommitResponse {
             result: Some(self.commit_result.clone()),
         }))
@@ -196,6 +209,9 @@ impl UnderlayAdapter for TestAdapter {
         &self,
         _request: Request<adapter::RollbackRequest>,
     ) -> Result<Response<adapter::RollbackResponse>, Status> {
+        if let Some(calls) = &self.rollback_calls {
+            calls.fetch_add(1, Ordering::SeqCst);
+        }
         Ok(Response::new(adapter::RollbackResponse {
             result: Some(self.rollback_result.clone()),
         }))

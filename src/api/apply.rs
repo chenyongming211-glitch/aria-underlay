@@ -75,7 +75,7 @@ pub(super) fn device_error_result(
     DeviceApplyResult {
         device_id: device_id.clone(),
         changed,
-        status: if code == "TX_IN_DOUBT" {
+        status: if matches!(code.as_str(), "TX_IN_DOUBT" | "TX_REQUIRES_RECOVERY") {
             ApplyStatus::InDoubt
         } else {
             ApplyStatus::Failed
