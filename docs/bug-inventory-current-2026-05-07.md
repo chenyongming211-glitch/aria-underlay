@@ -205,11 +205,11 @@
 
 ### 批次 B：active-passive HA 最小闭环
 
-1. 启动期 active lease / lock，防止两个 Core 同时 active。
-2. 明确 journal/shadow/artifact 的共享或接管路径。
-3. 新 active 启动后先跑 `recover_pending_transactions`，再接受新 apply。
-4. 文档化 `EndpointLockTable` 只保证进程内互斥。
-5. 若 adapter 跨主机，补 TLS/mTLS 或明确要求外部安全隧道。
+1. 启动期 active lease / lock，防止两个 Core 同时 active。（已实现到工作区，待 CI）
+2. 明确 journal/shadow/artifact 的共享或接管路径。（仍需部署 runbook）
+3. 新 active 启动后先跑 `recover_pending_transactions`，再接受新 apply。（已实现到工作区，待 CI）
+4. 文档化 `EndpointLockTable` 只保证进程内互斥。（仍需补充部署说明）
+5. 若 adapter 跨主机，补 TLS/mTLS 或明确要求外部安全隧道。（未实现，当前建议 loopback/sidecar）
 
 ### 批次 C：运维可见性和测试可信度
 
@@ -237,7 +237,8 @@
 
 ### 仍待后续批次
 
-- active-passive HA lease/fencing 尚未实现；当前代码仍只保证单 active Core 进程内互斥。
+- active-passive HA 最小代码边界已加入工作区：`ActiveLeaseGuard` 使用共享 lease 文件和 heartbeat 防双 active，`AriaUnderlayService::activate_active_passive()` 会先拿 lease、再执行 `recover_pending_transactions`，之后才返回 active wrapper。该项待 GitHub Actions 验证。
+- `EndpointLockTable` 仍只保证进程内互斥；跨节点互斥依赖 active-passive lease/fencing，不支持 active-active。
 - Python adapter gRPC TLS/mTLS 尚未实现；跨主机部署仍需外部隧道/sidecar 或后续 TLS 配置。
 - Worker runtime 单 worker 失败隔离、GC 单文件错误隔离、drift auditor 单设备错误隔离尚未实现。
 - Product API 动作级 RBAC、顶层 `PartialSuccess` 语义、真实设备 parser/renderer 验证仍为后续项。

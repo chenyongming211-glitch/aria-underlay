@@ -31,6 +31,7 @@ use crate::device::{
     InitializeUnderlaySiteResponse, RegisterDeviceRequest, RegisterDeviceResponse, SecretStore,
     UnderlaySiteInitializationService,
 };
+use crate::ha::{ActiveLeaseConfig, ActiveLeaseGuard, ActiveLeaseRecord};
 use crate::intent::validation::validate_switch_pair_intent;
 use crate::model::DeviceId;
 use crate::planner::device_plan::plan_switch_pair;
@@ -66,6 +67,13 @@ pub struct AriaUnderlayService {
     product_audit_store: Arc<dyn ProductAuditStore>,
     adapter_pool: AdapterClientPool,
     confirmed_commit_timeout_secs: u32,
+}
+
+#[derive(Debug)]
+pub struct ActivePassiveAriaUnderlayService {
+    service: AriaUnderlayService,
+    lease: ActiveLeaseGuard,
+    startup_recovery: RecoveryReport,
 }
 
 impl AriaUnderlayService {
@@ -236,6 +244,19 @@ impl AriaUnderlayService {
         self
     }
 
+    pub async fn activate_active_passive(
+        self,
+        lease_config: ActiveLeaseConfig,
+    ) -> UnderlayResult<ActivePassiveAriaUnderlayService> {
+        let lease = ActiveLeaseGuard::acquire(lease_config)?;
+        let startup_recovery = self.recover_pending_transactions().await?;
+        Ok(ActivePassiveAriaUnderlayService {
+            service: self,
+            lease,
+            startup_recovery,
+        })
+    }
+
     fn operation_event_sink(&self) -> Arc<dyn EventSink> {
         let sink = RecordingEventSink::new(
             self.event_sink.clone(),
@@ -344,6 +365,40 @@ impl AriaUnderlayService {
     ) -> UnderlayResult<()> {
         self.apply_coordinator()
             .ensure_drift_policy_allows_apply(device_ids, policy)
+    }
+}
+
+impl ActivePassiveAriaUnderlayService {
+    pub fn lease_record(&self) -> ActiveLeaseRecord {
+        self.lease.record()
+    }
+
+    pub fn startup_recovery(&self) -> &RecoveryReport {
+        &self.startup_recovery
+    }
+
+    pub fn inner(&self) -> &AriaUnderlayService {
+        &self.service
+    }
+
+    pub async fn apply_domain_intent(
+        &self,
+        request: ApplyDomainIntentRequest,
+    ) -> UnderlayResult<ApplyIntentResponse> {
+        self.ensure_active()?;
+        self.service.apply_domain_intent(request).await
+    }
+
+    pub async fn dry_run_domain(
+        &self,
+        request: ApplyDomainIntentRequest,
+    ) -> UnderlayResult<DryRunResponse> {
+        self.ensure_active()?;
+        self.service.dry_run_domain(request).await
+    }
+
+    fn ensure_active(&self) -> UnderlayResult<()> {
+        self.lease.ensure_current()
     }
 }
 
@@ -554,6 +609,104 @@ impl UnderlayService for AriaUnderlayService {
             summaries: returned_summaries,
             overview,
         })
+    }
+}
+
+#[async_trait]
+impl UnderlayService for ActivePassiveAriaUnderlayService {
+    async fn initialize_underlay_site(
+        &self,
+        request: InitializeUnderlaySiteRequest,
+    ) -> UnderlayResult<InitializeUnderlaySiteResponse> {
+        self.ensure_active()?;
+        self.service.initialize_underlay_site(request).await
+    }
+
+    async fn register_device(
+        &self,
+        request: RegisterDeviceRequest,
+    ) -> UnderlayResult<RegisterDeviceResponse> {
+        self.ensure_active()?;
+        self.service.register_device(request).await
+    }
+
+    async fn onboard_device(
+        &self,
+        device_id: DeviceId,
+    ) -> UnderlayResult<DeviceOnboardingResponse> {
+        self.ensure_active()?;
+        self.service.onboard_device(device_id).await
+    }
+
+    async fn apply_intent(
+        &self,
+        request: ApplyIntentRequest,
+    ) -> UnderlayResult<ApplyIntentResponse> {
+        self.ensure_active()?;
+        self.service.apply_intent(request).await
+    }
+
+    async fn dry_run(&self, request: ApplyIntentRequest) -> UnderlayResult<DryRunResponse> {
+        self.ensure_active()?;
+        self.service.dry_run(request).await
+    }
+
+    async fn refresh_state(
+        &self,
+        request: RefreshStateRequest,
+    ) -> UnderlayResult<RefreshStateResponse> {
+        self.ensure_active()?;
+        self.service.refresh_state(request).await
+    }
+
+    async fn get_device_state(&self, device_id: DeviceId) -> UnderlayResult<DeviceShadowState> {
+        self.ensure_active()?;
+        self.service.get_device_state(device_id).await
+    }
+
+    async fn recover_pending_transactions(&self) -> UnderlayResult<RecoveryReport> {
+        self.ensure_active()?;
+        self.service.recover_pending_transactions().await
+    }
+
+    async fn list_in_doubt_transactions(
+        &self,
+        request: ListInDoubtTransactionsRequest,
+    ) -> UnderlayResult<ListInDoubtTransactionsResponse> {
+        self.ensure_active()?;
+        self.service.list_in_doubt_transactions(request).await
+    }
+
+    async fn run_drift_audit(
+        &self,
+        request: DriftAuditRequest,
+    ) -> UnderlayResult<DriftAuditResponse> {
+        self.ensure_active()?;
+        self.service.run_drift_audit(request).await
+    }
+
+    async fn force_unlock(
+        &self,
+        request: ForceUnlockRequest,
+    ) -> UnderlayResult<ForceUnlockResponse> {
+        self.ensure_active()?;
+        self.service.force_unlock(request).await
+    }
+
+    async fn force_resolve_transaction(
+        &self,
+        request: ForceResolveTransactionRequest,
+    ) -> UnderlayResult<ForceResolveTransactionResponse> {
+        self.ensure_active()?;
+        self.service.force_resolve_transaction(request).await
+    }
+
+    async fn list_operation_summaries(
+        &self,
+        request: ListOperationSummariesRequest,
+    ) -> UnderlayResult<ListOperationSummariesResponse> {
+        self.ensure_active()?;
+        self.service.list_operation_summaries(request).await
     }
 }
 

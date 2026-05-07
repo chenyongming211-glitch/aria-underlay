@@ -22,5 +22,5 @@ pub mod transactions;
 pub mod underlay_service;
 pub mod worker_config_admin;
 
-pub use service::AriaUnderlayService;
+pub use service::{ActivePassiveAriaUnderlayService, AriaUnderlayService};
 pub use underlay_service::UnderlayService;

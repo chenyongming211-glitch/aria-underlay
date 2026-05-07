@@ -4,6 +4,7 @@ pub mod authz;
 pub mod device;
 pub mod engine;
 pub mod error;
+pub mod ha;
 pub mod intent;
 pub mod model;
 pub mod ops_cli;
