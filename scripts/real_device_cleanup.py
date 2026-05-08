@@ -5,6 +5,7 @@ import argparse
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 
@@ -67,9 +68,7 @@ def build_description_cleanup_payload(
 ) -> str:
     ifindex = interface_ifindex(interface_name)
     if clear:
-        description_node = (
-            f'<Description xmlns:nc="{NETCONF_BASE_NS}" nc:operation="delete" />'
-        )
+        raise ValueError("clear description uses CLI cleanup, not NETCONF XML")
     else:
         text = "" if description is None else str(description)
         if not text:
@@ -84,6 +83,17 @@ def build_description_cleanup_payload(
         "</Interface></Interfaces></Ifmgr>"
         "</top></config>"
     )
+
+
+def build_description_clear_commands(interface_name: str) -> list[str]:
+    interface_ifindex(interface_name)
+    return [
+        "screen-length disable",
+        "system-view",
+        f"interface {interface_name.strip()}",
+        "undo description",
+        "return",
+    ]
 
 
 def interface_ifindex(name: str) -> int:
@@ -128,6 +138,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--host", required=True, help="Switch management IP or hostname.")
     parser.add_argument("--port", type=int, default=830, help="NETCONF SSH port.")
+    parser.add_argument(
+        "--ssh-port",
+        type=int,
+        default=22,
+        help="SSH CLI port used by --clear-description.",
+    )
     parser.add_argument("--secret-ref", required=True, help="Secret reference for the NETCONF account.")
     parser.add_argument(
         "--secret-file",
@@ -166,11 +182,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def build_payloads(args: argparse.Namespace) -> list[tuple[str, str]]:
+def build_payloads(args: argparse.Namespace) -> list[tuple[str, str, str | list[str]]]:
     payloads = []
     if args.access_interface:
         payloads.append(
             (
+                "netconf",
                 f"restore access {args.access_interface} PVID {args.access_pvid}",
                 build_access_cleanup_payload(args.access_interface, args.access_pvid),
             )
@@ -181,6 +198,7 @@ def build_payloads(args: argparse.Namespace) -> list[tuple[str, str]]:
         allowed_vlans = parse_vlan_list(args.trunk_allowed_vlans)
         payloads.append(
             (
+                "netconf",
                 f"restore trunk {args.trunk_interface} allowed VLANs {args.trunk_allowed_vlans}",
                 build_trunk_cleanup_payload(args.trunk_interface, allowed_vlans),
             )
@@ -195,18 +213,28 @@ def build_payloads(args: argparse.Namespace) -> list[tuple[str, str]]:
             if args.clear_description
             else f"restore description on {args.description_interface}"
         )
-        payloads.append(
-            (
-                label,
-                build_description_cleanup_payload(
-                    args.description_interface,
-                    args.description,
-                    clear=args.clear_description,
-                ),
+        if args.clear_description:
+            payloads.append(
+                (
+                    "cli",
+                    label,
+                    build_description_clear_commands(args.description_interface),
+                )
             )
-        )
+        else:
+            payloads.append(
+                (
+                    "netconf",
+                    label,
+                    build_description_cleanup_payload(
+                        args.description_interface,
+                        args.description,
+                        clear=False,
+                    ),
+                )
+            )
     for vlan_id in args.delete_vlan:
-        payloads.append((f"delete VLAN {vlan_id}", build_vlan_delete_payload(vlan_id)))
+        payloads.append(("netconf", f"delete VLAN {vlan_id}", build_vlan_delete_payload(vlan_id)))
     if not payloads:
         raise SystemExit("no cleanup operation requested")
     return payloads
@@ -217,8 +245,8 @@ def validate_safety_gate(args: argparse.Namespace) -> None:
         raise SystemExit("refusing to connect without --yes; use --dry-run to inspect payloads")
 
 
-def execute_payloads(args: argparse.Namespace, payloads: list[tuple[str, str]]) -> None:
-    manager, secret_provider = _load_runtime_dependencies()
+def execute_payloads(args: argparse.Namespace, payloads: list[tuple[str, str, str | list[str]]]) -> None:
+    manager, secret_provider, paramiko = _load_runtime_dependencies()
     secret = secret_provider.LocalSecretProvider(args.secret_file).resolve(args.secret_ref)
     connect_args = {
         "host": args.host,
@@ -234,15 +262,80 @@ def execute_payloads(args: argparse.Namespace, payloads: list[tuple[str, str]]) 
     if secret.passphrase:
         connect_args["passphrase"] = secret.passphrase
 
-    with manager.connect(**connect_args) as session:
-        for label, payload in payloads:
-            print(f"applying: {label}")
-            session.edit_config(
-                target="running",
-                config=payload,
-                default_operation="merge",
-                error_option="rollback-on-error",
-            )
+    for kind, label, payload in payloads:
+        print(f"applying: {label}")
+        if kind == "netconf":
+            with manager.connect(**connect_args) as session:
+                session.edit_config(
+                    target="running",
+                    config=payload,
+                    default_operation="merge",
+                    error_option="rollback-on-error",
+                )
+        elif kind == "cli":
+            execute_cli_commands(args, secret, paramiko, payload)
+        else:
+            raise RuntimeError(f"unknown cleanup operation kind: {kind}")
+
+
+def execute_cli_commands(args, secret, paramiko, commands: list[str]) -> None:
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    connect_args = {
+        "hostname": args.host,
+        "port": args.ssh_port,
+        "username": secret.username,
+        "password": secret.password,
+        "key_filename": secret.key_path,
+        "look_for_keys": False,
+        "allow_agent": False,
+        "timeout": args.timeout,
+    }
+    if secret.passphrase:
+        connect_args["passphrase"] = secret.passphrase
+    client.connect(**connect_args)
+    try:
+        channel = client.invoke_shell()
+        channel.settimeout(2)
+        for command in commands:
+            channel.send(command + "\n")
+            time.sleep(0.5)
+        output = _read_cli_output(channel)
+    finally:
+        client.close()
+    errors = [
+        line
+        for line in output.splitlines()
+        if "Error" in line or "Invalid" in line or "Unrecognized" in line
+    ]
+    if errors:
+        raise RuntimeError(f"SSH CLI cleanup failed: {'; '.join(errors)}")
+
+
+def _read_cli_output(channel) -> str:
+    output = ""
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        try:
+            data = channel.recv(65535)
+        except Exception:
+            break
+        if not data:
+            break
+        output += data.decode(errors="ignore")
+    return output
+
+
+def print_payloads(payloads: list[tuple[str, str, str | list[str]]]) -> None:
+    for kind, label, payload in payloads:
+        print(f"# {label}")
+        if kind == "netconf":
+            print(payload)
+        elif kind == "cli":
+            for command in payload:
+                print(command)
+        else:
+            raise RuntimeError(f"unknown cleanup operation kind: {kind}")
 
 
 def _load_runtime_dependencies():
@@ -251,9 +344,10 @@ def _load_runtime_dependencies():
     if adapter_path.exists():
         sys.path.insert(0, str(adapter_path))
     from ncclient import manager
+    import paramiko
     from aria_underlay_adapter import secret_provider
 
-    return manager, secret_provider
+    return manager, secret_provider, paramiko
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -261,9 +355,7 @@ def main(argv: list[str] | None = None) -> int:
     validate_safety_gate(args)
     payloads = build_payloads(args)
     if args.dry_run:
-        for label, payload in payloads:
-            print(f"# {label}")
-            print(payload)
+        print_payloads(payloads)
         return 0
     execute_payloads(args, payloads)
     print("cleanup complete")

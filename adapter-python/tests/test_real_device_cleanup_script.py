@@ -73,16 +73,15 @@ def test_interface_description_cleanup_payload_restores_description():
 def test_interface_description_cleanup_payload_can_clear_description():
     cleanup = _load_cleanup_module()
 
-    payload = cleanup.build_description_cleanup_payload(
-        "GigabitEthernet1/0/18",
-        None,
-        clear=True,
-    )
-    root = ElementTree.fromstring(payload)
-    description = root.find(".//{http://www.h3c.com/netconf/config:1.0}Description")
+    commands = cleanup.build_description_clear_commands("GigabitEthernet1/0/18")
 
-    assert description is not None
-    assert description.attrib["{urn:ietf:params:xml:ns:netconf:base:1.0}operation"] == "delete"
+    assert commands == [
+        "screen-length disable",
+        "system-view",
+        "interface GigabitEthernet1/0/18",
+        "undo description",
+        "return",
+    ]
 
 
 def test_execute_requires_yes_unless_dry_run():

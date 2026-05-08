@@ -158,7 +158,9 @@ python3 scripts/real_device_cleanup.py \
 Read back the same scope again. The test VLAN must be absent, and the access
 port must no longer show the test PVID or temporary description. If the
 original description was empty, replace the cleanup `--description` argument
-with `--clear-description`.
+with `--clear-description`. On tested H3C Comware devices, clearing an
+interface description uses SSH CLI `undo description`; the cleanup tool prints
+the exact CLI sequence during dry-run and still requires `--yes` before writing.
 
 ## Trunk Port Acceptance
 
@@ -236,7 +238,9 @@ python3 scripts/real_device_cleanup.py \
 Read back the same scope again. The test VLAN must be absent, and the trunk
 allowed VLAN list and description must exactly match the original values. If
 the original description was empty, replace the cleanup `--description`
-argument with `--clear-description`.
+argument with `--clear-description`. On tested H3C Comware devices, clearing an
+interface description uses SSH CLI `undo description`; the cleanup tool prints
+the exact CLI sequence during dry-run and still requires `--yes` before writing.
 
 ## Running Cleanup In The Adapter Container
 
@@ -258,7 +262,8 @@ docker run -i --rm --network host \
 ```
 
 Replace `<adapter-image>` with the image currently running in production or in
-the acceptance environment.
+the acceptance environment. When `--clear-description` is used, the container
+also needs SSH access to the switch management address, normally TCP 22.
 
 ## Failure Handling
 

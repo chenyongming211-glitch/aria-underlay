@@ -51,6 +51,7 @@ Copy this checklist for every switch/model acceptance run.
 ## Access Cleanup
 
 - [ ] Cleanup dry-run payload was inspected.
+- [ ] If clearing an empty original description, cleanup dry-run showed the SSH CLI `undo description` sequence.
 - [ ] Cleanup executed with `--yes`.
 - [ ] Cleanup readback shows test VLAN absent.
 - [ ] Cleanup readback shows access port restored.
@@ -79,6 +80,7 @@ Copy this checklist for every switch/model acceptance run.
 ## Trunk Cleanup
 
 - [ ] Cleanup dry-run payload was inspected.
+- [ ] If clearing an empty original description, cleanup dry-run showed the SSH CLI `undo description` sequence.
 - [ ] Cleanup executed with `--yes`.
 - [ ] Cleanup readback shows test VLAN absent.
 - [ ] Cleanup readback shows trunk allowed VLAN list restored exactly.
