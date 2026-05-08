@@ -46,15 +46,35 @@ class H3cRenderer:
             self.render_vlan_create(vlan)
             for vlan in getattr(desired_state, "vlans", [])
         ]
+        ifmgr_nodes = []
         access_nodes = []
         trunk_nodes = []
         for interface in getattr(desired_state, "interfaces", []):
             kind = _mode_kind(_field(interface, "mode"))
+            description_node = self.render_interface_description(interface)
+            if description_node is not None:
+                ifmgr_nodes.append(description_node)
             node = self.render_interface_update(interface)
             if kind == "access":
                 access_nodes.append(node)
             elif kind == "trunk":
                 trunk_nodes.append(node)
+
+        top_children = []
+        if ifmgr_nodes:
+            top_children.append(
+                XmlElement(
+                    "Ifmgr",
+                    namespace=self.IFACE_NAMESPACE,
+                    children=[
+                        XmlElement(
+                            "Interfaces",
+                            namespace=self.IFACE_NAMESPACE,
+                            children=ifmgr_nodes,
+                        )
+                    ],
+                )
+            )
 
         vlan_children = []
         if vlan_nodes:
@@ -77,7 +97,15 @@ class H3cRenderer:
                     children=trunk_nodes,
                 )
             )
-        if not vlan_children:
+        if vlan_children:
+            top_children.append(
+                XmlElement(
+                    "VLAN",
+                    namespace=self.VLAN_NAMESPACE,
+                    children=vlan_children,
+                )
+            )
+        if not top_children:
             raise AdapterError(
                 code="EMPTY_DESIRED_STATE",
                 message="desired state contains no VLAN or interface changes",
@@ -94,13 +122,7 @@ class H3cRenderer:
                     XmlElement(
                         "top",
                         namespace=self.VLAN_NAMESPACE,
-                        children=[
-                            XmlElement(
-                                "VLAN",
-                                namespace=self.VLAN_NAMESPACE,
-                                children=vlan_children,
-                            )
-                        ],
+                        children=top_children,
                     )
                 ],
             )
@@ -108,13 +130,16 @@ class H3cRenderer:
 
     def render_vlan_create(self, vlan) -> XmlElement:
         vlan_id = _validate_vlan_id(_field(vlan, "vlan_id"), "vlan.vlan_id")
-        if _optional_text(vlan, "description") is not None:
-            raise ValueError("H3C VLAN description is not supported yet")
 
         children = [XmlElement("ID", namespace=self.VLAN_NAMESPACE, children=[str(vlan_id)])]
         name = _optional_text(vlan, "name")
         if name is not None:
             children.append(XmlElement("Name", namespace=self.VLAN_NAMESPACE, children=[name]))
+        description = _optional_text(vlan, "description")
+        if description is not None:
+            children.append(
+                XmlElement("Description", namespace=self.VLAN_NAMESPACE, children=[description])
+            )
         return XmlElement("VLANID", namespace=self.VLAN_NAMESPACE, children=children)
 
     def render_vlan_delete(self, vlan_id: int) -> XmlElement:
@@ -128,8 +153,6 @@ class H3cRenderer:
 
     def render_interface_update(self, interface) -> XmlElement:
         name = _required_text(interface, "name")
-        if _optional_text(interface, "description") is not None:
-            raise ValueError("H3C interface description is not supported in VLAN renderer")
         _validate_admin_state(_field(interface, "admin_state"))
 
         ifindex = _interface_ifindex(name)
@@ -173,6 +196,25 @@ class H3cRenderer:
             )
 
         return XmlElement("Interface", namespace=self.IFACE_NAMESPACE, children=children)
+
+    def render_interface_description(self, interface) -> XmlElement | None:
+        description = _optional_text(interface, "description")
+        if description is None:
+            return None
+        name = _required_text(interface, "name")
+        ifindex = _interface_ifindex(name)
+        return XmlElement(
+            "Interface",
+            namespace=self.IFACE_NAMESPACE,
+            children=[
+                XmlElement("IfIndex", namespace=self.IFACE_NAMESPACE, children=[str(ifindex)]),
+                XmlElement(
+                    "Description",
+                    namespace=self.IFACE_NAMESPACE,
+                    children=[description],
+                ),
+            ],
+        )
 
 
 def _field(message, name):

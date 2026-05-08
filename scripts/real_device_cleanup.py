@@ -59,6 +59,33 @@ def build_vlan_delete_payload(vlan_id: int) -> str:
     )
 
 
+def build_description_cleanup_payload(
+    interface_name: str,
+    description: str | None,
+    *,
+    clear: bool,
+) -> str:
+    ifindex = interface_ifindex(interface_name)
+    if clear:
+        description_node = (
+            f'<Description xmlns:nc="{NETCONF_BASE_NS}" nc:operation="delete" />'
+        )
+    else:
+        text = "" if description is None else str(description)
+        if not text:
+            raise ValueError("description is required unless clear=True")
+        description_node = f"<Description>{xml_escape(text)}</Description>"
+    return (
+        f'<config xmlns="{NETCONF_BASE_NS}">'
+        f'<top xmlns="{H3C_CONFIG_NS}">'
+        "<Ifmgr><Interfaces><Interface>"
+        f"<IfIndex>{ifindex}</IfIndex>"
+        f"{description_node}"
+        "</Interface></Interfaces></Ifmgr>"
+        "</top></config>"
+    )
+
+
 def interface_ifindex(name: str) -> int:
     match = H3C_INTERFACE_RE.fullmatch(str(name).strip())
     if match is None:
@@ -83,6 +110,16 @@ def parse_vlan_list(value: str) -> list[int]:
     if not vlans:
         raise ValueError("trunk allowed VLAN list must not be empty")
     return vlans
+
+
+def xml_escape(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -116,6 +153,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=[],
         help="Test VLAN ID to delete after interface restore. May be repeated.",
     )
+    parser.add_argument("--description-interface", help="Interface description to restore or clear.")
+    parser.add_argument("--description", help="Description text to restore.")
+    parser.add_argument(
+        "--clear-description",
+        action="store_true",
+        help="Delete --description-interface description instead of restoring text.",
+    )
     parser.add_argument("--timeout", type=int, default=30, help="NETCONF connection timeout seconds.")
     parser.add_argument("--dry-run", action="store_true", help="Print payloads without connecting.")
     parser.add_argument("--yes", action="store_true", help="Required for real device writes.")
@@ -139,6 +183,26 @@ def build_payloads(args: argparse.Namespace) -> list[tuple[str, str]]:
             (
                 f"restore trunk {args.trunk_interface} allowed VLANs {args.trunk_allowed_vlans}",
                 build_trunk_cleanup_payload(args.trunk_interface, allowed_vlans),
+            )
+        )
+    if args.description_interface:
+        if args.clear_description and args.description:
+            raise SystemExit("--description cannot be used with --clear-description")
+        if not args.clear_description and not args.description:
+            raise SystemExit("--description is required unless --clear-description is set")
+        label = (
+            f"clear description on {args.description_interface}"
+            if args.clear_description
+            else f"restore description on {args.description_interface}"
+        )
+        payloads.append(
+            (
+                label,
+                build_description_cleanup_payload(
+                    args.description_interface,
+                    args.description,
+                    clear=args.clear_description,
+                ),
             )
         )
     for vlan_id in args.delete_vlan:

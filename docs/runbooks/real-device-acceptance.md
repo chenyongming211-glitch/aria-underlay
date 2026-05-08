@@ -6,8 +6,10 @@ This runbook turns the H3C real-switch validation flow into a repeatable
 acceptance procedure. The current production-verified surface is:
 
 - VLAN create/update through NETCONF running edit-config.
+- VLAN description update.
 - Access port PVID update.
 - Trunk port allowed VLAN update.
+- Access/trunk interface description update.
 - Scoped get-current-state readback and verify.
 
 The procedure has been exercised against H3C S5560 and S6800 representatives.
@@ -38,10 +40,13 @@ For each switch/model under test, record these values before writing:
 | Adapter endpoint | Example: `http://127.0.0.1:50051` |
 | Secret ref | Example: `lab/h3c` |
 | Test VLAN | A VLAN that is absent before the test |
+| Test VLAN description | Optional temporary description to verify |
 | Access port | An approved idle access port |
 | Access original PVID | Usually `1`, but verify first |
+| Access original description | Exact text to restore, or explicit empty |
 | Trunk port | An approved trunk port |
 | Trunk original allowed VLANs | Exact list to restore after the test |
+| Trunk original description | Exact text to restore, or explicit empty |
 
 The acceptance VLAN used in previous lab runs was `4093`; this is only a
 convention, not a requirement.
@@ -68,7 +73,9 @@ operator wrapper. The required evidence is:
 
 - Test VLAN is absent before the write.
 - Access port current PVID is recorded.
+- Access port current description is recorded.
 - Trunk port current allowed VLAN list is recorded.
+- Trunk port current description is recorded.
 - No unapproved interface appears in the scoped readback.
 
 4. Prepare the environment file from
@@ -112,7 +119,11 @@ expected result is usually `SuccessWithWarning` with strategy
 Acceptance requires:
 
 - The test VLAN exists with the expected name.
+- The test VLAN has the expected description when
+  `ARIA_UNDERLAY_TEST_VLAN_DESCRIPTION` is set.
 - The access port reports access mode with the test VLAN as PVID.
+- The access port has the expected description when
+  `ARIA_UNDERLAY_ACCESS_DESCRIPTION` is set.
 
 5. Clean up and verify again.
 
@@ -124,6 +135,8 @@ python3 scripts/real_device_cleanup.py \
   --secret-ref "$ARIA_UNDERLAY_SECRET_REF" \
   --access-interface "$ARIA_UNDERLAY_ACCESS_INTERFACE" \
   --access-pvid "$ARIA_UNDERLAY_ACCESS_ORIGINAL_PVID" \
+  --description-interface "$ARIA_UNDERLAY_ACCESS_INTERFACE" \
+  --description "$ARIA_UNDERLAY_ACCESS_ORIGINAL_DESCRIPTION" \
   --delete-vlan "$ARIA_UNDERLAY_TEST_VLAN" \
   --dry-run
 ```
@@ -136,12 +149,16 @@ python3 scripts/real_device_cleanup.py \
   --secret-ref "$ARIA_UNDERLAY_SECRET_REF" \
   --access-interface "$ARIA_UNDERLAY_ACCESS_INTERFACE" \
   --access-pvid "$ARIA_UNDERLAY_ACCESS_ORIGINAL_PVID" \
+  --description-interface "$ARIA_UNDERLAY_ACCESS_INTERFACE" \
+  --description "$ARIA_UNDERLAY_ACCESS_ORIGINAL_DESCRIPTION" \
   --delete-vlan "$ARIA_UNDERLAY_TEST_VLAN" \
   --yes
 ```
 
 Read back the same scope again. The test VLAN must be absent, and the access
-port must no longer show the test PVID.
+port must no longer show the test PVID or temporary description. If the
+original description was empty, replace the cleanup `--description` argument
+with `--clear-description`.
 
 ## Trunk Port Acceptance
 
@@ -170,6 +187,8 @@ exact list to restore.
 - The test VLAN is created.
 - The trunk interface changes from the original allowed VLAN list to the list
   that includes the test VLAN.
+- The requested descriptions appear in the desired state when the optional
+  description environment variables are set.
 - The apply result is `Success` or `SuccessWithWarning`.
 - The `tx_id` and transaction strategy are recorded.
 
@@ -178,7 +197,11 @@ exact list to restore.
 Acceptance requires:
 
 - The test VLAN exists.
+- The test VLAN has the expected description when
+  `ARIA_UNDERLAY_TEST_VLAN_DESCRIPTION` is set.
 - The trunk port allowed VLAN list exactly matches the requested test list.
+- The trunk port has the expected description when
+  `ARIA_UNDERLAY_TRUNK_DESCRIPTION` is set.
 
 5. Clean up and verify again.
 
@@ -190,6 +213,8 @@ python3 scripts/real_device_cleanup.py \
   --secret-ref "$ARIA_UNDERLAY_SECRET_REF" \
   --trunk-interface "$ARIA_UNDERLAY_TRUNK_INTERFACE" \
   --trunk-allowed-vlans "$ARIA_UNDERLAY_TRUNK_ORIGINAL_ALLOWED_VLANS" \
+  --description-interface "$ARIA_UNDERLAY_TRUNK_INTERFACE" \
+  --description "$ARIA_UNDERLAY_TRUNK_ORIGINAL_DESCRIPTION" \
   --delete-vlan "$ARIA_UNDERLAY_TEST_VLAN" \
   --dry-run
 ```
@@ -202,12 +227,16 @@ python3 scripts/real_device_cleanup.py \
   --secret-ref "$ARIA_UNDERLAY_SECRET_REF" \
   --trunk-interface "$ARIA_UNDERLAY_TRUNK_INTERFACE" \
   --trunk-allowed-vlans "$ARIA_UNDERLAY_TRUNK_ORIGINAL_ALLOWED_VLANS" \
+  --description-interface "$ARIA_UNDERLAY_TRUNK_INTERFACE" \
+  --description "$ARIA_UNDERLAY_TRUNK_ORIGINAL_DESCRIPTION" \
   --delete-vlan "$ARIA_UNDERLAY_TEST_VLAN" \
   --yes
 ```
 
 Read back the same scope again. The test VLAN must be absent, and the trunk
-allowed VLAN list must exactly match the original list.
+allowed VLAN list and description must exactly match the original values. If
+the original description was empty, replace the cleanup `--description`
+argument with `--clear-description`.
 
 ## Running Cleanup In The Adapter Container
 
@@ -253,5 +282,6 @@ The acceptance run is complete only when:
 - Every write has a readback proof.
 - Every cleanup has a readback proof.
 - No test VLAN remains.
-- Every changed port is restored to its recorded original state.
+- Every changed port is restored to its recorded original PVID/allowed VLAN and
+  description state.
 - The record template is filled in and stored with the release/test notes.

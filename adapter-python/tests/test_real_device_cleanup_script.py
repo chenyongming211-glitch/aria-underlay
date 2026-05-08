@@ -53,6 +53,38 @@ def test_vlan_delete_payload_uses_netconf_delete_operation():
     assert vlan.find("{http://www.h3c.com/netconf/config:1.0}ID").text == "4093"
 
 
+def test_interface_description_cleanup_payload_restores_description():
+    cleanup = _load_cleanup_module()
+
+    payload = cleanup.build_description_cleanup_payload(
+        "GigabitEthernet1/0/18",
+        "server access",
+        clear=False,
+    )
+    root = ElementTree.fromstring(payload)
+
+    assert root.find(".//{http://www.h3c.com/netconf/config:1.0}Ifmgr") is not None
+    assert root.find(".//{http://www.h3c.com/netconf/config:1.0}IfIndex").text == "18"
+    assert root.find(".//{http://www.h3c.com/netconf/config:1.0}Description").text == (
+        "server access"
+    )
+
+
+def test_interface_description_cleanup_payload_can_clear_description():
+    cleanup = _load_cleanup_module()
+
+    payload = cleanup.build_description_cleanup_payload(
+        "GigabitEthernet1/0/18",
+        None,
+        clear=True,
+    )
+    root = ElementTree.fromstring(payload)
+    description = root.find(".//{http://www.h3c.com/netconf/config:1.0}Description")
+
+    assert description is not None
+    assert description.attrib["{urn:ietf:params:xml:ns:netconf:base:1.0}operation"] == "delete"
+
+
 def test_execute_requires_yes_unless_dry_run():
     cleanup = _load_cleanup_module()
     args = cleanup.parse_args(

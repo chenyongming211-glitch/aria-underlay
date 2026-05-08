@@ -17,6 +17,7 @@ private keys, session tokens, or full secrets.
 | Device model |  |
 | Secret ref |  |
 | Test VLAN |  |
+| Test VLAN description |  |
 
 ## Baseline
 
@@ -25,8 +26,10 @@ private keys, session tokens, or full secrets.
 | Test VLAN present before write | No |
 | Access interface |  |
 | Access original PVID |  |
+| Access original description |  |
 | Trunk interface |  |
 | Trunk original allowed VLANs |  |
+| Trunk original description |  |
 
 ## Access Acceptance
 
@@ -38,7 +41,9 @@ private keys, session tokens, or full secrets.
 | Transaction strategy |  |
 | tx_id |  |
 | Readback VLAN result |  |
+| Readback VLAN description result |  |
 | Readback access result |  |
+| Readback access description result |  |
 | Cleanup command dry-run inspected |  |
 | Cleanup result |  |
 | Cleanup readback result |  |
@@ -53,7 +58,9 @@ private keys, session tokens, or full secrets.
 | Transaction strategy |  |
 | tx_id |  |
 | Readback VLAN result |  |
+| Readback VLAN description result |  |
 | Readback trunk result |  |
+| Readback trunk description result |  |
 | Cleanup command dry-run inspected |  |
 | Cleanup result |  |
 | Cleanup readback result |  |

@@ -20,7 +20,7 @@ def build_state_filter(scope=None, *, parser=None):
         return None
 
     if _parser_vendor(parser) == "h3c":
-        return f'<top xmlns="{H3C_COMWARE_CONFIG_NS}"><VLAN/></top>'
+        return f'<top xmlns="{H3C_COMWARE_CONFIG_NS}"><Ifmgr/><VLAN/></top>'
 
     parts = []
     if vlan_ids:

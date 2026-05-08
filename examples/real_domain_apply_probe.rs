@@ -40,10 +40,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let test_vlan = env_u16("ARIA_UNDERLAY_TEST_VLAN", 4093)?;
     let vlan_name =
         std::env::var("ARIA_UNDERLAY_TEST_VLAN_NAME").unwrap_or_else(|_| "aria-test".into());
+    let vlan_description = optional_env("ARIA_UNDERLAY_TEST_VLAN_DESCRIPTION");
     let allow_degraded = env_bool("ARIA_UNDERLAY_ALLOW_DEGRADED", true)?;
 
     let interfaces = desired_interfaces(&member_id, test_vlan)?;
-    let vlans = desired_vlans(test_vlan, vlan_name, &interfaces);
+    let vlans = desired_vlans(test_vlan, vlan_name, vlan_description, &interfaces);
 
     let inventory = DeviceInventory::default();
     let service = AriaUnderlayService::new(inventory.clone());
@@ -138,7 +139,7 @@ fn desired_interfaces(
                 device_id: DeviceId(member_id.into()),
                 name,
                 admin_state: AdminState::Up,
-                description: None,
+                description: optional_env("ARIA_UNDERLAY_ACCESS_DESCRIPTION"),
                 mode: PortMode::Access { vlan_id: test_vlan },
             });
         }
@@ -159,7 +160,7 @@ fn desired_interfaces(
                 device_id: DeviceId(member_id.into()),
                 name,
                 admin_state: AdminState::Up,
-                description: None,
+                description: optional_env("ARIA_UNDERLAY_TRUNK_DESCRIPTION"),
                 mode: PortMode::Trunk {
                     native_vlan: None,
                     allowed_vlans,
@@ -173,6 +174,7 @@ fn desired_interfaces(
 fn desired_vlans(
     test_vlan: u16,
     vlan_name: String,
+    vlan_description: Option<String>,
     interfaces: &[InterfaceIntent],
 ) -> Vec<VlanIntent> {
     let mut vlan_ids = BTreeSet::from([test_vlan]);
@@ -197,7 +199,9 @@ fn desired_vlans(
         .map(|vlan_id| VlanIntent {
             vlan_id,
             name: (vlan_id == test_vlan).then(|| vlan_name.clone()),
-            description: None,
+            description: (vlan_id == test_vlan)
+                .then(|| vlan_description.clone())
+                .flatten(),
         })
         .collect()
 }
@@ -210,6 +214,13 @@ fn required_env(name: &str) -> Result<String, Box<dyn std::error::Error>> {
         )
         .into()
     })
+}
+
+fn optional_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn env_u16(name: &str, default: u16) -> Result<u16, Box<dyn std::error::Error>> {

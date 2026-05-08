@@ -1081,7 +1081,7 @@ def test_build_state_filter_deduplicates_sorts_and_escapes_scope_values():
     )
 
 
-def test_build_state_filter_uses_h3c_vlan_subtree_for_scoped_reads():
+def test_build_state_filter_uses_h3c_ifmgr_and_vlan_subtrees_for_scoped_reads():
     scope = _Scope(
         full=False,
         vlan_ids=[6, 1003],
@@ -1089,7 +1089,7 @@ def test_build_state_filter_uses_h3c_vlan_subtree_for_scoped_reads():
     )
 
     assert build_state_filter(scope, parser=H3cStateParser(model_hint="S6800-54QF")) == (
-        '<top xmlns="http://www.h3c.com/netconf/config:1.0"><VLAN/></top>'
+        '<top xmlns="http://www.h3c.com/netconf/config:1.0"><Ifmgr/><VLAN/></top>'
     )
 
 
@@ -1234,7 +1234,7 @@ def test_get_current_state_uses_configured_production_parser():
     assert parser.calls[0][1].vlan_ids == [100]
 
 
-def test_get_current_state_uses_h3c_vlan_subtree_filter_for_scoped_reads():
+def test_get_current_state_uses_h3c_ifmgr_and_vlan_subtree_filter_for_scoped_reads():
     session = _RecordingSession(
         reply=_Reply(
             """
@@ -1271,13 +1271,13 @@ def test_get_current_state_uses_h3c_vlan_subtree_filter_for_scoped_reads():
             "get_config",
             {
                 "source": "running",
-                "filter": (
-                    "subtree",
-                    '<top xmlns="http://www.h3c.com/netconf/config:1.0"><VLAN/></top>',
-                ),
-            },
-        )
-    ]
+                    "filter": (
+                        "subtree",
+                        '<top xmlns="http://www.h3c.com/netconf/config:1.0"><Ifmgr/><VLAN/></top>',
+                    ),
+                },
+            )
+        ]
 
 
 def test_get_current_state_rejects_non_production_parser():

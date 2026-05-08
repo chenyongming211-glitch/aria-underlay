@@ -153,6 +153,20 @@ def test_h3c_renderer_builds_vlan_create_xml():
     assert root.find(f"{{{ns}}}Name").text == "prod"
 
 
+def test_h3c_renderer_builds_vlan_description_xml():
+    xml = render_xml(
+        H3cRenderer().render_vlan_create(
+            _Vlan(vlan_id=100, name="prod", description="tenant vlan")
+        )
+    )
+    root = ElementTree.fromstring(xml)
+    ns = H3cRenderer().VLAN_NAMESPACE
+
+    assert root.find(f"{{{ns}}}ID").text == "100"
+    assert root.find(f"{{{ns}}}Name").text == "prod"
+    assert root.find(f"{{{ns}}}Description").text == "tenant vlan"
+
+
 @pytest.mark.parametrize("renderer", [HuaweiRenderer()])
 def test_vendor_renderer_builds_vlan_delete_xml(renderer):
     xml = render_xml(renderer.render_vlan_delete(100))
@@ -284,6 +298,31 @@ def test_h3c_renderer_builds_real_comware_edit_config_document():
     assert root.find(f".//{{{ns}}}admin-state") is None
 
 
+def test_h3c_renderer_builds_interface_description_edit_config_document():
+    xml = H3cRenderer().render_edit_config(
+        _DesiredState(
+            vlans=[],
+            interfaces=[
+                _Interface(
+                    name="GigabitEthernet1/0/13",
+                    admin_state=1,
+                    description="server access",
+                    mode={"kind": "Access", "access_vlan": 144},
+                )
+            ],
+        )
+    )
+    root = ElementTree.fromstring(xml)
+    ns = H3cRenderer().IFACE_NAMESPACE
+
+    ifmgr_interface = root.find(f".//{{{ns}}}Ifmgr/{{{ns}}}Interfaces/{{{ns}}}Interface")
+    assert ifmgr_interface is not None
+    assert ifmgr_interface.find(f"{{{ns}}}IfIndex").text == "13"
+    assert ifmgr_interface.find(f"{{{ns}}}Description").text == "server access"
+    access_interface = root.find(f".//{{{ns}}}AccessInterfaces/{{{ns}}}Interface")
+    assert access_interface.find(f"{{{ns}}}PVID").text == "144"
+
+
 @pytest.mark.parametrize("renderer", [HuaweiRenderer()])
 def test_vendor_renderer_builds_single_edit_config_document(renderer):
     xml = renderer.render_edit_config(
@@ -393,25 +432,6 @@ def test_vendor_renderer_rejects_empty_trunk(renderer):
                     "native_vlan": None,
                     "allowed_vlans": [],
                 },
-            )
-        )
-
-
-def test_h3c_renderer_rejects_unverified_vlan_description():
-    with pytest.raises(ValueError, match="VLAN description is not supported"):
-        H3cRenderer().render_vlan_create(
-            _Vlan(vlan_id=100, name="prod", description="production")
-        )
-
-
-def test_h3c_renderer_rejects_unverified_interface_description():
-    with pytest.raises(ValueError, match="interface description is not supported"):
-        H3cRenderer().render_interface_update(
-            _Interface(
-                name="GigabitEthernet1/0/13",
-                admin_state=1,
-                description="server",
-                mode={"kind": "access", "access_vlan": 100},
             )
         )
 
