@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::engine::normalize::{normalize_desired_state, normalize_shadow_state};
-use crate::model::{DeviceId, InterfaceConfig, VlanConfig};
+use crate::model::{AclConfig, DeviceId, InterfaceConfig, VlanConfig};
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::state::DeviceShadowState;
 
@@ -27,6 +27,14 @@ pub enum ChangeOp {
     },
     DeleteInterfaceConfig {
         name: String,
+    },
+    CreateAcl(AclConfig),
+    UpdateAcl {
+        before: AclConfig,
+        after: AclConfig,
+    },
+    DeleteAcl {
+        acl_id: u16,
     },
 }
 
@@ -73,6 +81,23 @@ pub fn compute_diff(desired: &DeviceDesiredState, current: &DeviceShadowState) -
             change_set
                 .ops
                 .push(ChangeOp::DeleteInterfaceConfig { name: name.clone() });
+        }
+    }
+
+    for (acl_id, desired_acl) in &desired.acls {
+        match current.acls.get(acl_id) {
+            Some(current_acl) if current_acl == desired_acl => {}
+            Some(current_acl) => change_set.ops.push(ChangeOp::UpdateAcl {
+                before: current_acl.clone(),
+                after: desired_acl.clone(),
+            }),
+            None => change_set.ops.push(ChangeOp::CreateAcl(desired_acl.clone())),
+        }
+    }
+
+    for acl_id in current.acls.keys() {
+        if !desired.acls.contains_key(acl_id) {
+            change_set.ops.push(ChangeOp::DeleteAcl { acl_id: *acl_id });
         }
     }
 

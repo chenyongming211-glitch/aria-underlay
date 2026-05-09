@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
+use std::net::Ipv4Addr;
 
 use crate::intent::{SwitchPairIntent, UnderlayDomainIntent, UnderlayTopology};
-use crate::model::{is_canonical_identifier, DeviceId, PortMode};
+use crate::model::{is_canonical_identifier, AclConfig, AclProtocol, DeviceId, PortMode};
 use crate::{UnderlayError, UnderlayResult};
 
 pub fn validate_switch_pair_intent(intent: &SwitchPairIntent) -> UnderlayResult<()> {
@@ -122,6 +123,15 @@ pub fn validate_underlay_domain_intent(intent: &UnderlayDomainIntent) -> Underla
         "underlay domain",
         "switch member",
     )?;
+    validate_acls(
+        intent.acls.iter().map(|acl| AclConfig {
+            acl_id: acl.acl_id,
+            name: acl.name.clone(),
+            description: acl.description.clone(),
+            rules: acl.rules.clone(),
+        }),
+        "underlay domain",
+    )?;
 
     Ok(())
 }
@@ -195,6 +205,95 @@ where
             )));
         }
     }
+    Ok(())
+}
+
+fn validate_acls<I>(acls: I, context: &str) -> UnderlayResult<()>
+where
+    I: IntoIterator<Item = AclConfig>,
+{
+    let mut seen = BTreeSet::new();
+    for acl in acls {
+        if !(3000..=3999).contains(&acl.acl_id) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} has invalid IPv4 advanced acl_id {}; valid range is 3000..=3999",
+                acl.acl_id
+            )));
+        }
+        if !seen.insert(acl.acl_id) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} has duplicate acl_id {}",
+                acl.acl_id
+            )));
+        }
+
+        let mut rule_ids = BTreeSet::new();
+        for rule in &acl.rules {
+            if !rule_ids.insert(rule.sequence) {
+                return Err(UnderlayError::InvalidIntent(format!(
+                    "{context} ACL {} has duplicate rule sequence {}",
+                    acl.acl_id, rule.sequence
+                )));
+            }
+            if rule.source_port_eq.is_some()
+                && !matches!(rule.protocol, AclProtocol::Tcp | AclProtocol::Udp)
+            {
+                return Err(UnderlayError::InvalidIntent(format!(
+                    "{context} ACL {} rule {} has source_port_eq but protocol is not tcp/udp",
+                    acl.acl_id, rule.sequence
+                )));
+            }
+            if rule.destination_port_eq.is_some()
+                && !matches!(rule.protocol, AclProtocol::Tcp | AclProtocol::Udp)
+            {
+                return Err(UnderlayError::InvalidIntent(format!(
+                    "{context} ACL {} rule {} has destination_port_eq but protocol is not tcp/udp",
+                    acl.acl_id, rule.sequence
+                )));
+            }
+            if matches!(rule.source_port_eq, Some(0)) || matches!(rule.destination_port_eq, Some(0))
+            {
+                return Err(UnderlayError::InvalidIntent(format!(
+                    "{context} ACL {} rule {} has invalid port 0",
+                    acl.acl_id, rule.sequence
+                )));
+            }
+            if let Some(source) = &rule.source {
+                validate_acl_endpoint(context, acl.acl_id, rule.sequence, "source", source)?;
+            }
+            if let Some(destination) = &rule.destination {
+                validate_acl_endpoint(
+                    context,
+                    acl.acl_id,
+                    rule.sequence,
+                    "destination",
+                    destination,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_acl_endpoint(
+    context: &str,
+    acl_id: u16,
+    sequence: u16,
+    field: &str,
+    endpoint: &crate::model::AclEndpoint,
+) -> UnderlayResult<()> {
+    endpoint.address.parse::<Ipv4Addr>().map_err(|_| {
+        UnderlayError::InvalidIntent(format!(
+            "{context} ACL {acl_id} rule {sequence} has invalid {field} IPv4 address {}",
+            endpoint.address
+        ))
+    })?;
+    endpoint.wildcard.parse::<Ipv4Addr>().map_err(|_| {
+        UnderlayError::InvalidIntent(format!(
+            "{context} ACL {acl_id} rule {sequence} has invalid {field} wildcard {}",
+            endpoint.wildcard
+        ))
+    })?;
     Ok(())
 }
 

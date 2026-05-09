@@ -68,6 +68,7 @@ fn desired_state(device_id: &str, vlans: Vec<VlanConfig>) -> DeviceDesiredState 
                 mode: PortMode::Access { vlan_id: 100 },
             },
         )]),
+        acls: BTreeMap::new(),
     }
 }
 
@@ -85,6 +86,7 @@ fn shadow_state(device_id: &str, vlans: Vec<VlanConfig>) -> DeviceShadowState {
                 mode: PortMode::Access { vlan_id: 100 },
             },
         )]),
+        acls: BTreeMap::new(),
         warnings: vec![],
     }
 }

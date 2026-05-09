@@ -89,6 +89,7 @@ impl AdapterClient {
             full: true,
             vlan_ids: Vec::new(),
             interface_names: Vec::new(),
+            acl_ids: Vec::new(),
         })
         .await
     }

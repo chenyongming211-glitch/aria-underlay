@@ -60,6 +60,21 @@ def build_vlan_delete_payload(vlan_id: int) -> str:
     )
 
 
+def build_acl_delete_payload(acl_id: int) -> str:
+    acl_id = validate_acl_id(acl_id)
+    return (
+        f'<config xmlns="{NETCONF_BASE_NS}">'
+        f'<top xmlns="{H3C_CONFIG_NS}">'
+        "<ACL><Groups>"
+        f'<Group xmlns:nc="{NETCONF_BASE_NS}" nc:operation="delete">'
+        "<GroupType>1</GroupType>"
+        f"<GroupID>{acl_id}</GroupID>"
+        "</Group>"
+        "</Groups></ACL>"
+        "</top></config>"
+    )
+
+
 def build_description_cleanup_payload(
     interface_name: str,
     description: str | None,
@@ -108,6 +123,13 @@ def validate_vlan_id(value: int, field: str) -> int:
     if not 1 <= vlan_id <= 4094:
         raise ValueError(f"{field} out of range: {vlan_id}")
     return vlan_id
+
+
+def validate_acl_id(value: int) -> int:
+    acl_id = int(value)
+    if not 3000 <= acl_id <= 3999:
+        raise ValueError(f"advanced ACL ID out of range: {acl_id}")
+    return acl_id
 
 
 def parse_vlan_list(value: str) -> list[int]:
@@ -168,6 +190,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="append",
         default=[],
         help="Test VLAN ID to delete after interface restore. May be repeated.",
+    )
+    parser.add_argument(
+        "--delete-acl",
+        type=int,
+        action="append",
+        default=[],
+        help="Isolated H3C advanced IPv4 ACL ID to delete after ACL acceptance. May be repeated.",
     )
     parser.add_argument("--description-interface", help="Interface description to restore or clear.")
     parser.add_argument("--description", help="Description text to restore.")
@@ -235,6 +264,8 @@ def build_payloads(args: argparse.Namespace) -> list[tuple[str, str, str | list[
             )
     for vlan_id in args.delete_vlan:
         payloads.append(("netconf", f"delete VLAN {vlan_id}", build_vlan_delete_payload(vlan_id)))
+    for acl_id in args.delete_acl:
+        payloads.append(("netconf", f"delete advanced IPv4 ACL {acl_id}", build_acl_delete_payload(acl_id)))
     if not payloads:
         raise SystemExit("no cleanup operation requested")
     return payloads

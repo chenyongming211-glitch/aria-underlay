@@ -148,5 +148,6 @@ fn changed_stack_intent() -> UnderlayDomainIntent {
             description: Some("server uplink".into()),
             mode: PortMode::Access { vlan_id: 100 },
         }],
+        acls: vec![],
     }
 }

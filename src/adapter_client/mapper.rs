@@ -1,6 +1,9 @@
 use crate::device::{capability::BackendKind, DeviceCapabilityProfile, DeviceInfo, HostKeyPolicy};
 use crate::engine::diff::{ChangeOp, ChangeSet};
-use crate::model::{AdminState, DeviceId, InterfaceConfig, PortMode, Vendor, VlanConfig};
+use crate::model::{
+    AclAction, AclConfig, AclEndpoint, AclProtocol, AclRule, AdminState, DeviceId,
+    InterfaceConfig, PortMode, Vendor, VlanConfig,
+};
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::proto::adapter;
 use crate::state::DeviceShadowState;
@@ -125,6 +128,7 @@ pub fn desired_state_to_proto(desired: &DeviceDesiredState) -> adapter::DesiredD
             .values()
             .map(interface_to_proto)
             .collect(),
+        acls: desired.acls.values().map(acl_to_proto).collect(),
     }
 }
 
@@ -137,12 +141,18 @@ pub fn state_scope_from_desired(desired: &DeviceDesiredState) -> adapter::StateS
             .map(|vlan_id| u32::from(*vlan_id))
             .collect(),
         interface_names: desired.interfaces.keys().cloned().collect(),
+        acl_ids: desired
+            .acls
+            .keys()
+            .map(|acl_id| u32::from(*acl_id))
+            .collect(),
     }
 }
 
 pub fn state_scope_from_change_set(change_set: &ChangeSet) -> adapter::StateScope {
     let mut vlan_ids = std::collections::BTreeSet::new();
     let mut interface_names = std::collections::BTreeSet::new();
+    let mut acl_ids = std::collections::BTreeSet::new();
 
     for op in &change_set.ops {
         match op {
@@ -165,6 +175,16 @@ pub fn state_scope_from_change_set(change_set: &ChangeSet) -> adapter::StateScop
             ChangeOp::DeleteInterfaceConfig { name } => {
                 interface_names.insert(name.clone());
             }
+            ChangeOp::CreateAcl(acl) => {
+                acl_ids.insert(u32::from(acl.acl_id));
+            }
+            ChangeOp::UpdateAcl { before, after } => {
+                acl_ids.insert(u32::from(before.acl_id));
+                acl_ids.insert(u32::from(after.acl_id));
+            }
+            ChangeOp::DeleteAcl { acl_id } => {
+                acl_ids.insert(u32::from(*acl_id));
+            }
         }
     }
 
@@ -172,6 +192,7 @@ pub fn state_scope_from_change_set(change_set: &ChangeSet) -> adapter::StateScop
         full: false,
         vlan_ids: vlan_ids.into_iter().collect(),
         interface_names: interface_names.into_iter().collect(),
+        acl_ids: acl_ids.into_iter().collect(),
     }
 }
 
@@ -213,11 +234,18 @@ pub fn shadow_state_from_proto(proto: adapter::ObservedDeviceState, warnings: Ve
         interfaces.insert(interface.name.clone(), interface);
     }
 
+    let mut acls = std::collections::BTreeMap::new();
+    for acl in proto.acls {
+        let acl = acl_from_proto(acl)?;
+        acls.insert(acl.acl_id, acl);
+    }
+
     Ok(DeviceShadowState {
         device_id: DeviceId(proto.device_id),
         revision: 0,
         vlans,
         interfaces,
+        acls,
         warnings,
     })
 }
@@ -290,6 +318,168 @@ fn vendor_to_proto(vendor: Vendor) -> adapter::Vendor {
         Vendor::Ruijie => adapter::Vendor::Ruijie,
         Vendor::Unknown => adapter::Vendor::Unknown,
     }
+}
+
+fn acl_to_proto(acl: &AclConfig) -> adapter::AclConfig {
+    adapter::AclConfig {
+        acl_id: u32::from(acl.acl_id),
+        name: acl.name.clone(),
+        description: acl.description.clone(),
+        rules: acl.rules.iter().map(acl_rule_to_proto).collect(),
+    }
+}
+
+fn acl_rule_to_proto(rule: &AclRule) -> adapter::AclRule {
+    adapter::AclRule {
+        sequence: u32::from(rule.sequence),
+        action: acl_action_to_proto(&rule.action) as i32,
+        protocol: acl_protocol_to_proto(&rule.protocol) as i32,
+        source: rule.source.as_ref().map(acl_endpoint_to_proto),
+        destination: rule.destination.as_ref().map(acl_endpoint_to_proto),
+        source_port_eq: rule.source_port_eq.map(u32::from),
+        destination_port_eq: rule.destination_port_eq.map(u32::from),
+        description: rule.description.clone(),
+    }
+}
+
+fn acl_endpoint_to_proto(endpoint: &AclEndpoint) -> adapter::AclEndpoint {
+    adapter::AclEndpoint {
+        address: endpoint.address.clone(),
+        wildcard: endpoint.wildcard.clone(),
+    }
+}
+
+fn acl_from_proto(proto: adapter::AclConfig) -> UnderlayResult<AclConfig> {
+    let acl_id = acl_id_from_u32(proto.acl_id, "adapter returned invalid ACL id")?;
+    Ok(AclConfig {
+        acl_id,
+        name: proto.name,
+        description: proto.description,
+        rules: proto
+            .rules
+            .into_iter()
+            .map(acl_rule_from_proto)
+            .collect::<UnderlayResult<Vec<_>>>()?,
+    })
+}
+
+fn acl_rule_from_proto(proto: adapter::AclRule) -> UnderlayResult<AclRule> {
+    Ok(AclRule {
+        sequence: u16::try_from(proto.sequence).map_err(|_| UnderlayError::AdapterOperation {
+            code: "INVALID_ACL_RULE_SEQUENCE".into(),
+            message: format!("adapter returned invalid ACL rule sequence {}", proto.sequence),
+            retryable: false,
+            errors: Vec::new(),
+        })?,
+        action: acl_action_from_i32(proto.action)?,
+        protocol: acl_protocol_from_i32(proto.protocol)?,
+        source: proto.source.map(acl_endpoint_from_proto).transpose()?,
+        destination: proto.destination.map(acl_endpoint_from_proto).transpose()?,
+        source_port_eq: proto
+            .source_port_eq
+            .map(|port| acl_port_from_u32(port, "source_port_eq"))
+            .transpose()?,
+        destination_port_eq: proto
+            .destination_port_eq
+            .map(|port| acl_port_from_u32(port, "destination_port_eq"))
+            .transpose()?,
+        description: proto.description,
+    })
+}
+
+fn acl_endpoint_from_proto(proto: adapter::AclEndpoint) -> UnderlayResult<AclEndpoint> {
+    if proto.address.trim().is_empty() || proto.wildcard.trim().is_empty() {
+        return Err(UnderlayError::AdapterOperation {
+            code: "INVALID_ACL_ENDPOINT".into(),
+            message: "adapter returned ACL endpoint without address or wildcard".into(),
+            retryable: false,
+            errors: Vec::new(),
+        });
+    }
+    Ok(AclEndpoint {
+        address: proto.address,
+        wildcard: proto.wildcard,
+    })
+}
+
+fn acl_action_to_proto(action: &AclAction) -> adapter::AclAction {
+    match action {
+        AclAction::Permit => adapter::AclAction::Permit,
+        AclAction::Deny => adapter::AclAction::Deny,
+    }
+}
+
+fn acl_action_from_i32(value: i32) -> UnderlayResult<AclAction> {
+    match adapter::AclAction::try_from(value).unwrap_or(adapter::AclAction::Unspecified) {
+        adapter::AclAction::Permit => Ok(AclAction::Permit),
+        adapter::AclAction::Deny => Ok(AclAction::Deny),
+        _ => Err(UnderlayError::AdapterOperation {
+            code: "INVALID_ACL_ACTION".into(),
+            message: "adapter returned invalid ACL action".into(),
+            retryable: false,
+            errors: Vec::new(),
+        }),
+    }
+}
+
+fn acl_protocol_to_proto(protocol: &AclProtocol) -> adapter::AclProtocol {
+    match protocol {
+        AclProtocol::Ip => adapter::AclProtocol::Ip,
+        AclProtocol::Tcp => adapter::AclProtocol::Tcp,
+        AclProtocol::Udp => adapter::AclProtocol::Udp,
+        AclProtocol::Icmp => adapter::AclProtocol::Icmp,
+    }
+}
+
+fn acl_protocol_from_i32(value: i32) -> UnderlayResult<AclProtocol> {
+    match adapter::AclProtocol::try_from(value).unwrap_or(adapter::AclProtocol::Unspecified) {
+        adapter::AclProtocol::Ip => Ok(AclProtocol::Ip),
+        adapter::AclProtocol::Tcp => Ok(AclProtocol::Tcp),
+        adapter::AclProtocol::Udp => Ok(AclProtocol::Udp),
+        adapter::AclProtocol::Icmp => Ok(AclProtocol::Icmp),
+        _ => Err(UnderlayError::AdapterOperation {
+            code: "INVALID_ACL_PROTOCOL".into(),
+            message: "adapter returned invalid ACL protocol".into(),
+            retryable: false,
+            errors: Vec::new(),
+        }),
+    }
+}
+
+fn acl_id_from_u32(value: u32, message: &str) -> UnderlayResult<u16> {
+    let acl_id = u16::try_from(value).map_err(|_| UnderlayError::AdapterOperation {
+        code: "INVALID_ACL_ID".into(),
+        message: format!("{message} {value}"),
+        retryable: false,
+        errors: Vec::new(),
+    })?;
+    if !(3000..=3999).contains(&acl_id) {
+        return Err(UnderlayError::AdapterOperation {
+            code: "INVALID_ACL_ID".into(),
+            message: format!("adapter returned out-of-range IPv4 advanced ACL id {acl_id}"),
+            retryable: false,
+            errors: Vec::new(),
+        });
+    }
+    Ok(acl_id)
+}
+
+fn acl_port_from_u32(value: u32, field: &str) -> UnderlayResult<u16> {
+    let port = u16::try_from(value).map_err(|_| UnderlayError::AdapterOperation {
+        code: "INVALID_ACL_PORT".into(),
+        message: format!("adapter returned invalid ACL {field} {value}"),
+        retryable: false,
+        errors: Vec::new(),
+    })?;
+    if port == 0 {
+        return Err(UnderlayError::AdapterOperation {
+            code: "INVALID_ACL_PORT".into(),
+            message: format!("adapter returned invalid ACL {field} 0"),
+            retryable: false,
+            errors: Vec::new(),
+        });
+    }
+    Ok(port)
 }
 
 fn vendor_from_i32(value: i32) -> Vendor {

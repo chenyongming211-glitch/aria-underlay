@@ -138,6 +138,7 @@ pub fn observed_access_state(device_id: &str, vlan_id: u32) -> adapter::Observed
                 allowed_vlans: Vec::new(),
             }),
         }],
+        acls: Vec::new(),
     }
 }
 
@@ -165,6 +166,7 @@ impl UnderlayAdapter for TestAdapter {
                 full: true,
                 vlan_ids: Vec::new(),
                 interface_names: Vec::new(),
+                acl_ids: Vec::new(),
             });
         if let Some(scopes) = &self.current_state_scopes {
             scopes
@@ -281,5 +283,6 @@ fn observed_state_for_scope(
             .iter()
             .any(|name| name == &interface.name)
     });
+    state.acls.retain(|acl| scope.acl_ids.contains(&acl.acl_id));
     state
 }

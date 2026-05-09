@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::intent::validation::validate_underlay_domain_intent;
 use crate::intent::UnderlayDomainIntent;
-use crate::model::{DeviceId, InterfaceConfig, VlanConfig};
+use crate::model::{AclConfig, DeviceId, InterfaceConfig, VlanConfig};
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::{UnderlayError, UnderlayResult};
 
@@ -45,6 +45,21 @@ pub fn plan_underlay_domain(
                         })
                         .collect(),
                     interfaces: BTreeMap::new(),
+                    acls: intent
+                        .acls
+                        .iter()
+                        .map(|acl| {
+                            (
+                                acl.acl_id,
+                                AclConfig {
+                                    acl_id: acl.acl_id,
+                                    name: acl.name.clone(),
+                                    description: acl.description.clone(),
+                                    rules: acl.rules.clone(),
+                                },
+                            )
+                        })
+                        .collect(),
                 },
             )
         })

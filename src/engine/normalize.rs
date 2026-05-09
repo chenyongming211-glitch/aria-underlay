@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::model::{InterfaceConfig, PortMode, VlanConfig};
+use crate::model::{AclConfig, AclRule, InterfaceConfig, PortMode, VlanConfig};
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::state::DeviceShadowState;
 
@@ -51,6 +51,33 @@ pub fn canonical_interface_name(name: &str) -> String {
     trimmed.to_string()
 }
 
+impl Normalize for AclConfig {
+    fn normalize(mut self) -> Self {
+        if self.name.as_deref() == Some("") {
+            self.name = None;
+        }
+        if self.description.as_deref() == Some("") {
+            self.description = None;
+        }
+        self.rules = self
+            .rules
+            .into_iter()
+            .map(Normalize::normalize)
+            .collect::<Vec<_>>();
+        self.rules.sort_by_key(|rule| rule.sequence);
+        self
+    }
+}
+
+impl Normalize for AclRule {
+    fn normalize(mut self) -> Self {
+        if self.description.as_deref() == Some("") {
+            self.description = None;
+        }
+        self
+    }
+}
+
 pub fn normalize_desired_state(mut state: DeviceDesiredState) -> DeviceDesiredState {
     state.vlans = state
         .vlans
@@ -67,6 +94,15 @@ pub fn normalize_desired_state(mut state: DeviceDesiredState) -> DeviceDesiredSt
         .map(|interface| {
             let interface = interface.normalize();
             (interface.name.clone(), interface)
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    state.acls = state
+        .acls
+        .into_values()
+        .map(|acl| {
+            let acl = acl.normalize();
+            (acl.acl_id, acl)
         })
         .collect::<BTreeMap<_, _>>();
 
@@ -89,6 +125,15 @@ pub fn normalize_shadow_state(mut state: DeviceShadowState) -> DeviceShadowState
         .map(|interface| {
             let interface = interface.normalize();
             (interface.name.clone(), interface)
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    state.acls = state
+        .acls
+        .into_values()
+        .map(|acl| {
+            let acl = acl.normalize();
+            (acl.acl_id, acl)
         })
         .collect::<BTreeMap<_, _>>();
 

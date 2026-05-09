@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::engine::normalize::normalize_shadow_state;
-use crate::model::{DeviceId, InterfaceConfig, VlanConfig};
+use crate::model::{AclConfig, DeviceId, InterfaceConfig, VlanConfig};
 use crate::state::shadow::DeviceShadowState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +25,9 @@ pub enum DriftType {
     MissingInterface,
     ExtraInterface,
     InterfaceAttributeMismatch,
+    MissingAcl,
+    ExtraAcl,
+    AclAttributeMismatch,
     AdapterWarning,
 }
 
@@ -128,6 +131,29 @@ pub fn detect_drift(expected: &DeviceShadowState, observed: &DeviceShadowState) 
         }
     }
 
+    for (acl_id, expected_acl) in &expected.acls {
+        match observed.acls.get(acl_id) {
+            Some(observed_acl) => compare_acl(*acl_id, expected_acl, observed_acl, &mut findings),
+            None => findings.push(DriftFinding {
+                drift_type: DriftType::MissingAcl,
+                path: format!("acls.{acl_id}"),
+                expected: Some(acl_summary(expected_acl)),
+                actual: None,
+            }),
+        }
+    }
+
+    for (acl_id, observed_acl) in &observed.acls {
+        if !expected.acls.contains_key(acl_id) {
+            findings.push(DriftFinding {
+                drift_type: DriftType::ExtraAcl,
+                path: format!("acls.{acl_id}"),
+                expected: None,
+                actual: Some(acl_summary(observed_acl)),
+            });
+        }
+    }
+
     let warnings = observed.warnings.clone();
     findings.extend(warnings.iter().map(|warning| DriftFinding {
         drift_type: DriftType::AdapterWarning,
@@ -176,6 +202,22 @@ fn compare_interface(
     }
 }
 
+fn compare_acl(
+    acl_id: u16,
+    expected: &AclConfig,
+    observed: &AclConfig,
+    findings: &mut Vec<DriftFinding>,
+) {
+    if expected != observed {
+        findings.push(DriftFinding {
+            drift_type: DriftType::AclAttributeMismatch,
+            path: format!("acls.{acl_id}"),
+            expected: Some(acl_summary(expected)),
+            actual: Some(acl_summary(observed)),
+        });
+    }
+}
+
 fn vlan_summary(vlan: &VlanConfig) -> String {
     format!(
         "id={},name={},description={}",
@@ -192,5 +234,15 @@ fn interface_summary(interface: &InterfaceConfig) -> String {
         interface.admin_state,
         interface.description.as_deref().unwrap_or(""),
         interface.mode
+    )
+}
+
+fn acl_summary(acl: &AclConfig) -> String {
+    format!(
+        "id={},name={},description={},rules={}",
+        acl.acl_id,
+        acl.name.as_deref().unwrap_or(""),
+        acl.description.as_deref().unwrap_or(""),
+        acl.rules.len()
     )
 }

@@ -10,11 +10,13 @@ acceptance procedure. The current production-verified surface is:
 - Access port PVID update.
 - Trunk port allowed VLAN update.
 - Access/trunk interface description update.
+- Isolated numeric IPv4 advanced ACL create/read/verify.
 - Scoped get-current-state readback and verify.
 
 The procedure has been exercised against H3C S5560 and S6800 representatives.
-It is intentionally scoped; do not use it as proof for interface descriptions,
-admin-down, trunk native VLAN, deletes, or cross-device atomic behavior.
+It is intentionally scoped; do not use it as proof for admin-down, trunk native
+VLAN, deletes through normal apply, ACL bindings, or cross-device atomic
+behavior.
 
 ## Preconditions
 
@@ -47,6 +49,8 @@ For each switch/model under test, record these values before writing:
 | Trunk port | An approved trunk port |
 | Trunk original allowed VLANs | Exact list to restore after the test |
 | Trunk original description | Exact text to restore, or explicit empty |
+| Test ACL | Optional IPv4 advanced ACL number absent before the test |
+| Test ACL description | Optional temporary ACL description |
 
 The acceptance VLAN used in previous lab runs was `4093`; this is only a
 convention, not a requirement.
@@ -77,6 +81,8 @@ operator wrapper. The required evidence is:
 - Trunk port current allowed VLAN list is recorded.
 - Trunk port current description is recorded.
 - No unapproved interface appears in the scoped readback.
+- If testing ACL, the candidate ACL number is absent before the write.
+- If testing ACL, no existing ACL number is reused.
 
 4. Prepare the environment file from
 `docs/examples/real-device-acceptance.env.example`.
@@ -242,6 +248,89 @@ argument with `--clear-description`. On tested H3C Comware devices, clearing an
 interface description uses SSH CLI `undo description`; the cleanup tool prints
 the exact CLI sequence during dry-run and still requires `--yes` before writing.
 
+## ACL Acceptance
+
+The ACL MVP creates only a numeric IPv4 advanced ACL object. It must not bind
+the ACL to any interface, VLAN interface, PBR policy, QoS policy, or routing
+feature during this run.
+
+1. Read existing ACL ids from the switch before choosing a candidate.
+
+Use NETCONF `top/ACL` readback, `display acl all`, or both. Record every
+existing IPv4 advanced ACL id. Choose a test ACL id only if it is absent. The
+recommended temporary range is `3998-3999`, but the actual candidate must come
+from live readback, not from convention.
+
+If every candidate in the approved temporary range already exists, stop.
+
+2. Set only the ACL variables in the environment.
+
+Unset access and trunk variables for this case. Do not set
+`ARIA_UNDERLAY_TEST_VLAN` unless the same run is also intentionally testing
+VLAN behavior.
+
+```bash
+set -a
+. ./real-device-acceptance.env
+set +a
+unset ARIA_UNDERLAY_ACCESS_INTERFACE
+unset ARIA_UNDERLAY_TRUNK_INTERFACE
+unset ARIA_UNDERLAY_TEST_VLAN
+export ARIA_UNDERLAY_TEST_ACL_ID=<absent-acl-id>
+export ARIA_UNDERLAY_TEST_ACL_DESCRIPTION="aria isolated acl"
+export ARIA_UNDERLAY_ACL_RULE_SEQUENCE=10
+export ARIA_UNDERLAY_ACL_RULE_ACTION=permit
+export ARIA_UNDERLAY_ACL_RULE_PROTOCOL=ip
+export ARIA_UNDERLAY_ACL_RULE_SOURCE=192.0.2.1
+export ARIA_UNDERLAY_ACL_RULE_SOURCE_WILDCARD=0.0.0.0
+export ARIA_UNDERLAY_ACL_RULE_DESTINATION=198.51.100.0
+export ARIA_UNDERLAY_ACL_RULE_DESTINATION_WILDCARD=0.0.0.255
+```
+
+3. Run the real apply probe.
+
+```bash
+/opt/aria-underlay/probes/real_domain_apply_probe
+```
+
+The dry-run must show `CreateAcl` for the chosen ACL id. If it shows
+`UpdateAcl`, `DeleteAcl`, or no `CreateAcl` for the requested id, stop and
+choose another absent ACL id.
+
+4. Read back the ACL scope.
+
+Acceptance requires:
+
+- The test ACL exists.
+- The test ACL description matches when configured.
+- The test rule sequence, action, protocol, source, destination, and ports
+  match the requested values.
+- No ACL binding has been added.
+
+5. Clean up and verify again.
+
+Run cleanup in dry-run first:
+
+```bash
+python3 scripts/real_device_cleanup.py \
+  --host "$ARIA_UNDERLAY_MGMT_IP" \
+  --secret-ref "$ARIA_UNDERLAY_SECRET_REF" \
+  --delete-acl "$ARIA_UNDERLAY_TEST_ACL_ID" \
+  --dry-run
+```
+
+Then execute:
+
+```bash
+python3 scripts/real_device_cleanup.py \
+  --host "$ARIA_UNDERLAY_MGMT_IP" \
+  --secret-ref "$ARIA_UNDERLAY_SECRET_REF" \
+  --delete-acl "$ARIA_UNDERLAY_TEST_ACL_ID" \
+  --yes
+```
+
+Read back the ACL scope again. The test ACL must be absent.
+
 ## Running Cleanup In The Adapter Container
 
 If the host Python environment does not have `ncclient`, run cleanup through the
@@ -269,6 +358,8 @@ also needs SSH access to the switch management address, normally TCP 22.
 
 - If dry-run contains `DeleteVlan` or `DeleteInterfaceConfig`, stop. The request
   is not scoped safely enough for real-device acceptance.
+- If ACL dry-run contains `UpdateAcl` or `DeleteAcl`, stop. The candidate ACL
+  is not a clean isolated create.
 - If the apply fails before a `tx_id` is produced, collect adapter logs and the
   probe output; no transaction recovery action is expected.
 - If the apply fails after a `tx_id` is produced, record the `tx_id`, strategy,
@@ -287,6 +378,7 @@ The acceptance run is complete only when:
 - Every write has a readback proof.
 - Every cleanup has a readback proof.
 - No test VLAN remains.
+- No test ACL remains.
 - Every changed port is restored to its recorded original PVID/allowed VLAN and
   description state.
 - The record template is filled in and stored with the release/test notes.

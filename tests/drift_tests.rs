@@ -79,6 +79,7 @@ fn normalized_equivalent_state_is_not_drift() {
                 },
             },
         )]),
+        acls: BTreeMap::new(),
         warnings: Vec::new(),
     };
     let observed = DeviceShadowState {
@@ -104,6 +105,7 @@ fn normalized_equivalent_state_is_not_drift() {
                 },
             },
         )]),
+        acls: BTreeMap::new(),
         warnings: Vec::new(),
     };
 
@@ -301,6 +303,7 @@ fn shadow_state(
             .into_iter()
             .map(|interface| (interface.name.clone(), interface))
             .collect::<BTreeMap<_, _>>(),
+        acls: BTreeMap::new(),
         warnings: Vec::new(),
     }
 }

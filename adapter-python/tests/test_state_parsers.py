@@ -145,6 +145,86 @@ def test_h3c_parser_reads_real_comware_vlan_shape_with_model_hint():
     ]
 
 
+def test_h3c_parser_reads_real_comware_ipv4_advanced_acl_shape():
+    state = H3cStateParser(model_hint="S6800-54QF").parse_running(
+        """
+        <data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+          <top xmlns="http://www.h3c.com/netconf/config:1.0">
+            <ACL>
+              <Groups>
+                <Group>
+                  <GroupType>1</GroupType>
+                  <GroupID>3999</GroupID>
+                  <Description>ARIA isolated ACL</Description>
+                </Group>
+              </Groups>
+              <IPv4AdvanceRules>
+                <Rule>
+                  <GroupID>3999</GroupID>
+                  <RuleID>10</RuleID>
+                  <Action>2</Action>
+                  <ProtocolType>256</ProtocolType>
+                  <SrcAny>false</SrcAny>
+                  <SrcIPv4>
+                    <SrcIPv4Addr>192.0.2.1</SrcIPv4Addr>
+                    <SrcIPv4Wildcard>0.0.0.0</SrcIPv4Wildcard>
+                  </SrcIPv4>
+                  <DstAny>false</DstAny>
+                  <DstIPv4>
+                    <DstIPv4Addr>198.51.100.0</DstIPv4Addr>
+                    <DstIPv4Wildcard>0.0.0.255</DstIPv4Wildcard>
+                  </DstIPv4>
+                </Rule>
+                <Rule>
+                  <GroupID>3999</GroupID>
+                  <RuleID>20</RuleID>
+                  <Action>1</Action>
+                  <ProtocolType>6</ProtocolType>
+                  <DstPort>
+                    <DstPortOp>2</DstPortOp>
+                    <DstPortValue1>443</DstPortValue1>
+                    <DstPortValue2>65536</DstPortValue2>
+                  </DstPort>
+                </Rule>
+              </IPv4AdvanceRules>
+            </ACL>
+          </top>
+        </data>
+        """,
+        scope=SimpleNamespace(full=False, vlan_ids=[], interface_names=[], acl_ids=[3999]),
+    )
+
+    assert state["acls"] == [
+        {
+            "acl_id": 3999,
+            "name": None,
+            "description": "ARIA isolated ACL",
+            "rules": [
+                {
+                    "sequence": 10,
+                    "action": "permit",
+                    "protocol": "ip",
+                    "source": {"address": "192.0.2.1", "wildcard": "0.0.0.0"},
+                    "destination": {"address": "198.51.100.0", "wildcard": "0.0.0.255"},
+                    "source_port_eq": None,
+                    "destination_port_eq": None,
+                    "description": None,
+                },
+                {
+                    "sequence": 20,
+                    "action": "deny",
+                    "protocol": "tcp",
+                    "source": None,
+                    "destination": None,
+                    "source_port_eq": None,
+                    "destination_port_eq": 443,
+                    "description": None,
+                },
+            ],
+        }
+    ]
+
+
 def test_h3c_scoped_parser_skips_unrequested_ifindex_without_model_hint():
     scope = SimpleNamespace(
         full=False,

@@ -45,6 +45,7 @@ from aria_underlay_adapter.backends.netconf_state import (
 )
 from aria_underlay_adapter.backends.netconf_state import scope_is_empty as _scope_is_empty
 from aria_underlay_adapter.backends.netconf_state import scope_summary as _scope_summary
+from aria_underlay_adapter.backends.netconf_state import verify_acls as _verify_acls
 from aria_underlay_adapter.backends.netconf_state import verify_interfaces as _verify_interfaces
 from aria_underlay_adapter.backends.netconf_state import verify_vlans as _verify_vlans
 from aria_underlay_adapter.errors import AdapterError
@@ -167,7 +168,7 @@ class NcclientNetconfBackend:
 
     def get_current_state(self, scope=None) -> dict:
         if _scope_is_empty(scope):
-            return {"vlans": [], "interfaces": []}
+            return {"vlans": [], "interfaces": [], "acls": []}
 
         try:
             with self._connect() as session:
@@ -560,6 +561,7 @@ class NcclientNetconfBackend:
         )
         _verify_vlans(desired_state, observed, scope)
         _verify_interfaces(desired_state, observed, scope)
+        _verify_acls(desired_state, observed, scope)
 
 
 def _append_secondary_error(

@@ -16,11 +16,12 @@ def build_state_filter(scope=None, *, parser=None):
 
     vlan_ids = _normalized_scope_vlan_ids(scope)
     interface_names = _normalized_scope_interface_names(scope)
-    if not vlan_ids and not interface_names:
+    acl_ids = _normalized_scope_acl_ids(scope)
+    if not vlan_ids and not interface_names and not acl_ids:
         return None
 
     if _parser_vendor(parser) == "h3c":
-        return f'<top xmlns="{H3C_COMWARE_CONFIG_NS}"><Ifmgr/><VLAN/></top>'
+        return f'<top xmlns="{H3C_COMWARE_CONFIG_NS}"><Ifmgr/><VLAN/><ACL/></top>'
 
     parts = []
     if vlan_ids:
@@ -33,6 +34,8 @@ def build_state_filter(scope=None, *, parser=None):
         for name in interface_names:
             parts.append(f"<interface><name>{escape(name)}</name></interface>")
         parts.append("</interfaces>")
+    if not parts:
+        return None
     return "".join(parts)
 
 
@@ -131,6 +134,7 @@ def _validate_observed_state_shape(state: dict) -> dict:
         )
     state.setdefault("vlans", [])
     state.setdefault("interfaces", [])
+    state.setdefault("acls", [])
     return state
 
 
@@ -140,6 +144,7 @@ def scope_is_empty(scope) -> bool:
         and not getattr(scope, "full", False)
         and not list(getattr(scope, "vlan_ids", []))
         and not list(getattr(scope, "interface_names", []))
+        and not list(getattr(scope, "acl_ids", []))
     )
 
 
@@ -147,6 +152,7 @@ def desired_state_is_empty(desired_state) -> bool:
     return (
         not list(getattr(desired_state, "vlans", []))
         and not list(getattr(desired_state, "interfaces", []))
+        and not list(getattr(desired_state, "acls", []))
     )
 
 
@@ -191,6 +197,34 @@ def _normalized_scope_interface_names(scope) -> list[str]:
             retryable=False,
         )
     return names
+
+
+def _normalized_scope_acl_ids(scope) -> list[int]:
+    normalized = set()
+    for index, acl_id in enumerate(getattr(scope, "acl_ids", [])):
+        try:
+            normalized.add(int(acl_id))
+        except (TypeError, ValueError) as exc:
+            raise AdapterError(
+                code="INVALID_STATE_SCOPE",
+                message="state scope contains non-integer ACL IDs",
+                normalized_error="invalid state scope",
+                raw_error_summary=(
+                    f"scope.acl_ids[{index}] must be an integer: {acl_id!r}"
+                ),
+                retryable=False,
+            ) from exc
+    acl_ids = sorted(normalized)
+    invalid = [acl_id for acl_id in acl_ids if acl_id < 3000 or acl_id > 3999]
+    if invalid:
+        raise AdapterError(
+            code="INVALID_STATE_SCOPE",
+            message="state scope contains invalid IPv4 advanced ACL IDs",
+            normalized_error="invalid state scope",
+            raw_error_summary=f"invalid_acl_ids={invalid}",
+            retryable=False,
+        )
+    return acl_ids
 
 
 def verify_vlans(desired_state, observed: dict, scope=None) -> None:
@@ -270,6 +304,44 @@ def verify_interfaces(desired_state, observed: dict, scope=None) -> None:
             )
 
 
+def verify_acls(desired_state, observed: dict, scope=None) -> None:
+    observed_by_id = {acl["acl_id"]: acl for acl in observed["acls"]}
+    desired_by_id = {
+        _field(acl, "acl_id"): acl
+        for acl in getattr(desired_state, "acls", [])
+    }
+    for acl_id in _scoped_acl_ids(scope, observed):
+        if acl_id not in desired_by_id and acl_id in observed_by_id:
+            raise _verify_mismatch(
+                f"ACL {acl_id} should be absent but exists in observed scoped state",
+            )
+    for desired_acl in _desired_acls_in_scope(desired_state, scope):
+        acl_id = _field(desired_acl, "acl_id")
+        observed_acl = observed_by_id.get(acl_id)
+        if observed_acl is None:
+            raise _verify_mismatch(f"ACL {acl_id} missing from observed scoped state")
+        expected_name = _optional_field(desired_acl, "name")
+        expected_description = _optional_field(desired_acl, "description")
+        if observed_acl.get("name") != expected_name:
+            raise _verify_mismatch(
+                f"ACL {acl_id} name mismatch: expected {expected_name!r}, "
+                f"got {observed_acl.get('name')!r}",
+            )
+        if observed_acl.get("description") != expected_description:
+            raise _verify_mismatch(
+                f"ACL {acl_id} description mismatch: expected "
+                f"{expected_description!r}, got {observed_acl.get('description')!r}",
+            )
+        if _normalize_acl_rules(observed_acl.get("rules", [])) != _normalize_acl_rules(
+            _repeated_field(desired_acl, "rules")
+        ):
+            raise _verify_mismatch(
+                f"ACL {acl_id} rules mismatch: expected "
+                f"{_normalize_acl_rules(_repeated_field(desired_acl, 'rules'))!r}, "
+                f"got {_normalize_acl_rules(observed_acl.get('rules', []))!r}",
+            )
+
+
 def _desired_vlans_in_scope(desired_state, scope=None):
     if scope is not None and not getattr(scope, "full", False) and not getattr(scope, "vlan_ids", []):
         return
@@ -314,6 +386,23 @@ def _scoped_interface_names(scope=None, observed=None):
             return []
         return {interface["name"] for interface in observed["interfaces"]}
     return set(getattr(scope, "interface_names", []))
+
+
+def _desired_acls_in_scope(desired_state, scope=None):
+    if scope is not None and not getattr(scope, "full", False) and not getattr(scope, "acl_ids", []):
+        return
+    acl_ids = set(getattr(scope, "acl_ids", [])) if scope is not None else set()
+    for acl in getattr(desired_state, "acls", []):
+        if getattr(scope, "full", False) or scope is None or _field(acl, "acl_id") in acl_ids:
+            yield acl
+
+
+def _scoped_acl_ids(scope=None, observed=None):
+    if scope is None or getattr(scope, "full", False):
+        if observed is None:
+            return []
+        return {acl["acl_id"] for acl in observed["acls"]}
+    return set(getattr(scope, "acl_ids", []))
 
 
 def _field(message, name):
@@ -371,6 +460,58 @@ def _normalize_mode(mode) -> dict:
     }
 
 
+def _normalize_acl_rules(rules) -> list[dict]:
+    normalized = []
+    for rule in rules:
+        normalized.append(
+            {
+                "sequence": int(_field(rule, "sequence")),
+                "action": _acl_action_text(_field(rule, "action")),
+                "protocol": _acl_protocol_text(_field(rule, "protocol")),
+                "source": _acl_endpoint_dict(_optional_field(rule, "source")),
+                "destination": _acl_endpoint_dict(_optional_field(rule, "destination")),
+                "source_port_eq": _optional_field(rule, "source_port_eq"),
+                "destination_port_eq": _optional_field(rule, "destination_port_eq"),
+                "description": _optional_field(rule, "description"),
+            }
+        )
+    return sorted(normalized, key=lambda item: item["sequence"])
+
+
+def _acl_action_text(value) -> str:
+    if isinstance(value, str):
+        return value.strip().lower()
+    if int(value or 0) == 1:
+        return "permit"
+    if int(value or 0) == 2:
+        return "deny"
+    raise _verify_mismatch(f"unknown ACL action during verification: {value!r}")
+
+
+def _acl_protocol_text(value) -> str:
+    if isinstance(value, str):
+        return value.strip().lower()
+    numeric = int(value or 0)
+    if numeric == 1:
+        return "ip"
+    if numeric == 2:
+        return "tcp"
+    if numeric == 3:
+        return "udp"
+    if numeric == 4:
+        return "icmp"
+    raise _verify_mismatch(f"unknown ACL protocol during verification: {value!r}")
+
+
+def _acl_endpoint_dict(endpoint) -> dict | None:
+    if endpoint is None:
+        return None
+    return {
+        "address": _field(endpoint, "address"),
+        "wildcard": _field(endpoint, "wildcard"),
+    }
+
+
 def _interface_alias_key(name) -> str:
     text = str(name).strip()
     aliases = (
@@ -400,5 +541,6 @@ def scope_summary(scope) -> str:
     return (
         f"full={getattr(scope, 'full', False)}, "
         f"vlans={list(getattr(scope, 'vlan_ids', []))}, "
-        f"interfaces={list(getattr(scope, 'interface_names', []))}"
+        f"interfaces={list(getattr(scope, 'interface_names', []))}, "
+        f"acls={list(getattr(scope, 'acl_ids', []))}"
     )

@@ -328,12 +328,15 @@ class NetconfBackedDriver:
 
         vlans = state.get("vlans", [])
         interfaces = state.get("interfaces", [])
+        acls = state.get("acls", [])
         if not isinstance(vlans, list):
             raise _parsed_state_error(f"vlans must be a list, got {type(vlans).__name__}")
         if not isinstance(interfaces, list):
             raise _parsed_state_error(
                 f"interfaces must be a list, got {type(interfaces).__name__}"
             )
+        if not isinstance(acls, list):
+            raise _parsed_state_error(f"acls must be a list, got {type(acls).__name__}")
 
         return pb2.ObservedDeviceState(
             device_id=device_id,
@@ -344,6 +347,10 @@ class NetconfBackedDriver:
             interfaces=[
                 self._interface_to_proto(interface, index)
                 for index, interface in enumerate(interfaces)
+            ],
+            acls=[
+                self._acl_to_proto(acl, index)
+                for index, acl in enumerate(acls)
             ],
         )
 
@@ -422,6 +429,63 @@ class NetconfBackedDriver:
             )
         raise _parsed_state_error(f"{path}.kind has unsupported value: {raw_kind!r}")
 
+    def _acl_to_proto(self, acl: dict, index: int):
+        if not isinstance(acl, dict):
+            raise _parsed_state_error(
+                f"acls[{index}] must be an object, got {type(acl).__name__}"
+            )
+        acl_id = _parsed_acl_id(acl.get("acl_id"), f"acls[{index}].acl_id")
+        rules = acl.get("rules", [])
+        if not isinstance(rules, list):
+            raise _parsed_state_error(f"acls[{index}].rules must be a list")
+        kwargs = {
+            "acl_id": acl_id,
+            "rules": [
+                self._acl_rule_to_proto(rule, rule_index, path=f"acls[{index}].rules")
+                for rule_index, rule in enumerate(rules)
+            ],
+        }
+        if acl.get("name") is not None:
+            kwargs["name"] = acl.get("name")
+        if acl.get("description") is not None:
+            kwargs["description"] = acl.get("description")
+        return pb2.AclConfig(**kwargs)
+
+    def _acl_rule_to_proto(self, rule: dict, index: int, *, path: str):
+        if not isinstance(rule, dict):
+            raise _parsed_state_error(
+                f"{path}[{index}] must be an object, got {type(rule).__name__}"
+            )
+        kwargs = {
+            "sequence": _parsed_rule_sequence(rule.get("sequence"), f"{path}[{index}].sequence"),
+            "action": _acl_action_to_proto(rule.get("action"), f"{path}[{index}].action"),
+            "protocol": _acl_protocol_to_proto(rule.get("protocol"), f"{path}[{index}].protocol"),
+        }
+        source = _acl_endpoint_to_proto(rule.get("source"), f"{path}[{index}].source")
+        if source is not None:
+            kwargs["source"] = source
+        destination = _acl_endpoint_to_proto(
+            rule.get("destination"),
+            f"{path}[{index}].destination",
+        )
+        if destination is not None:
+            kwargs["destination"] = destination
+        source_port = _optional_parsed_acl_port(
+            rule.get("source_port_eq"),
+            f"{path}[{index}].source_port_eq",
+        )
+        if source_port is not None:
+            kwargs["source_port_eq"] = source_port
+        destination_port = _optional_parsed_acl_port(
+            rule.get("destination_port_eq"),
+            f"{path}[{index}].destination_port_eq",
+        )
+        if destination_port is not None:
+            kwargs["destination_port_eq"] = destination_port
+        if rule.get("description") is not None:
+            kwargs["description"] = rule.get("description")
+        return pb2.AclRule(**kwargs)
+
 
 def _request_scope(request):
     if hasattr(request, "HasField"):
@@ -444,6 +508,7 @@ def _desired_state_is_empty(desired_state) -> bool:
         or (
             not list(getattr(desired_state, "vlans", []))
             and not list(getattr(desired_state, "interfaces", []))
+            and not list(getattr(desired_state, "acls", []))
         )
     )
 
@@ -483,6 +548,74 @@ def _parsed_vlan_id(value, path: str) -> int:
     if vlan_id < 1 or vlan_id > 4094:
         raise _parsed_state_error(f"{path} out of range: {vlan_id}")
     return vlan_id
+
+
+def _parsed_acl_id(value, path: str) -> int:
+    try:
+        acl_id = int(value)
+    except (TypeError, ValueError) as exc:
+        raise _parsed_state_error(f"{path} must be an integer: {value!r}") from exc
+    if acl_id < 3000 or acl_id > 3999:
+        raise _parsed_state_error(f"{path} out of IPv4 advanced ACL range: {acl_id}")
+    return acl_id
+
+
+def _parsed_rule_sequence(value, path: str) -> int:
+    try:
+        sequence = int(value)
+    except (TypeError, ValueError) as exc:
+        raise _parsed_state_error(f"{path} must be an integer: {value!r}") from exc
+    if sequence < 0 or sequence > 65535:
+        raise _parsed_state_error(f"{path} out of range: {sequence}")
+    return sequence
+
+
+def _optional_parsed_acl_port(value, path: str):
+    if value is None or value == "":
+        return None
+    try:
+        port = int(value)
+    except (TypeError, ValueError) as exc:
+        raise _parsed_state_error(f"{path} must be an integer: {value!r}") from exc
+    if port < 1 or port > 65535:
+        raise _parsed_state_error(f"{path} out of range: {port}")
+    return port
+
+
+def _acl_action_to_proto(value, path: str):
+    normalized = value.strip().lower() if isinstance(value, str) else value
+    if normalized == "permit" or normalized == pb2.ACL_ACTION_PERMIT:
+        return pb2.ACL_ACTION_PERMIT
+    if normalized == "deny" or normalized == pb2.ACL_ACTION_DENY:
+        return pb2.ACL_ACTION_DENY
+    raise _parsed_state_error(f"{path} has unsupported value: {value!r}")
+
+
+def _acl_protocol_to_proto(value, path: str):
+    normalized = value.strip().lower() if isinstance(value, str) else value
+    if normalized == "ip" or normalized == pb2.ACL_PROTOCOL_IP:
+        return pb2.ACL_PROTOCOL_IP
+    if normalized == "tcp" or normalized == pb2.ACL_PROTOCOL_TCP:
+        return pb2.ACL_PROTOCOL_TCP
+    if normalized == "udp" or normalized == pb2.ACL_PROTOCOL_UDP:
+        return pb2.ACL_PROTOCOL_UDP
+    if normalized == "icmp" or normalized == pb2.ACL_PROTOCOL_ICMP:
+        return pb2.ACL_PROTOCOL_ICMP
+    raise _parsed_state_error(f"{path} has unsupported value: {value!r}")
+
+
+def _acl_endpoint_to_proto(value, path: str):
+    if value in (None, ""):
+        return None
+    if not isinstance(value, dict):
+        raise _parsed_state_error(f"{path} must be an object")
+    address = value.get("address")
+    wildcard = value.get("wildcard")
+    if not isinstance(address, str) or not address.strip():
+        raise _parsed_state_error(f"{path}.address must be non-empty")
+    if not isinstance(wildcard, str) or not wildcard.strip():
+        raise _parsed_state_error(f"{path}.wildcard must be non-empty")
+    return pb2.AclEndpoint(address=address, wildcard=wildcard)
 
 
 def _parsed_state_error(summary: str) -> AdapterError:

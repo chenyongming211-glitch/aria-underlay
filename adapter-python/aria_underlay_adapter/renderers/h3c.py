@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
 import re
 
 from aria_underlay_adapter.errors import AdapterError
@@ -41,10 +42,23 @@ class H3cRenderer:
     def IFACE_NAMESPACE(self) -> str:
         return H3C_COMWARE_CONFIG_NAMESPACE
 
+    @property
+    def ACL_NAMESPACE(self) -> str:
+        return H3C_COMWARE_CONFIG_NAMESPACE
+
     def render_edit_config(self, desired_state) -> str:
         vlan_nodes = [
             self.render_vlan_create(vlan)
             for vlan in getattr(desired_state, "vlans", [])
+        ]
+        acl_nodes = [
+            self.render_acl_group(acl)
+            for acl in getattr(desired_state, "acls", [])
+        ]
+        acl_rule_nodes = [
+            rule_node
+            for acl in getattr(desired_state, "acls", [])
+            for rule_node in self.render_acl_rules(acl)
         ]
         ifmgr_nodes = []
         access_nodes = []
@@ -105,10 +119,27 @@ class H3cRenderer:
                     children=vlan_children,
                 )
             )
+        acl_children = []
+        if acl_nodes:
+            acl_children.append(
+                XmlElement("Groups", namespace=self.ACL_NAMESPACE, children=acl_nodes)
+            )
+        if acl_rule_nodes:
+            acl_children.append(
+                XmlElement(
+                    "IPv4AdvanceRules",
+                    namespace=self.ACL_NAMESPACE,
+                    children=acl_rule_nodes,
+                )
+            )
+        if acl_children:
+            top_children.append(
+                XmlElement("ACL", namespace=self.ACL_NAMESPACE, children=acl_children)
+            )
         if not top_children:
             raise AdapterError(
                 code="EMPTY_DESIRED_STATE",
-                message="desired state contains no VLAN or interface changes",
+                message="desired state contains no VLAN, interface, or ACL changes",
                 normalized_error="empty desired state",
                 raw_error_summary="renderer refused to produce an empty edit-config payload",
                 retryable=False,
@@ -216,6 +247,69 @@ class H3cRenderer:
             ],
         )
 
+    def render_acl_group(self, acl) -> XmlElement:
+        acl_id = _validate_acl_id(_field(acl, "acl_id"), "acl.acl_id")
+        if _optional_text(acl, "name") is not None:
+            raise ValueError("H3C numeric IPv4 advanced ACL name is not supported")
+        children = [
+            XmlElement("GroupType", namespace=self.ACL_NAMESPACE, children=["1"]),
+            XmlElement("GroupID", namespace=self.ACL_NAMESPACE, children=[str(acl_id)]),
+        ]
+        description = _optional_text(acl, "description")
+        if description is not None:
+            children.append(
+                XmlElement("Description", namespace=self.ACL_NAMESPACE, children=[description])
+            )
+        return XmlElement("Group", namespace=self.ACL_NAMESPACE, children=children)
+
+    def render_acl_rules(self, acl) -> list[XmlElement]:
+        acl_id = _validate_acl_id(_field(acl, "acl_id"), "acl.acl_id")
+        rules = []
+        seen = set()
+        for rule in _repeated_field(acl, "rules"):
+            sequence = _validate_rule_sequence(_field(rule, "sequence"))
+            if sequence in seen:
+                raise ValueError(f"duplicate ACL rule sequence {sequence}")
+            seen.add(sequence)
+            rules.append(self.render_acl_rule(acl_id, rule))
+        return rules
+
+    def render_acl_rule(self, acl_id: int, rule) -> XmlElement:
+        action = _acl_action(_field(rule, "action"))
+        protocol = _acl_protocol(_field(rule, "protocol"))
+        children = [
+            XmlElement("GroupID", namespace=self.ACL_NAMESPACE, children=[str(acl_id)]),
+            XmlElement(
+                "RuleID",
+                namespace=self.ACL_NAMESPACE,
+                children=[str(_validate_rule_sequence(_field(rule, "sequence")))],
+            ),
+            XmlElement(
+                "Action",
+                namespace=self.ACL_NAMESPACE,
+                children=[str(_h3c_acl_action_code(action))],
+            ),
+            XmlElement(
+                "ProtocolType",
+                namespace=self.ACL_NAMESPACE,
+                children=[str(_h3c_acl_protocol_code(protocol))],
+            ),
+        ]
+        source = _optional_field(rule, "source")
+        if source is not None:
+            children.extend(_acl_endpoint_nodes("Src", source, self.ACL_NAMESPACE))
+        destination = _optional_field(rule, "destination")
+        if destination is not None:
+            children.extend(_acl_endpoint_nodes("Dst", destination, self.ACL_NAMESPACE))
+
+        source_port = _optional_field(rule, "source_port_eq")
+        if source_port is not None:
+            children.append(_acl_port_node("Src", source_port, protocol, self.ACL_NAMESPACE))
+        destination_port = _optional_field(rule, "destination_port_eq")
+        if destination_port is not None:
+            children.append(_acl_port_node("Dst", destination_port, protocol, self.ACL_NAMESPACE))
+        return XmlElement("Rule", namespace=self.ACL_NAMESPACE, children=children)
+
 
 def _field(message, name):
     if isinstance(message, dict):
@@ -265,6 +359,108 @@ def _validate_vlan_id(value, field: str) -> int:
     if vlan_id < 1 or vlan_id > 4094:
         raise ValueError(f"{field} must be in range 1..4094")
     return vlan_id
+
+
+def _validate_acl_id(value, field: str) -> int:
+    if value is None:
+        raise ValueError(f"{field} is required")
+    try:
+        acl_id = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be an integer ACL ID") from exc
+    if acl_id < 3000 or acl_id > 3999:
+        raise ValueError(f"{field} must be in range 3000..3999")
+    return acl_id
+
+
+def _validate_rule_sequence(value) -> int:
+    try:
+        sequence = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("ACL rule sequence must be an integer") from exc
+    if sequence < 0 or sequence > 65535:
+        raise ValueError("ACL rule sequence must be in range 0..65535")
+    return sequence
+
+
+def _validate_port(value, field: str) -> int:
+    try:
+        port = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be an integer port") from exc
+    if port < 1 or port > 65535:
+        raise ValueError(f"{field} must be in range 1..65535")
+    return port
+
+
+def _acl_action(value) -> str:
+    normalized = value.strip().lower() if isinstance(value, str) else value
+    if normalized in {"permit", 1}:
+        return "permit"
+    if normalized in {"deny", 2}:
+        return "deny"
+    raise ValueError(f"unknown ACL action: {value}")
+
+
+def _acl_protocol(value) -> str:
+    normalized = value.strip().lower() if isinstance(value, str) else value
+    if normalized in {"ip", 1}:
+        return "ip"
+    if normalized in {"tcp", 2}:
+        return "tcp"
+    if normalized in {"udp", 3}:
+        return "udp"
+    if normalized in {"icmp", 4}:
+        return "icmp"
+    raise ValueError(f"unknown ACL protocol: {value}")
+
+
+def _h3c_acl_action_code(action: str) -> int:
+    return {"deny": 1, "permit": 2}[action]
+
+
+def _h3c_acl_protocol_code(protocol: str) -> int:
+    return {"icmp": 1, "tcp": 6, "udp": 17, "ip": 256}[protocol]
+
+
+def _acl_endpoint_nodes(prefix: str, endpoint, namespace: str) -> list[XmlElement]:
+    address = _required_text(endpoint, "address")
+    wildcard = _required_text(endpoint, "wildcard")
+    _validate_ipv4(address, f"{prefix}IPv4Addr")
+    _validate_ipv4(wildcard, f"{prefix}IPv4Wildcard")
+    return [
+        XmlElement(f"{prefix}Any", namespace=namespace, children=["false"]),
+        XmlElement(
+            f"{prefix}IPv4",
+            namespace=namespace,
+            children=[
+                XmlElement(f"{prefix}IPv4Addr", namespace=namespace, children=[address]),
+                XmlElement(f"{prefix}IPv4Wildcard", namespace=namespace, children=[wildcard]),
+            ],
+        ),
+    ]
+
+
+def _acl_port_node(prefix: str, value, protocol: str, namespace: str) -> XmlElement:
+    if protocol not in {"tcp", "udp"}:
+        raise ValueError("ACL port matches require tcp or udp protocol")
+    port = _validate_port(value, f"{prefix.lower()}_port_eq")
+    return XmlElement(
+        f"{prefix}Port",
+        namespace=namespace,
+        children=[
+            XmlElement(f"{prefix}PortOp", namespace=namespace, children=["2"]),
+            XmlElement(f"{prefix}PortValue1", namespace=namespace, children=[str(port)]),
+            XmlElement(f"{prefix}PortValue2", namespace=namespace, children=["65536"]),
+        ],
+    )
+
+
+def _validate_ipv4(value: str, field: str) -> None:
+    try:
+        ipaddress.IPv4Address(value)
+    except ipaddress.AddressValueError as exc:
+        raise ValueError(f"{field} must be an IPv4 address") from exc
 
 
 def _mode_kind(mode) -> str:

@@ -1,9 +1,12 @@
 use aria_underlay::intent::interface::InterfaceIntent;
 use aria_underlay::intent::vlan::VlanIntent;
 use aria_underlay::intent::{
-    ManagementEndpointIntent, SwitchMemberIntent, UnderlayDomainIntent, UnderlayTopology,
+    AclIntent, ManagementEndpointIntent, SwitchMemberIntent, UnderlayDomainIntent,
+    UnderlayTopology,
 };
-use aria_underlay::model::{AdminState, DeviceId, DeviceRole, PortMode, Vendor};
+use aria_underlay::model::{
+    AclAction, AclProtocol, AclRule, AdminState, DeviceId, DeviceRole, PortMode, Vendor,
+};
 use aria_underlay::planner::domain_plan::plan_underlay_domain;
 
 #[test]
@@ -96,6 +99,25 @@ fn small_fabric_has_no_hardcoded_endpoint_count_limit() {
 }
 
 #[test]
+fn acl_intent_is_planned_to_each_management_endpoint() {
+    let mut intent = domain_intent(
+        UnderlayTopology::MlagDualManagementIp,
+        vec![endpoint("leaf-a-mgmt"), endpoint("leaf-b-mgmt")],
+        vec![
+            member("leaf-a", Some(DeviceRole::LeafA), "leaf-a-mgmt"),
+            member("leaf-b", Some(DeviceRole::LeafB), "leaf-b-mgmt"),
+        ],
+        vec![],
+    );
+    intent.acls = vec![acl_intent(3999)];
+
+    let states = plan_underlay_domain(&intent).expect("ACL domain should plan");
+
+    assert_eq!(states.len(), 2);
+    assert!(states.iter().all(|state| state.acls.contains_key(&3999)));
+}
+
+#[test]
 fn unknown_member_reference_fails_validation() {
     let intent = domain_intent(
         UnderlayTopology::SmallFabric,
@@ -129,6 +151,7 @@ fn domain_intent(
             description: None,
         }],
         interfaces,
+        acls: vec![],
     }
 }
 
@@ -162,5 +185,23 @@ fn access_interface(member_id: &str, name: &str) -> InterfaceIntent {
         admin_state: AdminState::Up,
         description: None,
         mode: PortMode::Access { vlan_id: 100 },
+    }
+}
+
+fn acl_intent(acl_id: u16) -> AclIntent {
+    AclIntent {
+        acl_id,
+        name: None,
+        description: Some("temporary acl".into()),
+        rules: vec![AclRule {
+            sequence: 10,
+            action: AclAction::Permit,
+            protocol: AclProtocol::Ip,
+            source: None,
+            destination: None,
+            source_port_eq: None,
+            destination_port_eq: None,
+            description: None,
+        }],
     }
 }

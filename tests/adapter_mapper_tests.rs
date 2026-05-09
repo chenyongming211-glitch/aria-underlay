@@ -6,7 +6,8 @@ use aria_underlay::adapter_client::mapper::{
 use aria_underlay::device::{DeviceInfo, DeviceLifecycleState, HostKeyPolicy};
 use aria_underlay::engine::diff::{ChangeOp, ChangeSet};
 use aria_underlay::model::{
-    AdminState, DeviceId, DeviceRole, InterfaceConfig, PortMode, Vendor, VlanConfig,
+    AclAction, AclConfig, AclEndpoint, AclProtocol, AclRule, AdminState, DeviceId,
+    DeviceRole, InterfaceConfig, PortMode, Vendor, VlanConfig,
 };
 use aria_underlay::planner::device_plan::DeviceDesiredState;
 use aria_underlay::proto::adapter;
@@ -141,6 +142,24 @@ fn maps_observed_state_to_shadow_state() {
                     allowed_vlans: vec![],
                 }),
             }],
+            acls: vec![adapter::AclConfig {
+                acl_id: 3999,
+                name: None,
+                description: Some("temporary acl".into()),
+                rules: vec![adapter::AclRule {
+                    sequence: 10,
+                    action: adapter::AclAction::Permit as i32,
+                    protocol: adapter::AclProtocol::Ip as i32,
+                    source: Some(adapter::AclEndpoint {
+                        address: "192.0.2.1".into(),
+                        wildcard: "0.0.0.0".into(),
+                    }),
+                    destination: None,
+                    source_port_eq: None,
+                    destination_port_eq: None,
+                    description: None,
+                }],
+            }],
         },
         vec!["test warning".into()],
     )
@@ -153,6 +172,8 @@ fn maps_observed_state_to_shadow_state() {
         shadow.interfaces["GE1/0/1"].mode,
         PortMode::Access { vlan_id: 100 }
     ));
+    assert_eq!(shadow.acls[&3999].description.as_deref(), Some("temporary acl"));
+    assert_eq!(shadow.acls[&3999].rules[0].action, AclAction::Permit);
 }
 
 #[test]
@@ -179,6 +200,7 @@ fn maps_desired_state_to_proto() {
                 },
             },
         )]),
+        acls: BTreeMap::from([(3999, acl(3999))]),
     };
 
     let proto = desired_state_to_proto(&desired);
@@ -186,6 +208,9 @@ fn maps_desired_state_to_proto() {
     assert_eq!(proto.device_id, "leaf-a");
     assert_eq!(proto.vlans[0].vlan_id, 100);
     assert_eq!(proto.interfaces[0].mode.as_ref().unwrap().allowed_vlans, vec![100, 200]);
+    assert_eq!(proto.acls[0].acl_id, 3999);
+    assert_eq!(proto.acls[0].rules[0].protocol, adapter::AclProtocol::Tcp as i32);
+    assert_eq!(proto.acls[0].rules[0].destination_port_eq, Some(443));
 }
 
 #[test]
@@ -213,6 +238,7 @@ fn derives_state_scope_from_desired_state() {
     assert!(!scope.full);
     assert_eq!(scope.vlan_ids, vec![100]);
     assert_eq!(scope.interface_names, vec!["GE1/0/1"]);
+    assert_eq!(scope.acl_ids, vec![3999]);
 }
 
 #[test]
@@ -250,6 +276,8 @@ fn derives_state_scope_from_change_set_including_deletes() {
             ChangeOp::DeleteInterfaceConfig {
                 name: "GE1/0/2".into(),
             },
+            ChangeOp::CreateAcl(acl(3999)),
+            ChangeOp::DeleteAcl { acl_id: 3998 },
         ],
     };
 
@@ -258,6 +286,7 @@ fn derives_state_scope_from_change_set_including_deletes() {
     assert!(!scope.full);
     assert_eq!(scope.vlan_ids, vec![100, 200]);
     assert_eq!(scope.interface_names, vec!["GE1/0/1", "GE1/0/2"]);
+    assert_eq!(scope.acl_ids, vec![3998, 3999]);
 }
 
 #[test]
@@ -318,5 +347,30 @@ fn desired_state() -> DeviceDesiredState {
                 mode: PortMode::Access { vlan_id: 100 },
             },
         )]),
+        acls: BTreeMap::from([(3999, acl(3999))]),
+    }
+}
+
+fn acl(acl_id: u16) -> AclConfig {
+    AclConfig {
+        acl_id,
+        name: None,
+        description: Some("temporary acl".into()),
+        rules: vec![AclRule {
+            sequence: 10,
+            action: AclAction::Deny,
+            protocol: AclProtocol::Tcp,
+            source: Some(AclEndpoint {
+                address: "192.0.2.0".into(),
+                wildcard: "0.0.0.255".into(),
+            }),
+            destination: Some(AclEndpoint {
+                address: "198.51.100.10".into(),
+                wildcard: "0.0.0.0".into(),
+            }),
+            source_port_eq: None,
+            destination_port_eq: Some(443),
+            description: None,
+        }],
     }
 }

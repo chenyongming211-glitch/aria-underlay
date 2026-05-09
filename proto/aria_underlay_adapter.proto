@@ -77,6 +77,20 @@ enum HostKeyPolicy {
   HOST_KEY_POLICY_PINNED_KEY = 3;
 }
 
+enum AclAction {
+  ACL_ACTION_UNSPECIFIED = 0;
+  ACL_ACTION_PERMIT = 1;
+  ACL_ACTION_DENY = 2;
+}
+
+enum AclProtocol {
+  ACL_PROTOCOL_UNSPECIFIED = 0;
+  ACL_PROTOCOL_IP = 1;
+  ACL_PROTOCOL_TCP = 2;
+  ACL_PROTOCOL_UDP = 3;
+  ACL_PROTOCOL_ICMP = 4;
+}
+
 message RequestContext {
   string request_id = 1;
   string tx_id = 2;
@@ -132,22 +146,48 @@ message InterfaceConfig {
   PortMode mode = 4;
 }
 
+message AclEndpoint {
+  string address = 1;
+  string wildcard = 2;
+}
+
+message AclRule {
+  uint32 sequence = 1;
+  AclAction action = 2;
+  AclProtocol protocol = 3;
+  optional AclEndpoint source = 4;
+  optional AclEndpoint destination = 5;
+  optional uint32 source_port_eq = 6;
+  optional uint32 destination_port_eq = 7;
+  optional string description = 8;
+}
+
+message AclConfig {
+  uint32 acl_id = 1;
+  optional string name = 2;
+  optional string description = 3;
+  repeated AclRule rules = 4;
+}
+
 message DesiredDeviceState {
   string device_id = 1;
   repeated VlanConfig vlans = 2;
   repeated InterfaceConfig interfaces = 3;
+  repeated AclConfig acls = 4;
 }
 
 message ObservedDeviceState {
   string device_id = 1;
   repeated VlanConfig vlans = 2;
   repeated InterfaceConfig interfaces = 3;
+  repeated AclConfig acls = 4;
 }
 
 message StateScope {
   bool full = 1;
   repeated uint32 vlan_ids = 2;
   repeated string interface_names = 3;
+  repeated uint32 acl_ids = 4;
 }
 
 message RollbackArtifactRef {

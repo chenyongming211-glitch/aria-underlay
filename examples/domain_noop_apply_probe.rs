@@ -119,5 +119,6 @@ fn stack_single_management_ip_intent() -> UnderlayDomainIntent {
             description: Some("server uplink".into()),
             mode: PortMode::Access { vlan_id: 100 },
         }],
+        acls: vec![],
     }
 }

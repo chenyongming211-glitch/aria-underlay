@@ -18,6 +18,8 @@ private keys, session tokens, or full secrets.
 | Secret ref |  |
 | Test VLAN |  |
 | Test VLAN description |  |
+| Test ACL |  |
+| Test ACL description |  |
 
 ## Baseline
 
@@ -30,6 +32,8 @@ private keys, session tokens, or full secrets.
 | Trunk interface |  |
 | Trunk original allowed VLANs |  |
 | Trunk original description |  |
+| Existing IPv4 advanced ACL ids |  |
+| Test ACL present before write | No |
 
 ## Access Acceptance
 
@@ -61,6 +65,24 @@ private keys, session tokens, or full secrets.
 | Readback VLAN description result |  |
 | Readback trunk result |  |
 | Readback trunk description result |  |
+| Cleanup command dry-run inspected |  |
+| Cleanup result |  |
+| Cleanup readback result |  |
+
+## ACL Acceptance
+
+| Check | Result |
+| --- | --- |
+| Candidate ACL was absent before write |  |
+| Candidate ACL was re-checked immediately before write |  |
+| Dry-run contained `CreateAcl` for test ACL |  |
+| Dry-run contained no `UpdateAcl` or `DeleteAcl` |  |
+| Apply status |  |
+| Transaction strategy |  |
+| tx_id |  |
+| Readback ACL result |  |
+| Readback ACL rule result |  |
+| Readback binding check |  |
 | Cleanup command dry-run inspected |  |
 | Cleanup result |  |
 | Cleanup readback result |  |

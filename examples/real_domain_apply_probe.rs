@@ -10,9 +10,13 @@ use aria_underlay::engine::diff::ChangeOp;
 use aria_underlay::intent::interface::InterfaceIntent;
 use aria_underlay::intent::vlan::VlanIntent;
 use aria_underlay::intent::{
-    ManagementEndpointIntent, SwitchMemberIntent, UnderlayDomainIntent, UnderlayTopology,
+    AclIntent, ManagementEndpointIntent, SwitchMemberIntent, UnderlayDomainIntent,
+    UnderlayTopology,
 };
-use aria_underlay::model::{AdminState, DeviceId, DeviceRole, PortMode, Vendor};
+use aria_underlay::model::{
+    AclAction, AclEndpoint, AclProtocol, AclRule, AdminState, DeviceId, DeviceRole,
+    PortMode, Vendor,
+};
 use aria_underlay::state::drift::DriftPolicy;
 
 const WRITE_ACK: &str = "I_UNDERSTAND_THIS_WRITES_DEVICE";
@@ -37,6 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let management_port = env_u16("ARIA_UNDERLAY_MGMT_PORT", 830)?;
     let secret_ref = std::env::var("ARIA_UNDERLAY_SECRET_REF")
         .unwrap_or_else(|_| "local/real-device".into());
+    let test_vlan_was_set = optional_env("ARIA_UNDERLAY_TEST_VLAN").is_some();
     let test_vlan = env_u16("ARIA_UNDERLAY_TEST_VLAN", 4093)?;
     let vlan_name =
         std::env::var("ARIA_UNDERLAY_TEST_VLAN_NAME").unwrap_or_else(|_| "aria-test".into());
@@ -44,7 +49,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let allow_degraded = env_bool("ARIA_UNDERLAY_ALLOW_DEGRADED", true)?;
 
     let interfaces = desired_interfaces(&member_id, test_vlan)?;
-    let vlans = desired_vlans(test_vlan, vlan_name, vlan_description, &interfaces);
+    let acls = desired_acls()?;
+    let vlans = if interfaces.is_empty() && !test_vlan_was_set {
+        Vec::new()
+    } else {
+        desired_vlans(test_vlan, vlan_name, vlan_description, &interfaces)
+    };
 
     let inventory = DeviceInventory::default();
     let service = AriaUnderlayService::new(inventory.clone());
@@ -94,6 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }],
             vlans,
             interfaces,
+            acls,
         },
         options: ApplyOptions {
             dry_run: false,
@@ -110,14 +121,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .change_sets
         .iter()
         .flat_map(|change_set| &change_set.ops)
-        .any(|op| matches!(op, ChangeOp::DeleteVlan { .. } | ChangeOp::DeleteInterfaceConfig { .. }))
+        .any(|op| {
+            matches!(
+                op,
+                ChangeOp::DeleteVlan { .. }
+                    | ChangeOp::DeleteInterfaceConfig { .. }
+                    | ChangeOp::DeleteAcl { .. }
+                    | ChangeOp::UpdateAcl { .. }
+            )
+        })
     {
         return Err(io::Error::new(
             io::ErrorKind::Other,
-            "dry-run planned a delete op; refusing real device write",
+            "dry-run planned a delete or existing ACL update; refusing real device write",
         )
         .into());
     }
+    ensure_requested_acls_are_creates(&dry_run.change_sets, &request.intent.acls)?;
 
     let response = service.apply_domain_intent(request).await?;
     println!("real_apply_status={:?}", response.status);
@@ -125,6 +145,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("real_apply_device_results={:#?}", response.device_results);
     println!("real_apply_warnings={:?}", response.warnings);
 
+    Ok(())
+}
+
+fn desired_acls() -> Result<Vec<AclIntent>, Box<dyn std::error::Error>> {
+    let Some(acl_id) = optional_env("ARIA_UNDERLAY_TEST_ACL_ID") else {
+        return Ok(Vec::new());
+    };
+    let acl_id = acl_id.parse::<u16>()?;
+    let rule = AclRule {
+        sequence: env_u16("ARIA_UNDERLAY_ACL_RULE_SEQUENCE", 10)?,
+        action: acl_action(
+            optional_env("ARIA_UNDERLAY_ACL_RULE_ACTION")
+                .unwrap_or_else(|| "permit".into())
+                .as_str(),
+        )?,
+        protocol: acl_protocol(
+            optional_env("ARIA_UNDERLAY_ACL_RULE_PROTOCOL")
+                .unwrap_or_else(|| "ip".into())
+                .as_str(),
+        )?,
+        source: acl_endpoint(
+            "ARIA_UNDERLAY_ACL_RULE_SOURCE",
+            "ARIA_UNDERLAY_ACL_RULE_SOURCE_WILDCARD",
+        )?,
+        destination: acl_endpoint(
+            "ARIA_UNDERLAY_ACL_RULE_DESTINATION",
+            "ARIA_UNDERLAY_ACL_RULE_DESTINATION_WILDCARD",
+        )?,
+        source_port_eq: optional_env("ARIA_UNDERLAY_ACL_RULE_SOURCE_PORT_EQ")
+            .map(|value| value.parse::<u16>())
+            .transpose()?,
+        destination_port_eq: optional_env("ARIA_UNDERLAY_ACL_RULE_DESTINATION_PORT_EQ")
+            .map(|value| value.parse::<u16>())
+            .transpose()?,
+        description: None,
+    };
+
+    Ok(vec![AclIntent {
+        acl_id,
+        name: None,
+        description: optional_env("ARIA_UNDERLAY_TEST_ACL_DESCRIPTION"),
+        rules: vec![rule],
+    }])
+}
+
+fn ensure_requested_acls_are_creates(
+    change_sets: &[aria_underlay::engine::diff::ChangeSet],
+    acls: &[AclIntent],
+) -> Result<(), Box<dyn std::error::Error>> {
+    for acl in acls {
+        let created = change_sets
+            .iter()
+            .flat_map(|change_set| &change_set.ops)
+            .any(|op| matches!(op, ChangeOp::CreateAcl(created) if created.acl_id == acl.acl_id));
+        if !created {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "ACL {} was not planned as CreateAcl; choose a non-existing ACL id",
+                    acl.acl_id
+                ),
+            )
+            .into());
+        }
+    }
     Ok(())
 }
 
@@ -221,6 +306,47 @@ fn optional_env(name: &str) -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn acl_action(value: &str) -> Result<AclAction, Box<dyn std::error::Error>> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "permit" => Ok(AclAction::Permit),
+        "deny" => Ok(AclAction::Deny),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ACL rule action must be permit or deny",
+        )
+        .into()),
+    }
+}
+
+fn acl_protocol(value: &str) -> Result<AclProtocol, Box<dyn std::error::Error>> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "ip" => Ok(AclProtocol::Ip),
+        "tcp" => Ok(AclProtocol::Tcp),
+        "udp" => Ok(AclProtocol::Udp),
+        "icmp" => Ok(AclProtocol::Icmp),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ACL rule protocol must be ip, tcp, udp, or icmp",
+        )
+        .into()),
+    }
+}
+
+fn acl_endpoint(
+    address_env: &str,
+    wildcard_env: &str,
+) -> Result<Option<AclEndpoint>, Box<dyn std::error::Error>> {
+    match (optional_env(address_env), optional_env(wildcard_env)) {
+        (Some(address), Some(wildcard)) => Ok(Some(AclEndpoint { address, wildcard })),
+        (None, None) => Ok(None),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{address_env} and {wildcard_env} must be set together"),
+        )
+        .into()),
+    }
 }
 
 fn env_u16(name: &str, default: u16) -> Result<u16, Box<dyn std::error::Error>> {

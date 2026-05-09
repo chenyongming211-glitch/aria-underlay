@@ -4,10 +4,13 @@ use aria_underlay::intent::validation::{
 };
 use aria_underlay::intent::vlan::VlanIntent;
 use aria_underlay::intent::{
-    ManagementEndpointIntent, SwitchIntent, SwitchMemberIntent, SwitchPairIntent,
+    AclIntent, ManagementEndpointIntent, SwitchIntent, SwitchMemberIntent, SwitchPairIntent,
     UnderlayDomainIntent, UnderlayTopology,
 };
-use aria_underlay::model::{AdminState, DeviceId, DeviceRole, PortMode, Vendor};
+use aria_underlay::model::{
+    AclAction, AclEndpoint, AclProtocol, AclRule, AdminState, DeviceId, DeviceRole,
+    PortMode, Vendor,
+};
 
 #[test]
 fn switch_pair_rejects_invalid_vlan_range() {
@@ -107,6 +110,29 @@ fn domain_rejects_trunk_with_duplicate_allowed_vlan() {
     assert!(format!("{err}").contains("duplicate allowed VLAN 200"));
 }
 
+#[test]
+fn domain_rejects_duplicate_acl_ids() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    intent.acls = vec![acl_intent(3999), acl_intent(3999)];
+
+    let err = validate_underlay_domain_intent(&intent).unwrap_err();
+
+    assert!(format!("{err}").contains("duplicate acl_id 3999"));
+}
+
+#[test]
+fn domain_rejects_acl_port_on_ip_protocol() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    let mut acl = acl_intent(3999);
+    acl.rules[0].protocol = AclProtocol::Ip;
+    acl.rules[0].destination_port_eq = Some(443);
+    intent.acls = vec![acl];
+
+    let err = validate_underlay_domain_intent(&intent).unwrap_err();
+
+    assert!(format!("{err}").contains("destination_port_eq but protocol is not tcp/udp"));
+}
+
 fn switch_pair_intent() -> SwitchPairIntent {
     SwitchPairIntent {
         pair_id: "pair-a".into(),
@@ -163,6 +189,28 @@ fn domain_intent(topology: UnderlayTopology) -> UnderlayDomainIntent {
             admin_state: AdminState::Up,
             description: None,
             mode: PortMode::Access { vlan_id: 100 },
+        }],
+        acls: vec![],
+    }
+}
+
+fn acl_intent(acl_id: u16) -> AclIntent {
+    AclIntent {
+        acl_id,
+        name: None,
+        description: Some("temporary acl".into()),
+        rules: vec![AclRule {
+            sequence: 10,
+            action: AclAction::Permit,
+            protocol: AclProtocol::Tcp,
+            source: Some(AclEndpoint {
+                address: "192.0.2.0".into(),
+                wildcard: "0.0.0.255".into(),
+            }),
+            destination: None,
+            source_port_eq: None,
+            destination_port_eq: Some(443),
+            description: None,
         }],
     }
 }

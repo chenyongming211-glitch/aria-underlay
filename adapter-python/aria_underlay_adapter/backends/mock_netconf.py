@@ -265,6 +265,7 @@ class MockNetconfBackend:
         observed = self.get_current_state(scope=scope)
         _verify_vlans(desired_state, observed, scope)
         _verify_interfaces(desired_state, observed, scope)
+        _verify_acls(desired_state, observed, scope)
 
 
 def _filter_state_by_scope(state: dict, scope=None) -> dict:
@@ -273,6 +274,7 @@ def _filter_state_by_scope(state: dict, scope=None) -> dict:
 
     vlan_ids = set(getattr(scope, "vlan_ids", []))
     interface_names = set(getattr(scope, "interface_names", []))
+    acl_ids = set(getattr(scope, "acl_ids", []))
 
     return {
         "vlans": [
@@ -284,6 +286,11 @@ def _filter_state_by_scope(state: dict, scope=None) -> dict:
             interface
             for interface in state["interfaces"]
             if interface["name"] in interface_names
+        ],
+        "acls": [
+            acl
+            for acl in state["acls"]
+            if acl["acl_id"] in acl_ids
         ],
     }
 
@@ -310,6 +317,7 @@ def _default_running_state() -> dict:
                 },
             }
         ],
+        "acls": [],
     }
 
 
@@ -319,6 +327,22 @@ def _clone_state(state: dict) -> dict:
         "interfaces": [
             {**interface, "mode": dict(interface["mode"])}
             for interface in state["interfaces"]
+        ],
+        "acls": [
+            {
+                **acl,
+                "rules": [
+                    {
+                        **rule,
+                        "source": dict(rule["source"]) if rule.get("source") else None,
+                        "destination": (
+                            dict(rule["destination"]) if rule.get("destination") else None
+                        ),
+                    }
+                    for rule in acl.get("rules", [])
+                ],
+            }
+            for acl in state.get("acls", [])
         ],
     }
 
@@ -357,6 +381,19 @@ def _merge_desired_state(running: dict, desired_state) -> dict:
         interfaces_by_name[name]
         for name in sorted(interfaces_by_name)
     ]
+    acls_by_id = {acl["acl_id"]: acl for acl in merged["acls"]}
+    for desired_acl in getattr(desired_state, "acls", []):
+        acl_id = _field(desired_acl, "acl_id")
+        acls_by_id[acl_id] = {
+            "acl_id": acl_id,
+            "name": _optional_field(desired_acl, "name"),
+            "description": _optional_field(desired_acl, "description"),
+            "rules": [_acl_rule_to_dict(rule) for rule in getattr(desired_acl, "rules", [])],
+        }
+    merged["acls"] = [
+        acls_by_id[acl_id]
+        for acl_id in sorted(acls_by_id)
+    ]
     return merged
 
 
@@ -364,6 +401,7 @@ def _desired_state_is_empty(desired_state) -> bool:
     return (
         not list(getattr(desired_state, "vlans", []))
         and not list(getattr(desired_state, "interfaces", []))
+        and not list(getattr(desired_state, "acls", []))
     )
 
 
@@ -444,6 +482,27 @@ def _verify_interfaces(desired_state, observed: dict, scope=None) -> None:
             )
 
 
+def _verify_acls(desired_state, observed: dict, scope=None) -> None:
+    observed_by_id = {acl["acl_id"]: acl for acl in observed["acls"]}
+    desired_by_id = {
+        _field(acl, "acl_id"): acl
+        for acl in getattr(desired_state, "acls", [])
+    }
+    for acl_id in _scoped_acl_ids(scope, observed):
+        if acl_id not in desired_by_id and acl_id in observed_by_id:
+            raise _verify_mismatch(
+                f"ACL {acl_id} should be absent but exists in observed scoped state",
+            )
+    for desired_acl in _desired_acls_in_scope(desired_state, scope):
+        acl_id = _field(desired_acl, "acl_id")
+        observed_acl = observed_by_id.get(acl_id)
+        if observed_acl is None:
+            raise _verify_mismatch(f"ACL {acl_id} missing from observed scoped state")
+        expected = [_acl_rule_to_dict(rule) for rule in getattr(desired_acl, "rules", [])]
+        if observed_acl.get("rules", []) != expected:
+            raise _verify_mismatch(f"ACL {acl_id} rules mismatch")
+
+
 def _desired_vlans_in_scope(desired_state, scope=None):
     if scope is not None and not getattr(scope, "full", False) and not getattr(scope, "vlan_ids", []):
         return
@@ -488,6 +547,23 @@ def _scoped_interface_names(scope=None, observed=None):
     return set(getattr(scope, "interface_names", []))
 
 
+def _desired_acls_in_scope(desired_state, scope=None):
+    if scope is not None and not getattr(scope, "full", False) and not getattr(scope, "acl_ids", []):
+        return
+    acl_ids = set(getattr(scope, "acl_ids", [])) if scope is not None else set()
+    for acl in getattr(desired_state, "acls", []):
+        if getattr(scope, "full", False) or scope is None or _field(acl, "acl_id") in acl_ids:
+            yield acl
+
+
+def _scoped_acl_ids(scope=None, observed=None):
+    if scope is None or getattr(scope, "full", False):
+        if observed is None:
+            return []
+        return {acl["acl_id"] for acl in observed["acls"]}
+    return set(getattr(scope, "acl_ids", []))
+
+
 def _field(message, name):
     if isinstance(message, dict):
         return message[name]
@@ -528,6 +604,40 @@ def _mode_to_dict(mode) -> dict:
             "allowed_vlans": list(getattr(mode, "allowed_vlans", [])),
         }
     return {"kind": kind}
+
+
+def _acl_rule_to_dict(rule) -> dict:
+    return {
+        "sequence": _field(rule, "sequence"),
+        "action": _acl_action_text(_field(rule, "action")),
+        "protocol": _acl_protocol_text(_field(rule, "protocol")),
+        "source": _acl_endpoint_to_dict(_optional_field(rule, "source")),
+        "destination": _acl_endpoint_to_dict(_optional_field(rule, "destination")),
+        "source_port_eq": _optional_field(rule, "source_port_eq"),
+        "destination_port_eq": _optional_field(rule, "destination_port_eq"),
+        "description": _optional_field(rule, "description"),
+    }
+
+
+def _acl_action_text(value) -> str:
+    if isinstance(value, str):
+        return value.strip().lower()
+    return "permit" if int(value or 0) == 1 else "deny"
+
+
+def _acl_protocol_text(value) -> str:
+    if isinstance(value, str):
+        return value.strip().lower()
+    return {1: "ip", 2: "tcp", 3: "udp", 4: "icmp"}[int(value or 0)]
+
+
+def _acl_endpoint_to_dict(endpoint) -> dict | None:
+    if endpoint is None:
+        return None
+    return {
+        "address": _field(endpoint, "address"),
+        "wildcard": _field(endpoint, "wildcard"),
+    }
 
 
 def _normalize_mode(mode) -> dict:

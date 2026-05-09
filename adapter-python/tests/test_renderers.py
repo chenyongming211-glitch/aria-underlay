@@ -32,6 +32,41 @@ class _Interface:
 class _DesiredState:
     vlans: list
     interfaces: list
+    acls: list | None = None
+
+    def __post_init__(self):
+        if self.acls is None:
+            self.acls = []
+
+
+@dataclass
+class _AclEndpoint:
+    address: str
+    wildcard: str
+
+
+@dataclass
+class _AclRule:
+    sequence: int
+    action: str | int
+    protocol: str | int
+    source: _AclEndpoint | None = None
+    destination: _AclEndpoint | None = None
+    source_port_eq: int | None = None
+    destination_port_eq: int | None = None
+    description: str | None = None
+
+
+@dataclass
+class _Acl:
+    acl_id: int
+    name: str | None = None
+    description: str | None = None
+    rules: list[_AclRule] | None = None
+
+    def __post_init__(self):
+        if self.rules is None:
+            self.rules = []
 
 
 def test_xml_renderer_escapes_text():
@@ -323,6 +358,56 @@ def test_h3c_renderer_builds_interface_description_edit_config_document():
     assert access_interface.find(f"{{{ns}}}PVID").text == "144"
 
 
+def test_h3c_renderer_builds_ipv4_advanced_acl_edit_config_document():
+    xml = H3cRenderer().render_edit_config(
+        _DesiredState(
+            vlans=[],
+            interfaces=[],
+            acls=[
+                _Acl(
+                    acl_id=3999,
+                    description="ARIA isolated ACL",
+                    rules=[
+                        _AclRule(
+                            sequence=10,
+                            action="permit",
+                            protocol="ip",
+                            source=_AclEndpoint("192.0.2.1", "0.0.0.0"),
+                            destination=_AclEndpoint("198.51.100.0", "0.0.0.255"),
+                        ),
+                        _AclRule(
+                            sequence=20,
+                            action="deny",
+                            protocol="tcp",
+                            source=_AclEndpoint("192.0.2.0", "0.0.0.255"),
+                            destination=_AclEndpoint("198.51.100.10", "0.0.0.0"),
+                            destination_port_eq=443,
+                        ),
+                    ],
+                )
+            ],
+        )
+    )
+    root = ElementTree.fromstring(xml)
+    ns = H3cRenderer().ACL_NAMESPACE
+
+    group = root.find(f".//{{{ns}}}ACL/{{{ns}}}Groups/{{{ns}}}Group")
+    assert group.find(f"{{{ns}}}GroupType").text == "1"
+    assert group.find(f"{{{ns}}}GroupID").text == "3999"
+    assert group.find(f"{{{ns}}}Description").text == "ARIA isolated ACL"
+
+    rules = root.findall(f".//{{{ns}}}ACL/{{{ns}}}IPv4AdvanceRules/{{{ns}}}Rule")
+    assert [rule.find(f"{{{ns}}}RuleID").text for rule in rules] == ["10", "20"]
+    assert rules[0].find(f"{{{ns}}}Action").text == "2"
+    assert rules[0].find(f"{{{ns}}}ProtocolType").text == "256"
+    assert rules[0].find(f"{{{ns}}}SrcIPv4/{{{ns}}}SrcIPv4Addr").text == "192.0.2.1"
+    assert rules[0].find(f"{{{ns}}}DstIPv4/{{{ns}}}DstIPv4Wildcard").text == "0.0.0.255"
+    assert rules[1].find(f"{{{ns}}}Action").text == "1"
+    assert rules[1].find(f"{{{ns}}}ProtocolType").text == "6"
+    assert rules[1].find(f"{{{ns}}}DstPort/{{{ns}}}DstPortOp").text == "2"
+    assert rules[1].find(f"{{{ns}}}DstPort/{{{ns}}}DstPortValue1").text == "443"
+
+
 @pytest.mark.parametrize("renderer", [HuaweiRenderer()])
 def test_vendor_renderer_builds_single_edit_config_document(renderer):
     xml = renderer.render_edit_config(
@@ -456,5 +541,39 @@ def test_h3c_renderer_rejects_unverified_trunk_native_vlan():
                 admin_state=1,
                 description=None,
                 mode={"kind": "trunk", "native_vlan": 100, "allowed_vlans": [100]},
+            )
+        )
+
+
+def test_h3c_renderer_rejects_named_acl():
+    with pytest.raises(ValueError, match="ACL name is not supported"):
+        H3cRenderer().render_edit_config(
+            _DesiredState(
+                vlans=[],
+                interfaces=[],
+                acls=[_Acl(acl_id=3999, name="existing-name")],
+            )
+        )
+
+
+def test_h3c_renderer_rejects_acl_port_match_on_ip_protocol():
+    with pytest.raises(ValueError, match="port matches require tcp or udp"):
+        H3cRenderer().render_edit_config(
+            _DesiredState(
+                vlans=[],
+                interfaces=[],
+                acls=[
+                    _Acl(
+                        acl_id=3999,
+                        rules=[
+                            _AclRule(
+                                sequence=10,
+                                action="permit",
+                                protocol="ip",
+                                destination_port_eq=443,
+                            )
+                        ],
+                    )
+                ],
             )
         )

@@ -1089,7 +1089,15 @@ def test_build_state_filter_uses_h3c_ifmgr_and_vlan_subtrees_for_scoped_reads():
     )
 
     assert build_state_filter(scope, parser=H3cStateParser(model_hint="S6800-54QF")) == (
-        '<top xmlns="http://www.h3c.com/netconf/config:1.0"><Ifmgr/><VLAN/></top>'
+        '<top xmlns="http://www.h3c.com/netconf/config:1.0"><Ifmgr/><VLAN/><ACL/></top>'
+    )
+
+
+def test_build_state_filter_includes_acl_scope_for_h3c():
+    scope = _Scope(full=False, vlan_ids=[], interface_names=[], acl_ids=[3999])
+
+    assert build_state_filter(scope, parser=H3cStateParser(model_hint="S6800-54QF")) == (
+        '<top xmlns="http://www.h3c.com/netconf/config:1.0"><Ifmgr/><VLAN/><ACL/></top>'
     )
 
 
@@ -1129,7 +1137,7 @@ def test_get_current_state_empty_scope_returns_empty_state_without_device_read()
 
     state = backend.get_current_state(scope=_Scope(full=False, vlan_ids=[], interface_names=[]))
 
-    assert state == {"vlans": [], "interfaces": []}
+    assert state == {"vlans": [], "interfaces": [], "acls": []}
     assert session.calls == []
 
 
@@ -1273,7 +1281,7 @@ def test_get_current_state_uses_h3c_ifmgr_and_vlan_subtree_filter_for_scoped_rea
                 "source": "running",
                     "filter": (
                         "subtree",
-                        '<top xmlns="http://www.h3c.com/netconf/config:1.0"><Ifmgr/><VLAN/></top>',
+                        '<top xmlns="http://www.h3c.com/netconf/config:1.0"><Ifmgr/><VLAN/><ACL/></top>',
                     ),
                 },
             )
@@ -1426,6 +1434,45 @@ def test_verify_running_fails_with_parsed_vlan_mismatch():
         assert "name mismatch" in error.raw_error_summary
     else:
         raise AssertionError("parsed running mismatch should fail verification")
+
+
+def test_verify_running_succeeds_with_matching_acl():
+    session = _RecordingSession()
+    parser = _StaticStateParser(
+        state={
+            "vlans": [],
+            "interfaces": [],
+            "acls": [_parsed_acl()],
+        }
+    )
+    backend = _BackendWithSession(session, state_parser=parser)
+
+    backend.verify_running(_desired_acl_state(), scope=_Scope(False, [], [], [3999]))
+
+    assert session.calls == [
+        (
+            "get_config",
+            {
+                "source": "running",
+            },
+        )
+    ]
+
+
+def test_verify_running_fails_with_parsed_acl_mismatch():
+    session = _RecordingSession()
+    acl = _parsed_acl()
+    acl["rules"][0]["destination_port_eq"] = 8443
+    parser = _StaticStateParser(state={"vlans": [], "interfaces": [], "acls": [acl]})
+    backend = _BackendWithSession(session, state_parser=parser)
+
+    try:
+        backend.verify_running(_desired_acl_state(), scope=_Scope(False, [], [], [3999]))
+    except AdapterError as error:
+        assert error.code == "VERIFY_FAILED"
+        assert "ACL 3999 rules mismatch" in error.raw_error_summary
+    else:
+        raise AssertionError("parsed ACL mismatch should fail verification")
 
 
 class _BackendWithSession(NcclientNetconfBackend):
@@ -1636,6 +1683,46 @@ def _desired_state(interface_name="GE1/0/1"):
     return _Desired()
 
 
+def _desired_acl_state():
+    return pb2.DesiredDeviceState(
+        device_id="leaf-a",
+        acls=[
+            pb2.AclConfig(
+                acl_id=3999,
+                description="ARIA isolated ACL",
+                rules=[
+                    pb2.AclRule(
+                        sequence=10,
+                        action=pb2.ACL_ACTION_DENY,
+                        protocol=pb2.ACL_PROTOCOL_TCP,
+                        destination_port_eq=443,
+                    )
+                ],
+            )
+        ],
+    )
+
+
+def _parsed_acl():
+    return {
+        "acl_id": 3999,
+        "name": None,
+        "description": "ARIA isolated ACL",
+        "rules": [
+            {
+                "sequence": 10,
+                "action": "deny",
+                "protocol": "tcp",
+                "source": None,
+                "destination": None,
+                "source_port_eq": None,
+                "destination_port_eq": 443,
+                "description": None,
+            }
+        ],
+    }
+
+
 def _fixture_desired_state(vlan_name="prod"):
     return pb2.DesiredDeviceState(
         device_id="leaf-a",
@@ -1669,7 +1756,8 @@ def _h3c_fixture_xml():
 
 
 class _Scope:
-    def __init__(self, full, vlan_ids, interface_names):
+    def __init__(self, full, vlan_ids, interface_names, acl_ids=None):
         self.full = full
         self.vlan_ids = vlan_ids
         self.interface_names = interface_names
+        self.acl_ids = [] if acl_ids is None else acl_ids

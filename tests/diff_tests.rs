@@ -1,5 +1,8 @@
 use aria_underlay::engine::diff::{compute_diff, ChangeOp, ChangeSet};
-use aria_underlay::model::{AdminState, DeviceId, InterfaceConfig, PortMode, VlanConfig};
+use aria_underlay::model::{
+    AclAction, AclConfig, AclEndpoint, AclProtocol, AclRule, AdminState, DeviceId,
+    InterfaceConfig, PortMode, VlanConfig,
+};
 use aria_underlay::planner::device_plan::DeviceDesiredState;
 use aria_underlay::state::DeviceShadowState;
 
@@ -130,7 +133,54 @@ fn canonical_interface_name_prevents_h3c_ten_gigabit_alias_diff() {
     assert!(change_set.is_empty());
 }
 
+#[test]
+fn missing_acl_creates_acl() {
+    let desired = desired_state_with_acls(vec![], vec![], vec![acl(3999, "temporary")]);
+    let current = shadow_state_with_acls(vec![], vec![], vec![]);
+
+    let change_set = compute_diff(&desired, &current);
+
+    assert_eq!(
+        change_set.ops,
+        vec![ChangeOp::CreateAcl(acl(3999, "temporary"))]
+    );
+}
+
+#[test]
+fn changed_acl_updates_acl() {
+    let desired = desired_state_with_acls(vec![], vec![], vec![acl(3999, "new")]);
+    let current = shadow_state_with_acls(vec![], vec![], vec![acl(3999, "old")]);
+
+    let change_set = compute_diff(&desired, &current);
+
+    assert_eq!(
+        change_set.ops,
+        vec![ChangeOp::UpdateAcl {
+            before: acl(3999, "old"),
+            after: acl(3999, "new"),
+        }]
+    );
+}
+
+#[test]
+fn extra_acl_deletes_acl() {
+    let desired = desired_state_with_acls(vec![], vec![], vec![]);
+    let current = shadow_state_with_acls(vec![], vec![], vec![acl(3999, "old")]);
+
+    let change_set = compute_diff(&desired, &current);
+
+    assert_eq!(change_set.ops, vec![ChangeOp::DeleteAcl { acl_id: 3999 }]);
+}
+
 fn desired_state(vlans: Vec<VlanConfig>, interfaces: Vec<InterfaceConfig>) -> DeviceDesiredState {
+    desired_state_with_acls(vlans, interfaces, vec![])
+}
+
+fn desired_state_with_acls(
+    vlans: Vec<VlanConfig>,
+    interfaces: Vec<InterfaceConfig>,
+    acls: Vec<AclConfig>,
+) -> DeviceDesiredState {
     DeviceDesiredState {
         device_id: DeviceId("leaf-a".into()),
         vlans: vlans.into_iter().map(|vlan| (vlan.vlan_id, vlan)).collect(),
@@ -138,10 +188,19 @@ fn desired_state(vlans: Vec<VlanConfig>, interfaces: Vec<InterfaceConfig>) -> De
             .into_iter()
             .map(|interface| (interface.name.clone(), interface))
             .collect(),
+        acls: acls.into_iter().map(|acl| (acl.acl_id, acl)).collect(),
     }
 }
 
 fn shadow_state(vlans: Vec<VlanConfig>, interfaces: Vec<InterfaceConfig>) -> DeviceShadowState {
+    shadow_state_with_acls(vlans, interfaces, vec![])
+}
+
+fn shadow_state_with_acls(
+    vlans: Vec<VlanConfig>,
+    interfaces: Vec<InterfaceConfig>,
+    acls: Vec<AclConfig>,
+) -> DeviceShadowState {
     DeviceShadowState {
         device_id: DeviceId("leaf-a".into()),
         revision: 1,
@@ -150,6 +209,7 @@ fn shadow_state(vlans: Vec<VlanConfig>, interfaces: Vec<InterfaceConfig>) -> Dev
             .into_iter()
             .map(|interface| (interface.name.clone(), interface))
             .collect(),
+        acls: acls.into_iter().map(|acl| (acl.acl_id, acl)).collect(),
         warnings: vec![],
     }
 }
@@ -185,5 +245,26 @@ fn trunk_interface(
             native_vlan,
             allowed_vlans,
         },
+    }
+}
+
+fn acl(acl_id: u16, description: &str) -> AclConfig {
+    AclConfig {
+        acl_id,
+        name: None,
+        description: Some(description.into()),
+        rules: vec![AclRule {
+            sequence: 10,
+            action: AclAction::Permit,
+            protocol: AclProtocol::Ip,
+            source: Some(AclEndpoint {
+                address: "192.0.2.1".into(),
+                wildcard: "0.0.0.0".into(),
+            }),
+            destination: None,
+            source_port_eq: None,
+            destination_port_eq: None,
+            description: None,
+        }],
     }
 }
