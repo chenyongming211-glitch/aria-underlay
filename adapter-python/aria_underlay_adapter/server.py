@@ -69,6 +69,7 @@ class UnderlayAdapterService(pb2_grpc.UnderlayAdapterServicer):
             device=request.device,
             strategy=request.strategy,
             confirm_timeout_secs=request.confirm_timeout_secs,
+            prepared_candidate_checksum=request.prepared_candidate_checksum,
         )
 
     def FinalConfirm(self, request, context):

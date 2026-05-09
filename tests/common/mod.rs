@@ -19,6 +19,7 @@ pub struct TestAdapter {
     pub prepare_result: adapter::AdapterResult,
     pub commit_result: adapter::AdapterResult,
     pub commit_confirm_timeouts: Option<Arc<Mutex<Vec<u32>>>>,
+    pub commit_prepared_candidate_checksums: Option<Arc<Mutex<Vec<String>>>>,
     pub final_confirm_result: adapter::AdapterResult,
     pub rollback_result: adapter::AdapterResult,
     pub rollback_calls: Option<Arc<AtomicUsize>>,
@@ -41,6 +42,7 @@ impl Default for TestAdapter {
                 adapter::AdapterOperationStatus::ConfirmedCommitPending,
             ),
             commit_confirm_timeouts: None,
+            commit_prepared_candidate_checksums: None,
             final_confirm_result: adapter_result(adapter::AdapterOperationStatus::Committed),
             rollback_result: adapter_result(adapter::AdapterOperationStatus::RolledBack),
             rollback_calls: None,
@@ -82,6 +84,7 @@ pub fn adapter_result(status: adapter::AdapterOperationStatus) -> adapter::Adapt
         errors: Vec::new(),
         rollback_artifact: None,
         normalized_state: None,
+        prepared_candidate_checksum: String::new(),
     }
 }
 
@@ -99,6 +102,7 @@ pub fn failed_result(code: &str) -> adapter::AdapterResult {
         }],
         rollback_artifact: None,
         normalized_state: None,
+        prepared_candidate_checksum: String::new(),
     }
 }
 
@@ -207,11 +211,18 @@ impl UnderlayAdapter for TestAdapter {
         &self,
         request: Request<adapter::CommitRequest>,
     ) -> Result<Response<adapter::CommitResponse>, Status> {
+        let request = request.into_inner();
         if let Some(timeouts) = &self.commit_confirm_timeouts {
             timeouts
                 .lock()
                 .expect("commit timeout recorder should not be poisoned")
-                .push(request.into_inner().confirm_timeout_secs);
+                .push(request.confirm_timeout_secs);
+        }
+        if let Some(checksums) = &self.commit_prepared_candidate_checksums {
+            checksums
+                .lock()
+                .expect("commit checksum recorder should not be poisoned")
+                .push(request.prepared_candidate_checksum);
         }
         Ok(Response::new(adapter::CommitResponse {
             result: Some(self.commit_result.clone()),

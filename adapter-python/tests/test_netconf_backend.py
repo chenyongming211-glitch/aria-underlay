@@ -673,8 +673,9 @@ def test_prepare_candidate_edits_and_validates_when_renderer_is_configured():
     session = _RecordingSession()
     backend = _BackendWithSession(session, config_renderer=_StaticRenderer("<config/>"))
 
-    backend.prepare_candidate(desired_state=object())
+    result = backend.prepare_candidate(desired_state=object())
 
+    assert result.candidate_checksum
     assert session.calls == [
         ("lock", "candidate"),
         (
@@ -687,6 +688,7 @@ def test_prepare_candidate_edits_and_validates_when_renderer_is_configured():
             },
         ),
         ("validate", "candidate"),
+        ("get_config", {"source": "candidate"}),
         ("unlock", "candidate"),
     ]
 
@@ -825,6 +827,7 @@ def test_prepare_candidate_discards_successful_candidate_when_unlock_fails():
             },
         ),
         ("validate", "candidate"),
+        ("get_config", {"source": "candidate"}),
         ("unlock", "candidate"),
         ("discard_changes",),
     ]
@@ -931,6 +934,46 @@ def test_ncclient_authorization_error_is_not_authentication_failure():
     assert error.code == "NETCONF_CONNECT_FAILED"
 
 
+def test_commit_candidate_rejects_candidate_changed_after_prepare():
+    prepare_session = _RecordingSession(reply="<candidate>prepared</candidate>")
+    commit_session = _RecordingSession(reply="<candidate>external</candidate>")
+    backend = _BackendWithSessions(
+        [prepare_session, commit_session],
+        config_renderer=_StaticRenderer("<config/>"),
+    )
+
+    prepared = backend.prepare_candidate(desired_state=object())
+
+    with pytest.raises(AdapterError) as exc_info:
+        backend.commit_candidate(
+            strategy=TRANSACTION_STRATEGY_CANDIDATE_COMMIT,
+            tx_id="tx-1",
+            prepared_candidate_checksum=prepared.candidate_checksum,
+        )
+
+    assert exc_info.value.code == "NETCONF_CANDIDATE_CHANGED"
+    assert prepare_session.calls == [
+        ("lock", "candidate"),
+        (
+            "edit_config",
+            {
+                "target": "candidate",
+                "config": "<config/>",
+                "default_operation": "merge",
+                "error_option": "rollback-on-error",
+            },
+        ),
+        ("validate", "candidate"),
+        ("get_config", {"source": "candidate"}),
+        ("unlock", "candidate"),
+    ]
+    assert commit_session.calls == [
+        ("lock", "candidate"),
+        ("get_config", {"source": "candidate"}),
+        ("unlock", "candidate"),
+    ]
+
+
 def test_commit_candidate_commits_for_candidate_strategy():
     session = _RecordingSession()
     backend = _BackendWithSession(session)
@@ -940,7 +983,12 @@ def test_commit_candidate_commits_for_candidate_strategy():
         tx_id="tx-1",
     )
 
-    assert session.calls == [("commit", {})]
+    assert session.calls == [
+        ("lock", "candidate"),
+        ("validate", "candidate"),
+        ("commit", {}),
+        ("unlock", "candidate"),
+    ]
 
 
 def test_commit_candidate_noops_for_running_rollback_on_error_strategy():
@@ -966,6 +1014,8 @@ def test_commit_candidate_starts_confirmed_commit_with_persist_token():
     )
 
     assert session.calls == [
+        ("lock", "candidate"),
+        ("validate", "candidate"),
         (
             "commit",
             {
@@ -973,7 +1023,8 @@ def test_commit_candidate_starts_confirmed_commit_with_persist_token():
                 "timeout": 120,
                 "persist": "tx-1",
             },
-        )
+        ),
+        ("unlock", "candidate"),
     ]
 
 
@@ -1020,7 +1071,12 @@ def test_commit_candidate_maps_device_commit_failure():
     else:
         raise AssertionError("commit failure should fail closed")
 
-    assert session.calls == [("commit", {})]
+    assert session.calls == [
+        ("lock", "candidate"),
+        ("validate", "candidate"),
+        ("commit", {}),
+        ("unlock", "candidate"),
+    ]
 
 
 def test_final_confirm_commits_persist_id():
@@ -1486,6 +1542,19 @@ class _BackendWithSession(NcclientNetconfBackend):
 
     def _connect(self):
         return self._session
+
+
+class _BackendWithSessions(NcclientNetconfBackend):
+    def __init__(self, sessions, config_renderer=None, state_parser=None):
+        super().__init__(
+            host="127.0.0.1",
+            config_renderer=config_renderer,
+            state_parser=state_parser,
+        )
+        object.__setattr__(self, "_sessions", list(sessions))
+
+    def _connect(self):
+        return self._sessions.pop(0)
 
 
 class _FakeManager:

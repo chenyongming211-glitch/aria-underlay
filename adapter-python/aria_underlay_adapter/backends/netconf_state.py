@@ -56,6 +56,18 @@ def read_running_config(session, scope=None, parser=None):
         ) from exc
 
 
+def read_candidate_config(session):
+    try:
+        return _running_xml_from_reply(session.get_config(source="candidate"))
+    except Exception as exc:
+        raise adapter_operation_error(
+            code="NETCONF_GET_CANDIDATE_CONFIG_FAILED",
+            message="NETCONF get-config candidate failed",
+            exc=exc,
+            retryable=True,
+        ) from exc
+
+
 def _running_xml_from_reply(reply) -> str:
     if isinstance(reply, str):
         return reply

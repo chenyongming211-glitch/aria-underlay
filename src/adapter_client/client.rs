@@ -179,6 +179,7 @@ impl AdapterClient {
             &request_context(device),
             strategy,
             DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
+            None,
         )
         .await
     }
@@ -189,6 +190,7 @@ impl AdapterClient {
         context: &RequestContext,
         strategy: TransactionStrategy,
         confirm_timeout_secs: u32,
+        prepared_candidate_checksum: Option<&str>,
     ) -> UnderlayResult<AdapterOutcome> {
         let response = self
             .inner
@@ -197,6 +199,9 @@ impl AdapterClient {
                 device: Some(device_ref_from_info(device)),
                 strategy: strategy_to_proto(strategy) as i32,
                 confirm_timeout_secs,
+                prepared_candidate_checksum: prepared_candidate_checksum
+                    .unwrap_or_default()
+                    .to_string(),
             })
             .await
             .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?

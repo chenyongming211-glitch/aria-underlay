@@ -227,6 +227,7 @@ message AdapterResult {
   repeated AdapterError errors = 4;
   optional RollbackArtifactRef rollback_artifact = 5;
   optional ObservedDeviceState normalized_state = 6;
+  string prepared_candidate_checksum = 7;
 }
 
 message GetCapabilitiesRequest {
@@ -277,6 +278,7 @@ message CommitRequest {
   DeviceRef device = 2;
   TransactionStrategy strategy = 3;
   uint32 confirm_timeout_secs = 4;
+  string prepared_candidate_checksum = 5;
 }
 
 message CommitResponse {

@@ -28,7 +28,9 @@ use aria_underlay::{UnderlayError, UnderlayResult};
 
 mod common;
 
-use common::{failed_result, observed_access_state, start_test_adapter, TestAdapter};
+use common::{
+    adapter_result, failed_result, observed_access_state, start_test_adapter, TestAdapter,
+};
 
 #[tokio::test]
 async fn apply_is_blocked_before_adapter_when_endpoint_has_in_doubt_transaction() {
@@ -280,6 +282,39 @@ async fn confirmed_commit_timeout_is_taken_from_service_configuration() {
             .lock()
             .expect("timeout recorder should not be poisoned"),
         vec![45]
+    );
+}
+
+#[tokio::test]
+async fn prepared_candidate_checksum_is_sent_to_commit() {
+    let commit_checksums = Arc::new(Mutex::new(Vec::new()));
+    let mut prepare_result = adapter_result(adapter::AdapterOperationStatus::Prepared);
+    prepare_result.prepared_candidate_checksum = "sha256:prepared".into();
+    let endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-mgmt", 100)),
+        prepare_result,
+        commit_prepared_candidate_checksums: Some(commit_checksums.clone()),
+        ..Default::default()
+    })
+    .await;
+    let inventory = inventory_with_endpoint_at(
+        "stack-mgmt",
+        DeviceLifecycleState::Ready,
+        endpoint,
+    );
+    let service = AriaUnderlayService::new(inventory);
+
+    let response = service
+        .apply_domain_intent(apply_request_with_vlan(200, DriftPolicy::ReportOnly))
+        .await
+        .expect("apply should succeed");
+
+    assert_eq!(response.status, ApplyStatus::Success);
+    assert_eq!(
+        *commit_checksums
+            .lock()
+            .expect("checksum recorder should not be poisoned"),
+        vec!["sha256:prepared".to_string()]
     );
 }
 

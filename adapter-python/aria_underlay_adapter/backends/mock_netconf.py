@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from aria_underlay_adapter.backends.base import BackendCapability
+from aria_underlay_adapter.backends.base import CandidateCommitResult
 from aria_underlay_adapter.backends.base import CandidateDryRunResult
+from aria_underlay_adapter.backends.base import PreparedCandidateResult
 from aria_underlay_adapter.errors import AdapterError
 from aria_underlay_adapter.normalization import admin_state_to_text as _admin_state_to_text
 
@@ -183,7 +185,7 @@ class MockNetconfBackend:
     def unlock_candidate(self) -> None:
         return None
 
-    def prepare_candidate(self, desired_state=None) -> None:
+    def prepare_candidate(self, desired_state=None) -> PreparedCandidateResult:
         self.lock_candidate()
         try:
             self.edit_candidate()
@@ -193,13 +195,15 @@ class MockNetconfBackend:
             self._candidate = None
             self.unlock_candidate()
             raise
+        return PreparedCandidateResult(candidate_checksum="mock-candidate")
 
     def commit_candidate(
         self,
         strategy=None,
         tx_id: str | None = None,
         confirm_timeout_secs: int = 120,
-    ) -> None:
+        prepared_candidate_checksum: str | None = None,
+    ) -> CandidateCommitResult:
         self.get_capabilities()
         if self.profile == "commit_failed":
             raise AdapterError(
@@ -215,6 +219,7 @@ class MockNetconfBackend:
                 self._pending_confirm_tx_id = tx_id
             self._running = _clone_state(self._candidate)
             self._candidate = None
+        return CandidateCommitResult()
 
     def final_confirm(self, tx_id: str | None = None) -> None:
         self.get_capabilities()

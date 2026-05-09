@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 
@@ -26,6 +26,16 @@ class CandidateDryRunResult:
     config_xml: str = ""
 
 
+@dataclass(frozen=True)
+class PreparedCandidateResult:
+    candidate_checksum: str = ""
+
+
+@dataclass(frozen=True)
+class CandidateCommitResult:
+    warnings: list[str] = field(default_factory=list)
+
+
 class NetconfBackend(Protocol):
     def get_capabilities(self) -> BackendCapability: ...
 
@@ -33,14 +43,15 @@ class NetconfBackend(Protocol):
 
     def dry_run_candidate(self, desired_state=None) -> CandidateDryRunResult: ...
 
-    def prepare_candidate(self, desired_state=None) -> None: ...
+    def prepare_candidate(self, desired_state=None) -> PreparedCandidateResult: ...
 
     def commit_candidate(
         self,
         strategy=None,
         tx_id: str | None = None,
         confirm_timeout_secs: int = 120,
-    ) -> None: ...
+        prepared_candidate_checksum: str | None = None,
+    ) -> CandidateCommitResult: ...
 
     def final_confirm(self, tx_id: str | None = None) -> None: ...
 

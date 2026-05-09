@@ -303,6 +303,7 @@ pub fn adapter_result_to_outcome(proto: adapter::AdapterResult) -> UnderlayResul
         status: adapter_status_from_i32(proto.status),
         changed: proto.changed,
         warnings: proto.warnings,
+        prepared_candidate_checksum: empty_to_none(proto.prepared_candidate_checksum),
         normalized_state: proto
             .normalized_state
             .map(|state| shadow_state_from_proto(state, Vec::new()))
@@ -339,6 +340,7 @@ pub struct AdapterOutcome {
     pub status: AdapterOperationStatus,
     pub changed: bool,
     pub warnings: Vec<String>,
+    pub prepared_candidate_checksum: Option<String>,
     pub normalized_state: Option<DeviceShadowState>,
 }
 

@@ -7,8 +7,8 @@
 
 ## 核实基线
 
-- 代码：`main` / `10db2f7 test: expect acl creation before binding`
-- 本地验证：`python3 -m pytest -q adapter-python/tests` -> `289 passed`
+- 代码：`codex/product-api-rbac`
+- 本地验证：`python3 -m pytest -q adapter-python/tests` -> `290 passed`
 - 本地限制：当前机器 `cargo` 不在 `PATH`，Rust 结论来自源码核实；Rust CI 仍以
   GitHub Actions 为准。
 
@@ -25,6 +25,7 @@
 | 项目 | 当前确认 | 主要证据 | 验证状态 |
 | --- | --- | --- | --- |
 | Product API action-level RBAC | Static bearer-token principal 已要求声明 `allowed_actions`；bearer session 会携带 action set；`ProductOpsApi` 不再对 bearer session 使用 `PermitAllAuthorizationPolicy`，而是用 request-scoped `StaticAuthorizationPolicy` 按 action 授权。 | `src/api/product_identity.rs`, `src/api/product_api.rs`, `src/authz.rs`, `docs/examples/product-api.*.json` | 本机无 `cargo`，需要 GitHub Actions 跑 Rust compile/test；已新增拒绝越权 audit export 的测试和 config allowed_actions 测试。 |
+| Candidate datastore prepare/commit 外部 TOCTOU | Python NETCONF prepare 会在 candidate lock 内读取 candidate config 并生成 checksum；Rust coordinator 从 prepare outcome 保存该 checksum 并传入 commit；commit 重新 lock candidate、读取当前 candidate checksum，比对不一致时返回 `NETCONF_CANDIDATE_CHANGED`，不会执行 commit。 | `proto/aria_underlay_adapter.proto`, `adapter-python/aria_underlay_adapter/backends/netconf.py`, `adapter-python/aria_underlay_adapter/drivers/netconf_backed.py`, `src/adapter_client/client.rs`, `src/api/apply_coordinator.rs` | Python adapter 本地 290 passed；新增 TOCTOU 拒绝测试和 Rust coordinator checksum 传递测试。Rust compile/test 需 GitHub Actions。 |
 
 ## Confirmed-open
 
@@ -33,7 +34,6 @@
 | 优先级 | 项目 | 当前确认 | 主要证据 | 建议 |
 | --- | --- | --- | --- | --- |
 | P0/条件阻塞 | Python Adapter gRPC 无 TLS/mTLS | server 只调用 `add_insecure_port(config.listen)`，配置也没有证书/client-auth 字段。 | `adapter-python/aria_underlay_adapter/server.py:163-169`, `adapter-python/aria_underlay_adapter/config.py:7-31` | 若 Core/Adapter 跨主机或网络不可信，先修；loopback/sidecar 部署可后置。 |
-| P0/条件阻塞 | Candidate datastore prepare/commit 外部 TOCTOU | `prepare_candidate()` unlock 并关闭 session，`commit_candidate()` 后续新 session commit；外部 NETCONF writer 可在窗口内改 candidate。 | `adapter-python/aria_underlay_adapter/backends/netconf.py:211-277`, `adapter-python/aria_underlay_adapter/backends/netconf.py:417-474` | 若现场可能有外部 NETCONF writer，优先修；若保证独占写设备，可文档化后置。 |
 | P1 | Confirmed-commit timeout watcher 缺失 | 已有 `with_confirmed_commit_timeout_secs` 和 commit 参数传递，但无后台 watcher 主动处理超时 journal。 | `src/api/service.rs:226-228`, `src/api/apply_coordinator.rs:550-556` | 增加后台监控或明确只依赖 recovery/manual ops。 |
 | P1 | Worker panic/join error 仍终止 runtime | 普通 worker 返回错误已隔离，但 `JoinError` 会 shutdown 其他 worker 并返回 runtime error。 | `src/worker/runtime.rs:174-200` | 后续修成 panic 隔离和事件/报告记录。 |
 | P1 | Journal GC 目录级/删除级失败仍全局失败 | 单个坏 journal 文件已跳过；`read_dir`、`remove_file`、artifact dir 遍历/删除错误仍直接返回 Err。 | `src/worker/gc.rs:210-264`, `src/worker/gc.rs:267-356` | 继续把目录/删除错误降级为报告字段，避免停止 runtime。 |
@@ -83,10 +83,9 @@
 
 默认先做最小可验证切片，不一次性铺开所有 open 项：
 
-1. 若 Product API 会被多个 operator 使用：先修 action-level RBAC。
-2. 若 Core/Adapter 有跨主机部署：先修 adapter gRPC TLS/mTLS 或写入强制 sidecar/tunnel 配置边界。
-3. 若现场可能有外部 NETCONF writer：先修 candidate prepare/commit TOCTOU。
-4. 然后修 confirmed-commit timeout watcher。
-5. 最后集中修 worker panic/join、GC 目录级失败、drift expected listing 失败。
+1. 若 Core/Adapter 有跨主机部署：先修 adapter gRPC TLS/mTLS 或写入强制 sidecar/tunnel 配置边界。
+2. 然后修 confirmed-commit timeout watcher。
+3. 再集中修 worker panic/join、GC 目录级失败、drift expected listing 失败。
+4. 最后按真实厂商反馈收窄 persist-id 字符串 fallback，并补 NETCONF force unlock。
 
 当前不建议先做 active-active、跨设备全局事务、AutoReconcile 或非 H3C vendor 扩展。
