@@ -257,6 +257,69 @@ async fn recover_pending_transactions_confirms_final_confirming_by_verifying_des
 }
 
 #[tokio::test]
+async fn recover_timed_out_confirmed_commits_recovers_only_stale_records() {
+    let endpoint = start_test_adapter(TestAdapter {
+        final_confirm_result: adapter_result(adapter::AdapterOperationStatus::Committed),
+        ..Default::default()
+    })
+    .await;
+    let journal = Arc::new(InMemoryTxJournalStore::default());
+    let desired = desired_vlan_state("leaf-a", 200, "tenant-200");
+    let change_set = create_vlan_change_set("leaf-a", 200, "tenant-200");
+    journal
+        .put(
+            &stamped_journal_record("tx-stale-final-confirm", TxPhase::FinalConfirming, "leaf-a", 1)
+                .with_desired_states(vec![desired])
+                .with_change_sets(vec![change_set])
+                .with_strategy(TransactionStrategy::ConfirmedCommit),
+        )
+        .expect("stale final-confirming journal record should be stored");
+    journal
+        .put(
+            &stamped_journal_record(
+                "tx-fresh-final-confirm",
+                TxPhase::FinalConfirming,
+                "leaf-b",
+                u64::MAX,
+            )
+            .with_desired_states(vec![desired_vlan_state("leaf-b", 300, "tenant-300")])
+            .with_change_sets(vec![create_vlan_change_set("leaf-b", 300, "tenant-300")])
+            .with_strategy(TransactionStrategy::ConfirmedCommit),
+        )
+        .expect("fresh final-confirming journal record should be stored");
+
+    let service = AriaUnderlayService::new_with_journal(
+        inventory_with_two_recovery_endpoints(endpoint),
+        journal.clone(),
+    )
+    .with_confirmed_commit_timeout_secs(45);
+    let report = service
+        .recover_timed_out_confirmed_commits()
+        .await
+        .expect("confirmed-commit timeout watcher should recover stale records");
+
+    assert_eq!(report.recovered, 1);
+    assert_eq!(report.in_doubt, 0);
+    assert_eq!(report.pending, 0);
+    assert_eq!(
+        report.tx_ids,
+        Vec::<String>::new(),
+        "watcher report should be scoped to timed-out records"
+    );
+
+    let stale = journal
+        .get("tx-stale-final-confirm")
+        .expect("journal get should succeed")
+        .expect("stale record should exist");
+    assert_eq!(stale.phase, TxPhase::Committed);
+    let fresh = journal
+        .get("tx-fresh-final-confirm")
+        .expect("journal get should succeed")
+        .expect("fresh record should exist");
+    assert_eq!(fresh.phase, TxPhase::FinalConfirming);
+}
+
+#[tokio::test]
 async fn recover_pending_transactions_reloads_candidate_before_recovery() {
     let stale_record = journal_record("tx-stale", TxPhase::Prepared, "leaf-a");
     let committed_record = stale_record.clone().with_phase(TxPhase::Committed);
@@ -721,6 +784,18 @@ fn journal_record(tx_id: &str, phase: TxPhase, device_id: &str) -> TxJournalReco
     .with_phase(phase)
 }
 
+fn stamped_journal_record(
+    tx_id: &str,
+    phase: TxPhase,
+    device_id: &str,
+    updated_at_unix_secs: u64,
+) -> TxJournalRecord {
+    let mut record = journal_record(tx_id, phase, device_id);
+    record.created_at_unix_secs = updated_at_unix_secs;
+    record.updated_at_unix_secs = updated_at_unix_secs;
+    record
+}
+
 fn force_resolve_request(tx_id: &str) -> ForceResolveTransactionRequest {
     ForceResolveTransactionRequest {
         request_id: format!("req-resolve-{tx_id}"),
@@ -782,6 +857,32 @@ fn inventory_with_recovery_endpoint(device_id: &str, adapter_endpoint: String) -
             lifecycle_state: DeviceLifecycleState::Ready,
         })
         .expect("recovery device should be inserted");
+    inventory
+}
+
+fn inventory_with_two_recovery_endpoints(adapter_endpoint: String) -> DeviceInventory {
+    let inventory = DeviceInventory::default();
+    for (device_id, role) in [
+        ("leaf-a", DeviceRole::LeafA),
+        ("leaf-b", DeviceRole::LeafB),
+    ] {
+        inventory
+            .insert(DeviceInfo {
+                tenant_id: "tenant-a".into(),
+                site_id: "site-a".into(),
+                id: DeviceId(device_id.into()),
+                management_ip: "127.0.0.1".into(),
+                management_port: 830,
+                vendor_hint: Some(Vendor::Unknown),
+                model_hint: None,
+                role,
+                secret_ref: format!("local/{device_id}"),
+                host_key_policy: HostKeyPolicy::TrustOnFirstUse,
+                adapter_endpoint: adapter_endpoint.clone(),
+                lifecycle_state: DeviceLifecycleState::Ready,
+            })
+            .expect("recovery device should be inserted");
+    }
     inventory
 }
 
