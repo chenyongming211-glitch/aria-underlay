@@ -186,11 +186,14 @@ fn missing_acl_binding_creates_binding() {
 
     assert_eq!(
         change_set.ops,
-        vec![ChangeOp::CreateAclBinding(acl_binding(
-            "GE1/0/13",
-            AclDirection::Inbound,
-            3999
-        ))]
+        vec![
+            ChangeOp::CreateAcl(acl(3999, "temporary")),
+            ChangeOp::CreateAclBinding(acl_binding(
+                "GE1/0/13",
+                AclDirection::Inbound,
+                3999
+            )),
+        ]
     );
 }
 
