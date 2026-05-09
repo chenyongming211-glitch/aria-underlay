@@ -82,6 +82,46 @@ fn product_api_server_config_rejects_legacy_token_role_fields() {
         .expect_err("product API config must not accept legacy role or token lifecycle fields");
 }
 
+#[test]
+fn product_api_server_config_requires_token_allowed_actions() {
+    let json = r#"{
+      "bind_addr": "127.0.0.1:8088",
+      "max_body_bytes": 1048576,
+      "operation_summary_path": "/var/lib/aria-underlay/ops/operation-summaries.jsonl",
+      "product_audit_path": "/var/lib/aria-underlay/ops/product-audit.jsonl",
+      "static_tokens": {
+        "viewer-token": {
+          "operator_id": "viewer-a"
+        }
+      }
+    }"#;
+
+    serde_json::from_str::<ProductApiServerConfig>(json)
+        .expect_err("static token principals must declare allowed actions");
+}
+
+#[test]
+fn product_api_server_config_rejects_empty_token_allowed_actions() {
+    let json = r#"{
+      "bind_addr": "127.0.0.1:8088",
+      "max_body_bytes": 1048576,
+      "operation_summary_path": "/var/lib/aria-underlay/ops/operation-summaries.jsonl",
+      "product_audit_path": "/var/lib/aria-underlay/ops/product-audit.jsonl",
+      "static_tokens": {
+        "viewer-token": {
+          "operator_id": "viewer-a",
+          "allowed_actions": []
+        }
+      }
+    }"#;
+
+    let config = serde_json::from_str::<ProductApiServerConfig>(json)
+        .expect("empty allowed actions still deserialize");
+    config
+        .validate()
+        .expect_err("empty allowed actions must fail config validation");
+}
+
 fn local_static_config() -> ProductApiServerConfig {
     ProductApiServerConfig {
         bind_addr: "127.0.0.1:8088".parse().expect("addr should parse"),

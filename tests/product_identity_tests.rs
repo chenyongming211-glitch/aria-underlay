@@ -10,8 +10,10 @@ use aria_underlay::api::product_api::{
 };
 use aria_underlay::api::product_http::{
     ProductHttpErrorResponse, ProductHttpMethod, ProductHttpRequest, ProductHttpRouter,
-    OPERATION_SUMMARIES_QUERY_PATH,
+    OPERATION_SUMMARIES_QUERY_PATH, PRODUCT_AUDIT_EXPORT_PATH,
 };
+use aria_underlay::api::product_ops::ExportProductAuditRequest;
+use aria_underlay::authz::AdminAction;
 use aria_underlay::api::product_identity::{
     BearerTokenProductSessionExtractor, ProductAuthenticatedPrincipal,
     StaticProductIdentityVerifier,
@@ -135,6 +137,35 @@ fn product_http_accepts_bearer_session_without_mock_role_headers() {
     assert_eq!(body.trace_id, "trace-http-bearer");
     assert_eq!(body.operator_id, "viewer-a");
     assert_eq!(body.body.overview.matched_records, 1);
+}
+
+#[test]
+fn product_http_rejects_bearer_session_without_required_action() {
+    let router = product_http_router(StaticProductIdentityVerifier::new().with_token(
+        "viewer-token",
+        ProductAuthenticatedPrincipal::new("viewer-a")
+            .with_allowed_actions([AdminAction::ListOperationSummaries]),
+    ));
+    let mut headers = request_headers("req-http-rbac-denied", Some("trace-http-rbac-denied"));
+    headers.insert("authorization".into(), "Bearer viewer-token".into());
+
+    let response = router.handle(ProductHttpRequest {
+        method: ProductHttpMethod::Post,
+        path: PRODUCT_AUDIT_EXPORT_PATH.into(),
+        headers,
+        body: json_body(&ExportProductAuditRequest {
+            reason: "viewer should not export audit".into(),
+            action: None,
+            result: None,
+            operator_id: None,
+            limit: None,
+        }),
+    });
+
+    assert_eq!(response.status, 403);
+    let body: ProductHttpErrorResponse = response_json(&response.body);
+    assert_eq!(body.request_id.as_deref(), Some("req-http-rbac-denied"));
+    assert_eq!(body.error_code, "authorization_denied");
 }
 
 fn bearer_extractor(

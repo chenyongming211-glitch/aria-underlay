@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::product_api::{
     ProductApiRequestMetadata, ProductSession, ProductSessionExtractor,
 };
+use crate::authz::AdminAction;
 use crate::{UnderlayError, UnderlayResult};
 
 const AUTHORIZATION_HEADER: &str = "authorization";
@@ -14,6 +15,7 @@ const AUTHORIZATION_HEADER: &str = "authorization";
 #[serde(deny_unknown_fields)]
 pub struct ProductAuthenticatedPrincipal {
     pub operator_id: String,
+    pub allowed_actions: std::collections::BTreeSet<AdminAction>,
 }
 
 pub trait ProductIdentityVerifier: std::fmt::Debug + Send + Sync {
@@ -34,11 +36,26 @@ impl ProductAuthenticatedPrincipal {
     pub fn new(operator_id: impl Into<String>) -> Self {
         Self {
             operator_id: operator_id.into(),
+            allowed_actions: AdminAction::all_actions(),
         }
     }
 
-    fn validate(&self) -> UnderlayResult<()> {
-        validate_non_empty("product authenticated principal operator_id", &self.operator_id)
+    pub fn with_allowed_actions<I>(mut self, actions: I) -> Self
+    where
+        I: IntoIterator<Item = AdminAction>,
+    {
+        self.allowed_actions = actions.into_iter().collect();
+        self
+    }
+
+    pub(crate) fn validate(&self) -> UnderlayResult<()> {
+        validate_non_empty("product authenticated principal operator_id", &self.operator_id)?;
+        if self.allowed_actions.is_empty() {
+            return Err(UnderlayError::InvalidIntent(
+                "product authenticated principal allowed_actions must not be empty".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -87,6 +104,7 @@ impl ProductSessionExtractor for BearerTokenProductSessionExtractor {
             .verify_bearer_token(&token)?;
         Ok(ProductSession {
             operator_id: principal.operator_id,
+            allowed_actions: principal.allowed_actions,
         })
     }
 }

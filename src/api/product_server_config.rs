@@ -48,6 +48,10 @@ impl ProductApiServerConfig {
                 "product API must bind to a loopback address".into(),
             ));
         }
+        for (token, principal) in &self.static_tokens {
+            validate_non_empty("product API static token", token)?;
+            principal.validate()?;
+        }
         Ok(())
     }
 
@@ -85,6 +89,15 @@ fn validate_non_empty_path(field: &str, path: &Path) -> UnderlayResult<()> {
     if path.as_os_str().is_empty() {
         return Err(UnderlayError::InvalidIntent(format!(
             "product API {field} must not be empty"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_non_empty(field: &str, value: &str) -> UnderlayResult<()> {
+    if value.trim().is_empty() {
+        return Err(UnderlayError::InvalidIntent(format!(
+            "{field} must not be empty"
         )));
     }
     Ok(())
