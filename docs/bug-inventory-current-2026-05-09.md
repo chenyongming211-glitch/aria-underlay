@@ -28,6 +28,7 @@
 | --- | --- | --- | --- |
 | Product API action-level RBAC | Static bearer-token principal 已要求声明 `allowed_actions`；bearer session 会携带 action set；`ProductOpsApi` 不再对 bearer session 使用 `PermitAllAuthorizationPolicy`，而是用 request-scoped `StaticAuthorizationPolicy` 按 action 授权。 | `src/api/product_identity.rs`, `src/api/product_api.rs`, `src/authz.rs`, `docs/examples/product-api.*.json` | 已通过 GitHub Actions；新增拒绝越权 audit export 的测试和 config allowed_actions 测试。 |
 | Candidate datastore prepare/commit 外部 TOCTOU | Python NETCONF prepare 会在 candidate lock 内读取 candidate config 并生成 checksum；Rust coordinator 从 prepare outcome 保存该 checksum 并传入 commit；commit 重新 lock candidate、读取当前 candidate checksum，比对不一致时返回 `NETCONF_CANDIDATE_CHANGED`，不会执行 commit。 | `proto/aria_underlay_adapter.proto`, `adapter-python/aria_underlay_adapter/backends/netconf.py`, `adapter-python/aria_underlay_adapter/drivers/netconf_backed.py`, `src/adapter_client/client.rs`, `src/api/apply_coordinator.rs` | 已通过 GitHub Actions；Python adapter 本地 290 passed；新增 TOCTOU 拒绝测试和 Rust coordinator checksum 传递测试。 |
+| Confirmed-commit timeout watcher | `AriaUnderlayService::recover_timed_out_confirmed_commits` 会扫描超时 confirmed-commit journal，拿 endpoint lock 后按最新 journal 再确认仍超时，再走现有 final-confirm/verify/recover 恢复路径；`ConfirmedCommitTimeoutWatcher` 已接入 worker runtime。 | `src/api/recovery_coordinator.rs`, `src/api/service.rs`, `src/worker/confirmed_commit.rs`, `src/worker/runtime.rs`, `tests/recovery_tests.rs`, `tests/worker_runtime_tests.rs` | 已通过 GitHub Actions run `25604327766`；新增 stale-only recovery 测试和 runtime watcher 调度测试。 |
 
 ## Confirmed-open
 
@@ -36,7 +37,6 @@
 | 优先级 | 项目 | 当前确认 | 主要证据 | 建议 |
 | --- | --- | --- | --- | --- |
 | P0/条件阻塞 | Python Adapter gRPC 无 TLS/mTLS | server 只调用 `add_insecure_port(config.listen)`，配置也没有证书/client-auth 字段。 | `adapter-python/aria_underlay_adapter/server.py:163-169`, `adapter-python/aria_underlay_adapter/config.py:7-31` | 若 Core/Adapter 跨主机或网络不可信，先修；loopback/sidecar 部署可后置。 |
-| P1 | Confirmed-commit timeout watcher 缺失 | 已有 `with_confirmed_commit_timeout_secs` 和 commit 参数传递，但无后台 watcher 主动处理超时 journal。 | `src/api/service.rs:226-228`, `src/api/apply_coordinator.rs:550-556` | 增加后台监控或明确只依赖 recovery/manual ops。 |
 | P1 | Worker panic/join error 仍终止 runtime | 普通 worker 返回错误已隔离，但 `JoinError` 会 shutdown 其他 worker 并返回 runtime error。 | `src/worker/runtime.rs:174-200` | 后续修成 panic 隔离和事件/报告记录。 |
 | P1 | Journal GC 目录级/删除级失败仍全局失败 | 单个坏 journal 文件已跳过；`read_dir`、`remove_file`、artifact dir 遍历/删除错误仍直接返回 Err。 | `src/worker/gc.rs:210-264`, `src/worker/gc.rs:267-356` | 继续把目录/删除错误降级为报告字段，避免停止 runtime。 |
 | P1 | Drift audit expected-store listing 失败仍全局失败 | 单设备 observed 失败已记录并继续；`expected_store.list()?` 失败仍中止整个审计。 | `src/worker/drift_auditor.rs:115-140` | 文件/存储层 listing 故障需要单独报告和事件化。 |
@@ -73,7 +73,7 @@
 | `DISCARD_PREPARED_CHANGES` 丢原始策略 | 已修复 | recovery rollback 保留 `strategy`，confirmed-commit 走对应 rollback strategy。 |
 | `prepare_candidate` unlock 掩盖原始错误/dirty candidate | 已修复 | `adapter-python/aria_underlay_adapter/backends/netconf.py:248-273` 保存原始错误，unlock 失败附加诊断，必要时 best-effort discard。 |
 | `NetconfBackedDriver` 非 `AdapterError` 异常逃逸 | 已修复 | driver 多个 RPC 分支已 `except Exception as exc` 并映射 `_unexpected_error`。 |
-| confirmed-commit timeout 写死为 120 秒 | 部分已修 | 已有 service 配置入口和 commit 参数传递；timeout watcher 仍 open。 |
+| confirmed-commit timeout 写死为 120 秒 | 已修复 | 已有 service 配置入口和 commit 参数传递；timeout watcher 现在可扫描超时 confirmed-commit journal 并复用 recovery 路径。 |
 | rollback cleanup 覆盖 primary error | 已修复 | rollback 失败会作为 secondary diagnostic 附加，primary error 保留。 |
 | 顶层缺 `PartialSuccess` | 已修复 | `src/api/apply.rs:62-69` 聚合 mixed outcome 为 `ApplyStatus::PartialSuccess`。 |
 | Worker 普通错误终止全部 worker | 已修复 | worker 返回 Err 会记录到 `worker_errors`，不再直接停止 runtime；panic/join 仍 open。 |
@@ -86,8 +86,7 @@
 默认先做最小可验证切片，不一次性铺开所有 open 项：
 
 1. 若 Core/Adapter 有跨主机部署：先修 adapter gRPC TLS/mTLS 或写入强制 sidecar/tunnel 配置边界。
-2. 然后修 confirmed-commit timeout watcher。
-3. 再集中修 worker panic/join、GC 目录级失败、drift expected listing 失败。
-4. 最后按真实厂商反馈收窄 persist-id 字符串 fallback，并补 NETCONF force unlock。
+2. 然后集中修 worker panic/join、GC 目录级失败、drift expected listing 失败。
+3. 最后按真实厂商反馈收窄 persist-id 字符串 fallback，并补 NETCONF force unlock。
 
 当前不建议先做 active-active、跨设备全局事务、AutoReconcile 或非 H3C vendor 扩展。
