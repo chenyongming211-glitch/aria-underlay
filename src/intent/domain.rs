@@ -19,6 +19,12 @@ pub struct UnderlayDomainIntent {
     pub acls: Vec<AclIntent>,
     #[serde(default)]
     pub acl_bindings: Vec<AclBindingIntent>,
+    #[serde(default)]
+    pub delete_vlan_ids: Vec<u16>,
+    #[serde(default)]
+    pub delete_acl_ids: Vec<u16>,
+    #[serde(default)]
+    pub delete_acl_bindings: Vec<AclBindingIntent>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -187,6 +187,9 @@ message DesiredDeviceState {
   repeated InterfaceConfig interfaces = 3;
   repeated AclConfig acls = 4;
   repeated AclBinding acl_bindings = 5;
+  repeated uint32 delete_vlan_ids = 6;
+  repeated uint32 delete_acl_ids = 7;
+  repeated AclBinding delete_acl_bindings = 8;
 }
 
 message ObservedDeviceState {

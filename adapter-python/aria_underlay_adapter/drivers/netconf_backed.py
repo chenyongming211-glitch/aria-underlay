@@ -536,6 +536,9 @@ def _desired_state_is_empty(desired_state) -> bool:
             and not list(getattr(desired_state, "interfaces", []))
             and not list(getattr(desired_state, "acls", []))
             and not list(getattr(desired_state, "acl_bindings", []))
+            and not list(getattr(desired_state, "delete_vlan_ids", []))
+            and not list(getattr(desired_state, "delete_acl_ids", []))
+            and not list(getattr(desired_state, "delete_acl_bindings", []))
         )
     )
 

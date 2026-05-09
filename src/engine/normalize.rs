@@ -124,6 +124,15 @@ pub fn normalize_desired_state(mut state: DeviceDesiredState) -> DeviceDesiredSt
         })
         .collect::<BTreeMap<_, _>>();
 
+    state.delete_acl_bindings = state
+        .delete_acl_bindings
+        .into_values()
+        .map(|binding| {
+            let binding = binding.normalize();
+            (binding.key(), binding)
+        })
+        .collect::<BTreeMap<_, _>>();
+
     state
 }
 

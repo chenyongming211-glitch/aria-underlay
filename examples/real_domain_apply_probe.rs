@@ -107,6 +107,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             interfaces,
             acls,
             acl_bindings,
+            delete_vlan_ids: vec![],
+            delete_acl_ids: vec![],
+            delete_acl_bindings: vec![],
         },
         options: ApplyOptions {
             dry_run: false,

@@ -51,9 +51,17 @@ class H3cRenderer:
             self.render_vlan_create(vlan)
             for vlan in getattr(desired_state, "vlans", [])
         ]
+        vlan_delete_nodes = [
+            self.render_vlan_delete(vlan_id)
+            for vlan_id in getattr(desired_state, "delete_vlan_ids", [])
+        ]
         acl_nodes = [
             self.render_acl_group(acl)
             for acl in getattr(desired_state, "acls", [])
+        ]
+        acl_delete_nodes = [
+            self.render_acl_delete(acl_id)
+            for acl_id in getattr(desired_state, "delete_acl_ids", [])
         ]
         acl_rule_nodes = [
             rule_node
@@ -63,6 +71,10 @@ class H3cRenderer:
         acl_binding_nodes = [
             self.render_acl_binding(binding)
             for binding in getattr(desired_state, "acl_bindings", [])
+        ]
+        acl_binding_delete_nodes = [
+            self.render_acl_binding_delete(binding)
+            for binding in getattr(desired_state, "delete_acl_bindings", [])
         ]
         ifmgr_nodes = []
         access_nodes = []
@@ -95,9 +107,13 @@ class H3cRenderer:
             )
 
         vlan_children = []
-        if vlan_nodes:
+        if vlan_nodes or vlan_delete_nodes:
             vlan_children.append(
-                XmlElement("VLANs", namespace=self.VLAN_NAMESPACE, children=vlan_nodes)
+                XmlElement(
+                    "VLANs",
+                    namespace=self.VLAN_NAMESPACE,
+                    children=vlan_nodes + vlan_delete_nodes,
+                )
             )
         if access_nodes:
             vlan_children.append(
@@ -124,9 +140,13 @@ class H3cRenderer:
                 )
             )
         acl_children = []
-        if acl_nodes:
+        if acl_nodes or acl_delete_nodes:
             acl_children.append(
-                XmlElement("Groups", namespace=self.ACL_NAMESPACE, children=acl_nodes)
+                XmlElement(
+                    "Groups",
+                    namespace=self.ACL_NAMESPACE,
+                    children=acl_nodes + acl_delete_nodes,
+                )
             )
         if acl_rule_nodes:
             acl_children.append(
@@ -136,12 +156,12 @@ class H3cRenderer:
                     children=acl_rule_nodes,
                 )
             )
-        if acl_binding_nodes:
+        if acl_binding_nodes or acl_binding_delete_nodes:
             acl_children.append(
                 XmlElement(
                     "PfilterApply",
                     namespace=self.ACL_NAMESPACE,
-                    children=acl_binding_nodes,
+                    children=acl_binding_nodes + acl_binding_delete_nodes,
                 )
             )
         if acl_children:
@@ -274,6 +294,18 @@ class H3cRenderer:
             )
         return XmlElement("Group", namespace=self.ACL_NAMESPACE, children=children)
 
+    def render_acl_delete(self, acl_id: int) -> XmlElement:
+        acl_id = _validate_acl_id(acl_id, "acl_id")
+        return XmlElement(
+            "Group",
+            namespace=self.ACL_NAMESPACE,
+            attributes={qualified_attr("operation", NETCONF_BASE_NAMESPACE): "delete"},
+            children=[
+                XmlElement("GroupType", namespace=self.ACL_NAMESPACE, children=["1"]),
+                XmlElement("GroupID", namespace=self.ACL_NAMESPACE, children=[str(acl_id)]),
+            ],
+        )
+
     def render_acl_rules(self, acl) -> list[XmlElement]:
         acl_id = _validate_acl_id(_field(acl, "acl_id"), "acl.acl_id")
         rules = []
@@ -332,6 +364,35 @@ class H3cRenderer:
         return XmlElement(
             "Pfilter",
             namespace=self.ACL_NAMESPACE,
+            children=[
+                XmlElement("AppObjType", namespace=self.ACL_NAMESPACE, children=["1"]),
+                XmlElement(
+                    "AppObjIndex",
+                    namespace=self.ACL_NAMESPACE,
+                    children=[str(_interface_ifindex(interface_name))],
+                ),
+                XmlElement(
+                    "AppDirection",
+                    namespace=self.ACL_NAMESPACE,
+                    children=[str(_acl_direction_code(_field(binding, "direction")))],
+                ),
+                XmlElement("AppAclType", namespace=self.ACL_NAMESPACE, children=["1"]),
+                XmlElement(
+                    "AppAclGroup",
+                    namespace=self.ACL_NAMESPACE,
+                    children=[
+                        str(_validate_acl_id(_field(binding, "acl_id"), "acl_binding.acl_id"))
+                    ],
+                ),
+            ],
+        )
+
+    def render_acl_binding_delete(self, binding) -> XmlElement:
+        interface_name = _required_text(binding, "interface_name")
+        return XmlElement(
+            "Pfilter",
+            namespace=self.ACL_NAMESPACE,
+            attributes={qualified_attr("operation", NETCONF_BASE_NAMESPACE): "delete"},
             children=[
                 XmlElement("AppObjType", namespace=self.ACL_NAMESPACE, children=["1"]),
                 XmlElement(

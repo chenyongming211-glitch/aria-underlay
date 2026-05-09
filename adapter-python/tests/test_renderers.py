@@ -34,12 +34,21 @@ class _DesiredState:
     interfaces: list
     acls: list | None = None
     acl_bindings: list | None = None
+    delete_vlan_ids: list | None = None
+    delete_acl_ids: list | None = None
+    delete_acl_bindings: list | None = None
 
     def __post_init__(self):
         if self.acls is None:
             self.acls = []
         if self.acl_bindings is None:
             self.acl_bindings = []
+        if self.delete_vlan_ids is None:
+            self.delete_vlan_ids = []
+        if self.delete_acl_ids is None:
+            self.delete_acl_ids = []
+        if self.delete_acl_bindings is None:
+            self.delete_acl_bindings = []
 
 
 @dataclass
@@ -444,6 +453,45 @@ def test_h3c_renderer_builds_interface_acl_binding_document():
     assert binding.find(f"{{{ns}}}AppObjIndex").text == "13"
     assert binding.find(f"{{{ns}}}AppDirection").text == "1"
     assert binding.find(f"{{{ns}}}AppAclType").text == "1"
+    assert binding.find(f"{{{ns}}}AppAclGroup").text == "3999"
+
+
+def test_h3c_renderer_builds_explicit_delete_document():
+    xml = H3cRenderer().render_edit_config(
+        _DesiredState(
+            vlans=[],
+            interfaces=[],
+            acls=[],
+            acl_bindings=[],
+            delete_vlan_ids=[144],
+            delete_acl_ids=[3999],
+            delete_acl_bindings=[
+                _AclBinding(
+                    interface_name="GigabitEthernet1/0/13",
+                    direction="inbound",
+                    acl_id=3999,
+                )
+            ],
+        )
+    )
+    root = ElementTree.fromstring(xml)
+    ns = H3cRenderer().ACL_NAMESPACE
+    operation_attr = f"{{{NETCONF_BASE_NAMESPACE}}}operation"
+
+    vlan = root.find(f".//{{{ns}}}VLAN/{{{ns}}}VLANs/{{{ns}}}VLANID")
+    assert vlan is not None
+    assert vlan.attrib[operation_attr] == "delete"
+    assert vlan.find(f"{{{ns}}}ID").text == "144"
+
+    group = root.find(f".//{{{ns}}}ACL/{{{ns}}}Groups/{{{ns}}}Group")
+    assert group is not None
+    assert group.attrib[operation_attr] == "delete"
+    assert group.find(f"{{{ns}}}GroupID").text == "3999"
+
+    binding = root.find(f".//{{{ns}}}ACL/{{{ns}}}PfilterApply/{{{ns}}}Pfilter")
+    assert binding is not None
+    assert binding.attrib[operation_attr] == "delete"
+    assert binding.find(f"{{{ns}}}AppObjIndex").text == "13"
     assert binding.find(f"{{{ns}}}AppAclGroup").text == "3999"
 
 

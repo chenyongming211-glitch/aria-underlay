@@ -10,7 +10,8 @@ BGP.
 Batch 1 has two parts:
 
 - Implement ACL rule description closure.
-- Define explicit delete-intent boundaries for a later implementation.
+- Implement explicit delete-intent boundaries for isolated VLAN, ACL, and ACL
+  binding targets.
 
 ## ACL Rule Description
 
@@ -35,15 +36,28 @@ or ACL family expansion.
 Deletes must never be inferred from missing desired state in merge/upsert mode.
 This is the main production safety boundary.
 
-The next delete implementation should add explicit delete requests for isolated
-objects only. Dry-run must list exact delete operations and real-device probes
-must require a separate acknowledgement for delete tests.
+The delete implementation adds explicit delete requests for isolated objects
+only. Dry-run lists exact delete operations when the target exists in the scoped
+read. The normal real-device apply probe still refuses delete plans, so delete
+acceptance must use a dedicated cleanup/delete path.
 
 Initial delete candidates:
 
 - ACL binding delete by interface, direction, and ACL id.
 - ACL delete by id.
 - VLAN delete by id.
+
+Schema:
+
+- `UnderlayDomainIntent.delete_vlan_ids`
+- `UnderlayDomainIntent.delete_acl_ids`
+- `UnderlayDomainIntent.delete_acl_bindings`
+- Matching `DeviceDesiredState` and protobuf fields for adapter handoff.
+
+Mode behavior:
+
+- `MergeUpsert` deletes only explicit targets.
+- `FullReplace` keeps full replacement semantics.
 
 Execution order must protect references:
 
@@ -60,8 +74,8 @@ ACL rule description will be covered by:
 - Existing verify tests through normalized ACL rule comparison.
 - Real-device acceptance documentation and env example updates.
 
-Delete intent is documentation-only in this batch. It gets implementation tests
-when its explicit request schema is added.
+Delete intent is covered by Rust diff/planner/mapper tests, Python H3C renderer
+tests, mock backend merge behavior, and verify absence checks.
 
 ## Safety
 

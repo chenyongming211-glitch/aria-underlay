@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Complete H3C ACL rule description support and document explicit delete-intent boundaries.
+**Goal:** Complete H3C ACL rule description support and implement explicit delete-intent boundaries for isolated VLAN, ACL, and ACL binding targets.
 
-**Architecture:** Keep the Rust/proto ACL model unchanged because `AclRule.description` already exists end-to-end. Extend only the H3C Python renderer/parser and the real-device probe/docs so description can be written, read back, and verified.
+**Architecture:** Keep ACL rule description on the existing `AclRule.description` field. Add explicit delete fields to the domain/device/protobuf contract so merge/upsert never infers deletes from omitted desired objects.
 
 **Tech Stack:** Rust domain/probe code, Python H3C adapter renderer/parser, pytest, GitHub Actions for Rust verification.
 
@@ -52,3 +52,26 @@
 - [x] Read `ARIA_UNDERLAY_ACL_RULE_DESCRIPTION` in `real_domain_apply_probe`.
 - [x] Document the environment variable and readback requirement.
 - [ ] Use GitHub Actions to verify Rust compilation and tests after pushing.
+
+### Task 5: Implement Explicit Delete Intent
+
+**Files:**
+- Modify: `src/intent/domain.rs`
+- Modify: `src/intent/validation.rs`
+- Modify: `src/planner/device_plan.rs`
+- Modify: `src/planner/domain_plan.rs`
+- Modify: `src/engine/diff.rs`
+- Modify: `src/engine/dry_run.rs`
+- Modify: `src/adapter_client/mapper.rs`
+- Modify: `proto/aria_underlay_adapter.proto`
+- Modify: `adapter-python/aria_underlay_adapter/renderers/h3c.py`
+- Modify: `adapter-python/aria_underlay_adapter/backends/netconf_state.py`
+- Modify: `adapter-python/aria_underlay_adapter/backends/mock_netconf.py`
+
+- [x] Add explicit delete fields for VLAN ids, ACL ids, and ACL bindings.
+- [x] Keep merge/upsert from inferring delete from absence.
+- [x] Preserve full-replace delete semantics.
+- [x] Render H3C NETCONF delete XML for supported explicit delete targets.
+- [x] Verify delete targets are absent after scoped readback.
+- [x] Update shadow state from the actual change set so merge/upsert does not drop unrelated managed state.
+- [ ] Run Rust and Python verification after protobuf regeneration.

@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::engine::normalize::{normalize_desired_state, normalize_shadow_state};
-use crate::model::{AclBinding, AclConfig, AclDirection, DeviceId, InterfaceConfig, VlanConfig};
+use crate::model::{
+    acl_binding_key, AclBinding, AclConfig, AclDirection, DeviceId, InterfaceConfig, VlanConfig,
+};
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::state::DeviceShadowState;
 
@@ -44,10 +46,26 @@ pub enum ChangeOp {
     DeleteAclBinding {
         interface_name: String,
         direction: AclDirection,
+        acl_id: u16,
     },
 }
 
 pub fn compute_diff(desired: &DeviceDesiredState, current: &DeviceShadowState) -> ChangeSet {
+    compute_diff_inner(desired, current, true)
+}
+
+pub fn compute_merge_upsert_diff(
+    desired: &DeviceDesiredState,
+    current: &DeviceShadowState,
+) -> ChangeSet {
+    compute_diff_inner(desired, current, false)
+}
+
+fn compute_diff_inner(
+    desired: &DeviceDesiredState,
+    current: &DeviceShadowState,
+    infer_deletes_from_absence: bool,
+) -> ChangeSet {
     let desired = normalize_desired_state(desired.clone());
     let current = normalize_shadow_state(current.clone());
     let mut change_set = ChangeSet::empty(desired.device_id.clone());
@@ -65,12 +83,6 @@ pub fn compute_diff(desired: &DeviceDesiredState, current: &DeviceShadowState) -
         }
     }
 
-    for vlan_id in current.vlans.keys() {
-        if !desired.vlans.contains_key(vlan_id) {
-            change_set.ops.push(ChangeOp::DeleteVlan { vlan_id: *vlan_id });
-        }
-    }
-
     for (name, desired_interface) in &desired.interfaces {
         match current.interfaces.get(name) {
             Some(current_interface) if current_interface == desired_interface => {}
@@ -85,11 +97,27 @@ pub fn compute_diff(desired: &DeviceDesiredState, current: &DeviceShadowState) -
         }
     }
 
-    for name in current.interfaces.keys() {
-        if !desired.interfaces.contains_key(name) {
-            change_set
-                .ops
-                .push(ChangeOp::DeleteInterfaceConfig { name: name.clone() });
+    for vlan_id in &desired.delete_vlan_ids {
+        if current.vlans.contains_key(vlan_id) {
+            change_set.ops.push(ChangeOp::DeleteVlan { vlan_id: *vlan_id });
+        }
+    }
+
+    if infer_deletes_from_absence {
+        for vlan_id in current.vlans.keys() {
+            if !desired.vlans.contains_key(vlan_id) && !desired.delete_vlan_ids.contains(vlan_id) {
+                change_set.ops.push(ChangeOp::DeleteVlan { vlan_id: *vlan_id });
+            }
+        }
+    }
+
+    if infer_deletes_from_absence {
+        for name in current.interfaces.keys() {
+            if !desired.interfaces.contains_key(name) {
+                change_set
+                    .ops
+                    .push(ChangeOp::DeleteInterfaceConfig { name: name.clone() });
+            }
         }
     }
 
@@ -117,18 +145,45 @@ pub fn compute_diff(desired: &DeviceDesiredState, current: &DeviceShadowState) -
         }
     }
 
-    for (key, current_binding) in &current.acl_bindings {
-        if !desired.acl_bindings.contains_key(key) {
+    for (key, delete_binding) in &desired.delete_acl_bindings {
+        if current
+            .acl_bindings
+            .get(key)
+            .is_some_and(|current_binding| current_binding.acl_id == delete_binding.acl_id)
+        {
             change_set.ops.push(ChangeOp::DeleteAclBinding {
-                interface_name: current_binding.interface_name.clone(),
-                direction: current_binding.direction.clone(),
+                interface_name: delete_binding.interface_name.clone(),
+                direction: delete_binding.direction.clone(),
+                acl_id: delete_binding.acl_id,
             });
         }
     }
 
-    for acl_id in current.acls.keys() {
-        if !desired.acls.contains_key(acl_id) {
+    if infer_deletes_from_absence {
+        for (key, current_binding) in &current.acl_bindings {
+            if !desired.acl_bindings.contains_key(key)
+                && !desired.delete_acl_bindings.contains_key(key)
+            {
+                change_set.ops.push(ChangeOp::DeleteAclBinding {
+                    interface_name: current_binding.interface_name.clone(),
+                    direction: current_binding.direction.clone(),
+                    acl_id: current_binding.acl_id,
+                });
+            }
+        }
+    }
+
+    for acl_id in &desired.delete_acl_ids {
+        if current.acls.contains_key(acl_id) {
             change_set.ops.push(ChangeOp::DeleteAcl { acl_id: *acl_id });
+        }
+    }
+
+    if infer_deletes_from_absence {
+        for acl_id in current.acls.keys() {
+            if !desired.acls.contains_key(acl_id) && !desired.delete_acl_ids.contains(acl_id) {
+                change_set.ops.push(ChangeOp::DeleteAcl { acl_id: *acl_id });
+            }
         }
     }
 
@@ -145,5 +200,71 @@ impl ChangeSet {
 
     pub fn is_empty(&self) -> bool {
         self.ops.is_empty()
+    }
+
+    pub fn apply_to_shadow(
+        &self,
+        base: Option<&DeviceShadowState>,
+        desired: &DeviceDesiredState,
+        revision: u64,
+    ) -> DeviceShadowState {
+        let mut state = base.cloned().unwrap_or_else(|| DeviceShadowState {
+            device_id: desired.device_id.clone(),
+            revision,
+            vlans: Default::default(),
+            interfaces: Default::default(),
+            acls: Default::default(),
+            acl_bindings: Default::default(),
+            warnings: Vec::new(),
+        });
+        state.device_id = desired.device_id.clone();
+        state.revision = revision;
+        state.warnings.clear();
+
+        for op in &self.ops {
+            match op {
+                ChangeOp::CreateVlan(vlan) => {
+                    state.vlans.insert(vlan.vlan_id, vlan.clone());
+                }
+                ChangeOp::UpdateVlan { after, .. } => {
+                    state.vlans.insert(after.vlan_id, after.clone());
+                }
+                ChangeOp::DeleteVlan { vlan_id } => {
+                    state.vlans.remove(vlan_id);
+                }
+                ChangeOp::UpdateInterface { after, .. } => {
+                    state.interfaces.insert(after.name.clone(), after.clone());
+                }
+                ChangeOp::DeleteInterfaceConfig { name } => {
+                    state.interfaces.remove(name);
+                }
+                ChangeOp::CreateAcl(acl) => {
+                    state.acls.insert(acl.acl_id, acl.clone());
+                }
+                ChangeOp::UpdateAcl { after, .. } => {
+                    state.acls.insert(after.acl_id, after.clone());
+                }
+                ChangeOp::DeleteAcl { acl_id } => {
+                    state.acls.remove(acl_id);
+                }
+                ChangeOp::CreateAclBinding(binding) => {
+                    state.acl_bindings.insert(binding.key(), binding.clone());
+                }
+                ChangeOp::UpdateAclBinding { after, .. } => {
+                    state.acl_bindings.insert(after.key(), after.clone());
+                }
+                ChangeOp::DeleteAclBinding {
+                    interface_name,
+                    direction,
+                    ..
+                } => {
+                    state
+                        .acl_bindings
+                        .remove(&acl_binding_key(interface_name, direction));
+                }
+            }
+        }
+
+        state
     }
 }

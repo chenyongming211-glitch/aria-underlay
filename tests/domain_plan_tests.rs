@@ -150,6 +150,37 @@ fn acl_binding_intent_is_planned_to_owning_management_endpoint() {
 }
 
 #[test]
+fn explicit_delete_intents_are_planned_to_target_management_endpoint() {
+    let mut intent = domain_intent(
+        UnderlayTopology::MlagDualManagementIp,
+        vec![endpoint("leaf-a-mgmt"), endpoint("leaf-b-mgmt")],
+        vec![
+            member("leaf-a", Some(DeviceRole::LeafA), "leaf-a-mgmt"),
+            member("leaf-b", Some(DeviceRole::LeafB), "leaf-b-mgmt"),
+        ],
+        vec![],
+    );
+    intent.delete_vlan_ids = vec![144];
+    intent.delete_acl_ids = vec![3999];
+    intent.delete_acl_bindings = vec![AclBindingIntent {
+        device_id: DeviceId("leaf-b".into()),
+        interface_name: "GE1/0/13".into(),
+        direction: AclDirection::Inbound,
+        acl_id: 3999,
+    }];
+
+    let states = plan_underlay_domain(&intent).expect("delete domain should plan");
+
+    assert!(states.iter().all(|state| state.delete_vlan_ids.contains(&144)));
+    assert!(states.iter().all(|state| state.delete_acl_ids.contains(&3999)));
+    assert!(states[0].delete_acl_bindings.is_empty());
+    assert_eq!(
+        states[1].delete_acl_bindings["GE1/0/13|inbound"].acl_id,
+        3999
+    );
+}
+
+#[test]
 fn unknown_member_reference_fails_validation() {
     let intent = domain_intent(
         UnderlayTopology::SmallFabric,
@@ -185,6 +216,9 @@ fn domain_intent(
         interfaces,
         acls: vec![],
         acl_bindings: vec![],
+        delete_vlan_ids: vec![],
+        delete_acl_ids: vec![],
+        delete_acl_bindings: vec![],
     }
 }
 

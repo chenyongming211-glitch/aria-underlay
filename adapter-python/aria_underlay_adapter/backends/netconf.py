@@ -198,7 +198,7 @@ class NcclientNetconfBackend:
         if _desired_state_is_empty(desired_state):
             return CandidateDryRunResult(
                 changed=False,
-                warnings=["desired state contains no VLAN or interface changes"],
+                warnings=["desired state contains no supported config changes"],
             )
 
         config_xml = self._render_candidate_config(desired_state)

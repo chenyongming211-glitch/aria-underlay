@@ -21,7 +21,7 @@ The following are intentionally out of scope for the current production surface:
 
 - Admin up/down.
 - Trunk native VLAN.
-- Implicit delete by omitting objects from desired state.
+- Implicit delete by omitting objects from desired state in merge/upsert mode.
 - PBR, QoS traffic-classifier/policy, NQA, and BGP configuration.
 - IPv6 ACL, basic ACL, and named ACL.
 - Cross-device ACID semantics.
@@ -45,7 +45,7 @@ Safety:
 - Do not bind the ACL unless the ACL binding case is explicitly being tested.
 - Cleanup deletes only the isolated test ACL after readback.
 
-### Explicit Delete Intent Design
+### Explicit Delete Intent Implementation
 
 Goal: allow production deletes without treating every absent object as a delete.
 
@@ -53,8 +53,8 @@ Required boundary:
 
 - Delete must be explicit in the product/domain request.
 - Dry-run must show the exact target and operation before write.
-- Real-device probe must reject deletes unless a dedicated delete acknowledgement
-  is present.
+- The real-device probe continues to reject delete plans; delete acceptance uses
+  a dedicated cleanup or delete test path.
 - Delete execution order must protect references: unbind before deleting an ACL,
   detach policy references before deleting policies or ACLs, and restore ports
   before deleting test VLANs.
@@ -65,9 +65,21 @@ First supported delete candidates:
 - Delete ACL binding by interface/direction/ACL id.
 - Delete isolated test VLAN by id.
 
+Implemented boundary:
+
+- `UnderlayDomainIntent` carries explicit `delete_vlan_ids`, `delete_acl_ids`,
+  and `delete_acl_bindings`.
+- `DeviceDesiredState` carries the same explicit delete targets through
+  dry-run, journal, recovery, adapter protobuf, renderer, and verify paths.
+- `MergeUpsert` computes deletes only from these explicit fields. Objects that
+  are merely absent from desired state are left untouched.
+- `FullReplace` keeps its existing replacement semantics and may still infer
+  deletes from the full observed state.
+
 Not in Batch 1 implementation:
 
 - Delete PBR, QoS, NQA, or BGP objects.
+- Interface config delete.
 - Infer delete from missing desired state in merge/upsert mode.
 
 ## Batch 2: ACL Family Expansion

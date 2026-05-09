@@ -112,11 +112,22 @@ pub fn validate_underlay_domain_intent(intent: &UnderlayDomainIntent) -> Underla
         intent.vlans.iter().map(|vlan| vlan.vlan_id),
         "underlay domain",
     )?;
+    validate_vlans(
+        intent.delete_vlan_ids.iter().copied(),
+        "underlay domain delete",
+    )?;
     let declared_vlans = intent
         .vlans
         .iter()
         .map(|vlan| vlan.vlan_id)
         .collect::<BTreeSet<_>>();
+    for vlan_id in &intent.delete_vlan_ids {
+        if declared_vlans.contains(vlan_id) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "underlay domain cannot upsert and delete VLAN {vlan_id} in the same request"
+            )));
+        }
+    }
     validate_interfaces(
         intent
             .interfaces
@@ -136,15 +147,32 @@ pub fn validate_underlay_domain_intent(intent: &UnderlayDomainIntent) -> Underla
         }),
         "underlay domain",
     )?;
+    validate_acl_ids(
+        intent.delete_acl_ids.iter().copied(),
+        "underlay domain delete",
+    )?;
     let declared_acls = intent
         .acls
         .iter()
         .map(|acl| acl.acl_id)
         .collect::<BTreeSet<_>>();
+    for acl_id in &intent.delete_acl_ids {
+        if declared_acls.contains(acl_id) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "underlay domain cannot upsert and delete ACL {acl_id} in the same request"
+            )));
+        }
+    }
     validate_acl_bindings(
         &intent.acl_bindings,
         &member_ids,
         &declared_acls,
+        "underlay domain",
+    )?;
+    validate_acl_binding_deletes(
+        &intent.delete_acl_bindings,
+        &intent.acl_bindings,
+        &member_ids,
         "underlay domain",
     )?;
 
@@ -290,6 +318,26 @@ where
     Ok(())
 }
 
+fn validate_acl_ids<I>(acl_ids: I, context: &str) -> UnderlayResult<()>
+where
+    I: IntoIterator<Item = u16>,
+{
+    let mut seen = BTreeSet::new();
+    for acl_id in acl_ids {
+        if !(3000..=3999).contains(&acl_id) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} has invalid IPv4 advanced acl_id {acl_id}; valid range is 3000..=3999"
+            )));
+        }
+        if !seen.insert(acl_id) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} has duplicate acl_id {acl_id}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_acl_endpoint(
     context: &str,
     acl_id: u16,
@@ -340,6 +388,56 @@ fn validate_acl_bindings(
         if !seen.insert(key) {
             return Err(UnderlayError::InvalidIntent(format!(
                 "{context} has duplicate ACL binding on {} direction {:?}",
+                binding.interface_name, binding.direction
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_acl_binding_deletes(
+    deletes: &[AclBindingIntent],
+    upserts: &[AclBindingIntent],
+    valid_device_ids: &BTreeSet<DeviceId>,
+    context: &str,
+) -> UnderlayResult<()> {
+    let mut upsert_keys = BTreeSet::new();
+    for binding in upserts {
+        upsert_keys.insert((
+            binding.device_id.clone(),
+            acl_binding_key(&binding.interface_name, &binding.direction),
+        ));
+    }
+
+    let mut seen = BTreeSet::new();
+    for binding in deletes {
+        validate_non_empty("ACL binding delete interface_name", &binding.interface_name)?;
+        if !valid_device_ids.contains(&binding.device_id) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} ACL binding delete for interface {} references unknown switch member {}",
+                binding.interface_name, binding.device_id.0
+            )));
+        }
+        if !(3000..=3999).contains(&binding.acl_id) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} ACL binding delete on {} has invalid IPv4 advanced acl_id {}; valid range is 3000..=3999",
+                binding.interface_name, binding.acl_id
+            )));
+        }
+
+        let key = (
+            binding.device_id.clone(),
+            acl_binding_key(&binding.interface_name, &binding.direction),
+        );
+        if upsert_keys.contains(&key) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} cannot upsert and delete ACL binding on {} direction {:?} in the same request",
+                binding.interface_name, binding.direction
+            )));
+        }
+        if !seen.insert(key) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} has duplicate ACL binding delete on {} direction {:?}",
                 binding.interface_name, binding.direction
             )));
         }

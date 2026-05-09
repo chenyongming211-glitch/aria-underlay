@@ -70,7 +70,7 @@ impl ApplyCoordinator {
         let current_states = self
             .fetch_current_states(desired_states, reconcile_mode)
             .await?;
-        build_dry_run_plan(desired_states, &current_states)
+        build_dry_run_plan(desired_states, &current_states, reconcile_mode)
     }
 
     pub(crate) async fn apply_desired_states(
@@ -278,6 +278,7 @@ impl ApplyCoordinator {
         {
             Ok(strategy) => self.finish_successful_apply(
                 desired,
+                &plan,
                 tx_context,
                 journal_record,
                 strategy,
@@ -289,6 +290,7 @@ impl ApplyCoordinator {
     fn finish_successful_apply(
         &self,
         desired: &DeviceDesiredState,
+        plan: &DryRunPlan,
         tx_context: TxContext,
         mut journal_record: TxJournalRecord,
         strategy: TransactionStrategy,
@@ -313,7 +315,69 @@ impl ApplyCoordinator {
                 warnings,
             };
         }
-        let shadow_state = DeviceShadowState::from_desired(desired, 0);
+        let Some(change_set) = plan
+            .change_sets
+            .iter()
+            .find(|change_set| change_set.device_id == desired.device_id)
+        else {
+            let code = "MISSING_CHANGE_SET".to_string();
+            let error_message = format!(
+                "missing change set after successful apply for device {}",
+                desired.device_id.0
+            );
+            journal_record = journal_record
+                .with_phase(TxPhase::InDoubt)
+                .with_error(code.clone(), error_message.clone());
+            let _ = self.journal.put(&journal_record);
+            return DeviceApplyResult {
+                device_id: desired.device_id.clone(),
+                changed: true,
+                status: ApplyStatus::InDoubt,
+                tx_id: Some(tx_context.tx_id),
+                strategy: Some(strategy),
+                error_code: Some(code),
+                error_message: Some(error_message),
+                warnings,
+            };
+        };
+        let existing_shadow = match self.shadow_store.get(&desired.device_id) {
+            Ok(shadow) => shadow,
+            Err(err) => {
+                let (code, message) = journal_error_fields(&err);
+                let error_message =
+                    format!("shadow state unavailable after successful apply: {message}");
+                journal_record = journal_record
+                    .with_phase(TxPhase::InDoubt)
+                    .with_error(code.clone(), error_message.clone());
+                if let Err(journal_err) = self.journal.put(&journal_record) {
+                    let (_, journal_msg) = journal_error_fields(&journal_err);
+                    return DeviceApplyResult {
+                        device_id: desired.device_id.clone(),
+                        changed: true,
+                        status: ApplyStatus::InDoubt,
+                        tx_id: Some(tx_context.tx_id),
+                        strategy: Some(strategy),
+                        error_code: Some(code),
+                        error_message: Some(format!(
+                            "{error_message}; journal write also failed: {journal_msg}"
+                        )),
+                        warnings,
+                    };
+                }
+                warnings.push(format!("shadow state read failed: {message}"));
+                return DeviceApplyResult {
+                    device_id: desired.device_id.clone(),
+                    changed: true,
+                    status: ApplyStatus::InDoubt,
+                    tx_id: Some(tx_context.tx_id),
+                    strategy: Some(strategy),
+                    error_code: Some(code),
+                    error_message: Some(error_message),
+                    warnings,
+                };
+            }
+        };
+        let shadow_state = change_set.apply_to_shadow(existing_shadow.as_ref(), desired, 0);
         if let Err(err) = self.shadow_store.put(shadow_state) {
             let (code, message) = journal_error_fields(&err);
             let error_message = format!("shadow state stale after successful apply: {message}");
