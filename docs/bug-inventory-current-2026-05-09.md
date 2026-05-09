@@ -9,8 +9,10 @@
 
 - 代码：`codex/product-api-rbac`
 - 本地验证：`python3 -m pytest -q adapter-python/tests` -> `290 passed`
-- 本地限制：当前机器 `cargo` 不在 `PATH`，Rust 结论来自源码核实；Rust CI 仍以
-  GitHub Actions 为准。
+- GitHub Actions：当前分支 CI 已通过 Python Adapter、Rust `cargo check` /
+  `cargo test`、real-device apply probe build 和 fake-adapter integration matrix。
+- 本地限制：当前机器 `cargo` 不在 `PATH`，Rust 编译/测试以 GitHub Actions
+  结果为准。
 
 ## 当前部署边界
 
@@ -20,12 +22,12 @@
 - Python Adapter 默认 loopback 部署；跨主机时必须有外部安全边界或后续 TLS/mTLS。
 - 多设备 apply 是多个 endpoint transaction 的编排，不提供全局 all-or-nothing。
 
-## Fixed in current branch, pending GitHub CI
+## Fixed in current branch, CI verified
 
 | 项目 | 当前确认 | 主要证据 | 验证状态 |
 | --- | --- | --- | --- |
-| Product API action-level RBAC | Static bearer-token principal 已要求声明 `allowed_actions`；bearer session 会携带 action set；`ProductOpsApi` 不再对 bearer session 使用 `PermitAllAuthorizationPolicy`，而是用 request-scoped `StaticAuthorizationPolicy` 按 action 授权。 | `src/api/product_identity.rs`, `src/api/product_api.rs`, `src/authz.rs`, `docs/examples/product-api.*.json` | 本机无 `cargo`，需要 GitHub Actions 跑 Rust compile/test；已新增拒绝越权 audit export 的测试和 config allowed_actions 测试。 |
-| Candidate datastore prepare/commit 外部 TOCTOU | Python NETCONF prepare 会在 candidate lock 内读取 candidate config 并生成 checksum；Rust coordinator 从 prepare outcome 保存该 checksum 并传入 commit；commit 重新 lock candidate、读取当前 candidate checksum，比对不一致时返回 `NETCONF_CANDIDATE_CHANGED`，不会执行 commit。 | `proto/aria_underlay_adapter.proto`, `adapter-python/aria_underlay_adapter/backends/netconf.py`, `adapter-python/aria_underlay_adapter/drivers/netconf_backed.py`, `src/adapter_client/client.rs`, `src/api/apply_coordinator.rs` | Python adapter 本地 290 passed；新增 TOCTOU 拒绝测试和 Rust coordinator checksum 传递测试。Rust compile/test 需 GitHub Actions。 |
+| Product API action-level RBAC | Static bearer-token principal 已要求声明 `allowed_actions`；bearer session 会携带 action set；`ProductOpsApi` 不再对 bearer session 使用 `PermitAllAuthorizationPolicy`，而是用 request-scoped `StaticAuthorizationPolicy` 按 action 授权。 | `src/api/product_identity.rs`, `src/api/product_api.rs`, `src/authz.rs`, `docs/examples/product-api.*.json` | 已通过 GitHub Actions；新增拒绝越权 audit export 的测试和 config allowed_actions 测试。 |
+| Candidate datastore prepare/commit 外部 TOCTOU | Python NETCONF prepare 会在 candidate lock 内读取 candidate config 并生成 checksum；Rust coordinator 从 prepare outcome 保存该 checksum 并传入 commit；commit 重新 lock candidate、读取当前 candidate checksum，比对不一致时返回 `NETCONF_CANDIDATE_CHANGED`，不会执行 commit。 | `proto/aria_underlay_adapter.proto`, `adapter-python/aria_underlay_adapter/backends/netconf.py`, `adapter-python/aria_underlay_adapter/drivers/netconf_backed.py`, `src/adapter_client/client.rs`, `src/api/apply_coordinator.rs` | 已通过 GitHub Actions；Python adapter 本地 290 passed；新增 TOCTOU 拒绝测试和 Rust coordinator checksum 传递测试。 |
 
 ## Confirmed-open
 
