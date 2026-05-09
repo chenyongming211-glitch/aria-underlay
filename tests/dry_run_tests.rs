@@ -69,6 +69,7 @@ fn desired_state(device_id: &str, vlans: Vec<VlanConfig>) -> DeviceDesiredState 
             },
         )]),
         acls: BTreeMap::new(),
+        acl_bindings: BTreeMap::new(),
     }
 }
 
@@ -87,6 +88,7 @@ fn shadow_state(device_id: &str, vlans: Vec<VlanConfig>) -> DeviceShadowState {
             },
         )]),
         acls: BTreeMap::new(),
+        acl_bindings: BTreeMap::new(),
         warnings: vec![],
     }
 }

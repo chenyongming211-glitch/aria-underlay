@@ -896,6 +896,7 @@ fn domain_intent(vlan_id: u16) -> UnderlayDomainIntent {
             mode: PortMode::Access { vlan_id },
         }],
         acls: vec![],
+        acl_bindings: vec![],
     }
 }
 
@@ -955,6 +956,7 @@ fn multi_endpoint_domain_intent(vlan_id: u16) -> UnderlayDomainIntent {
             },
         ],
         acls: vec![],
+        acl_bindings: vec![],
     }
 }
 

@@ -266,6 +266,7 @@ class MockNetconfBackend:
         _verify_vlans(desired_state, observed, scope)
         _verify_interfaces(desired_state, observed, scope)
         _verify_acls(desired_state, observed, scope)
+        _verify_acl_bindings(desired_state, observed, scope)
 
 
 def _filter_state_by_scope(state: dict, scope=None) -> dict:
@@ -291,6 +292,12 @@ def _filter_state_by_scope(state: dict, scope=None) -> dict:
             acl
             for acl in state["acls"]
             if acl["acl_id"] in acl_ids
+        ],
+        "acl_bindings": [
+            binding
+            for binding in state.get("acl_bindings", [])
+            if binding["interface_name"] in interface_names
+            or binding["acl_id"] in acl_ids
         ],
     }
 
@@ -318,6 +325,7 @@ def _default_running_state() -> dict:
             }
         ],
         "acls": [],
+        "acl_bindings": [],
     }
 
 
@@ -344,6 +352,7 @@ def _clone_state(state: dict) -> dict:
             }
             for acl in state.get("acls", [])
         ],
+        "acl_bindings": [dict(binding) for binding in state.get("acl_bindings", [])],
     }
 
 
@@ -394,6 +403,17 @@ def _merge_desired_state(running: dict, desired_state) -> dict:
         acls_by_id[acl_id]
         for acl_id in sorted(acls_by_id)
     ]
+    bindings_by_key = {
+        _acl_binding_key(binding["interface_name"], binding["direction"]): binding
+        for binding in merged.get("acl_bindings", [])
+    }
+    for desired_binding in getattr(desired_state, "acl_bindings", []):
+        binding = _acl_binding_to_dict(desired_binding)
+        bindings_by_key[_acl_binding_key(binding["interface_name"], binding["direction"])] = binding
+    merged["acl_bindings"] = [
+        bindings_by_key[key]
+        for key in sorted(bindings_by_key)
+    ]
     return merged
 
 
@@ -402,6 +422,7 @@ def _desired_state_is_empty(desired_state) -> bool:
         not list(getattr(desired_state, "vlans", []))
         and not list(getattr(desired_state, "interfaces", []))
         and not list(getattr(desired_state, "acls", []))
+        and not list(getattr(desired_state, "acl_bindings", []))
     )
 
 
@@ -503,6 +524,32 @@ def _verify_acls(desired_state, observed: dict, scope=None) -> None:
             raise _verify_mismatch(f"ACL {acl_id} rules mismatch")
 
 
+def _verify_acl_bindings(desired_state, observed: dict, scope=None) -> None:
+    observed_by_key = {
+        _acl_binding_key(binding["interface_name"], binding["direction"]): binding
+        for binding in observed.get("acl_bindings", [])
+    }
+    for desired_binding in _desired_acl_bindings_in_scope(desired_state, scope):
+        expected = _acl_binding_to_dict(desired_binding)
+        observed_binding = observed_by_key.get(
+            _acl_binding_key(expected["interface_name"], expected["direction"])
+        )
+        if observed_binding is None:
+            raise _verify_mismatch(
+                "ACL binding {} {} missing from observed scoped state".format(
+                    expected["interface_name"],
+                    expected["direction"],
+                )
+            )
+        if observed_binding.get("acl_id") != expected["acl_id"]:
+            raise _verify_mismatch(
+                "ACL binding {} {} mismatch".format(
+                    expected["interface_name"],
+                    expected["direction"],
+                )
+            )
+
+
 def _desired_vlans_in_scope(desired_state, scope=None):
     if scope is not None and not getattr(scope, "full", False) and not getattr(scope, "vlan_ids", []):
         return
@@ -562,6 +609,26 @@ def _scoped_acl_ids(scope=None, observed=None):
             return []
         return {acl["acl_id"] for acl in observed["acls"]}
     return set(getattr(scope, "acl_ids", []))
+
+
+def _desired_acl_bindings_in_scope(desired_state, scope=None):
+    if (
+        scope is not None
+        and not getattr(scope, "full", False)
+        and not getattr(scope, "interface_names", [])
+        and not getattr(scope, "acl_ids", [])
+    ):
+        return
+    interface_names = set(getattr(scope, "interface_names", [])) if scope is not None else set()
+    acl_ids = set(getattr(scope, "acl_ids", [])) if scope is not None else set()
+    for binding in getattr(desired_state, "acl_bindings", []):
+        if (
+            getattr(scope, "full", False)
+            or scope is None
+            or _field(binding, "interface_name") in interface_names
+            or _field(binding, "acl_id") in acl_ids
+        ):
+            yield binding
 
 
 def _field(message, name):
@@ -638,6 +705,24 @@ def _acl_endpoint_to_dict(endpoint) -> dict | None:
         "address": _field(endpoint, "address"),
         "wildcard": _field(endpoint, "wildcard"),
     }
+
+
+def _acl_binding_to_dict(binding) -> dict:
+    return {
+        "interface_name": _field(binding, "interface_name"),
+        "direction": _acl_direction_text(_field(binding, "direction")),
+        "acl_id": _field(binding, "acl_id"),
+    }
+
+
+def _acl_direction_text(value) -> str:
+    if isinstance(value, str):
+        return value.strip().lower()
+    return "inbound" if int(value or 0) == 1 else "outbound"
+
+
+def _acl_binding_key(interface_name: str, direction: str) -> tuple[str, str]:
+    return (interface_name, direction)
 
 
 def _normalize_mode(mode) -> dict:

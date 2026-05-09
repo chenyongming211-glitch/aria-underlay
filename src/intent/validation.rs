@@ -1,8 +1,12 @@
 use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 
-use crate::intent::{SwitchPairIntent, UnderlayDomainIntent, UnderlayTopology};
-use crate::model::{is_canonical_identifier, AclConfig, AclProtocol, DeviceId, PortMode};
+use crate::intent::{
+    acl::AclBindingIntent, SwitchPairIntent, UnderlayDomainIntent, UnderlayTopology,
+};
+use crate::model::{
+    acl_binding_key, is_canonical_identifier, AclConfig, AclProtocol, DeviceId, PortMode,
+};
 use crate::{UnderlayError, UnderlayResult};
 
 pub fn validate_switch_pair_intent(intent: &SwitchPairIntent) -> UnderlayResult<()> {
@@ -130,6 +134,17 @@ pub fn validate_underlay_domain_intent(intent: &UnderlayDomainIntent) -> Underla
             description: acl.description.clone(),
             rules: acl.rules.clone(),
         }),
+        "underlay domain",
+    )?;
+    let declared_acls = intent
+        .acls
+        .iter()
+        .map(|acl| acl.acl_id)
+        .collect::<BTreeSet<_>>();
+    validate_acl_bindings(
+        &intent.acl_bindings,
+        &member_ids,
+        &declared_acls,
         "underlay domain",
     )?;
 
@@ -294,6 +309,41 @@ fn validate_acl_endpoint(
             endpoint.wildcard
         ))
     })?;
+    Ok(())
+}
+
+fn validate_acl_bindings(
+    bindings: &[AclBindingIntent],
+    valid_device_ids: &BTreeSet<DeviceId>,
+    declared_acls: &BTreeSet<u16>,
+    context: &str,
+) -> UnderlayResult<()> {
+    let mut seen = BTreeSet::new();
+    for binding in bindings {
+        validate_non_empty("ACL binding interface_name", &binding.interface_name)?;
+        if !valid_device_ids.contains(&binding.device_id) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} ACL binding for interface {} references unknown switch member {}",
+                binding.interface_name, binding.device_id.0
+            )));
+        }
+        if !declared_acls.contains(&binding.acl_id) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} ACL binding on {} references undeclared ACL {}",
+                binding.interface_name, binding.acl_id
+            )));
+        }
+        let key = (
+            binding.device_id.clone(),
+            acl_binding_key(&binding.interface_name, &binding.direction),
+        );
+        if !seen.insert(key) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} has duplicate ACL binding on {} direction {:?}",
+                binding.interface_name, binding.direction
+            )));
+        }
+    }
     Ok(())
 }
 

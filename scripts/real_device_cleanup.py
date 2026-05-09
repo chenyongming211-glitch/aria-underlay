@@ -75,6 +75,26 @@ def build_acl_delete_payload(acl_id: int) -> str:
     )
 
 
+def build_acl_binding_delete_payload(interface_name: str, direction: str, acl_id: int) -> str:
+    ifindex = interface_ifindex(interface_name)
+    direction_code = acl_direction_code(direction)
+    acl_id = validate_acl_id(acl_id)
+    return (
+        f'<config xmlns="{NETCONF_BASE_NS}">'
+        f'<top xmlns="{H3C_CONFIG_NS}">'
+        "<ACL><PfilterApply>"
+        f'<Pfilter xmlns:nc="{NETCONF_BASE_NS}" nc:operation="delete">'
+        "<AppObjType>1</AppObjType>"
+        f"<AppObjIndex>{ifindex}</AppObjIndex>"
+        f"<AppDirection>{direction_code}</AppDirection>"
+        "<AppAclType>1</AppAclType>"
+        f"<AppAclGroup>{acl_id}</AppAclGroup>"
+        "</Pfilter>"
+        "</PfilterApply></ACL>"
+        "</top></config>"
+    )
+
+
 def build_description_cleanup_payload(
     interface_name: str,
     description: str | None,
@@ -130,6 +150,15 @@ def validate_acl_id(value: int) -> int:
     if not 3000 <= acl_id <= 3999:
         raise ValueError(f"advanced ACL ID out of range: {acl_id}")
     return acl_id
+
+
+def acl_direction_code(value: str) -> int:
+    normalized = str(value).strip().lower()
+    if normalized in {"inbound", "in"}:
+        return 1
+    if normalized in {"outbound", "out"}:
+        return 2
+    raise ValueError(f"unsupported ACL binding direction: {value}")
 
 
 def parse_vlan_list(value: str) -> list[int]:
@@ -198,6 +227,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=[],
         help="Isolated H3C advanced IPv4 ACL ID to delete after ACL acceptance. May be repeated.",
     )
+    parser.add_argument("--unbind-acl-interface", help="Interface to unbind a test ACL from.")
+    parser.add_argument(
+        "--unbind-acl-direction",
+        choices=["inbound", "outbound", "in", "out"],
+        default="inbound",
+        help="Direction for --unbind-acl-interface.",
+    )
+    parser.add_argument(
+        "--unbind-acl-id",
+        type=int,
+        help="Isolated H3C advanced IPv4 ACL ID to unbind from --unbind-acl-interface.",
+    )
     parser.add_argument("--description-interface", help="Interface description to restore or clear.")
     parser.add_argument("--description", help="Description text to restore.")
     parser.add_argument(
@@ -264,6 +305,23 @@ def build_payloads(args: argparse.Namespace) -> list[tuple[str, str, str | list[
             )
     for vlan_id in args.delete_vlan:
         payloads.append(("netconf", f"delete VLAN {vlan_id}", build_vlan_delete_payload(vlan_id)))
+    if args.unbind_acl_interface:
+        if args.unbind_acl_id is None:
+            raise SystemExit("--unbind-acl-id is required with --unbind-acl-interface")
+        payloads.append(
+            (
+                "netconf",
+                (
+                    f"unbind ACL {args.unbind_acl_id} {args.unbind_acl_direction} "
+                    f"from {args.unbind_acl_interface}"
+                ),
+                build_acl_binding_delete_payload(
+                    args.unbind_acl_interface,
+                    args.unbind_acl_direction,
+                    args.unbind_acl_id,
+                ),
+            )
+        )
     for acl_id in args.delete_acl:
         payloads.append(("netconf", f"delete advanced IPv4 ACL {acl_id}", build_acl_delete_payload(acl_id)))
     if not payloads:

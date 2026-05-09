@@ -238,6 +238,7 @@ fn shadow_state(device_id: &str, vlan_id: u16) -> DeviceShadowState {
         )]),
         interfaces: BTreeMap::new(),
         acls: BTreeMap::new(),
+        acl_bindings: BTreeMap::new(),
         warnings: Vec::new(),
     }
 }

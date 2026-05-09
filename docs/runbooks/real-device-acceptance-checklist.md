@@ -16,6 +16,8 @@ Copy this checklist for every switch/model acceptance run.
 - [ ] Test VLAN description:
 - [ ] Test ACL:
 - [ ] Test ACL description:
+- [ ] Test ACL binding interface:
+- [ ] Test ACL binding direction:
 
 ## Write-Before
 
@@ -32,6 +34,8 @@ Copy this checklist for every switch/model acceptance run.
 - [ ] Existing IPv4 advanced ACL ids are recorded.
 - [ ] Test ACL id is absent before write.
 - [ ] Test ACL id was re-checked immediately before write.
+- [ ] ACL binding interface is approved for temporary binding.
+- [ ] Selected interface/direction has no existing IPv4 ACL binding.
 - [ ] Environment file contains no password or private key material.
 - [ ] `real_domain_apply_probe` is available and executable.
 
@@ -115,10 +119,38 @@ Copy this checklist for every switch/model acceptance run.
 - [ ] Cleanup executed with `--yes`.
 - [ ] Cleanup readback shows test ACL absent.
 
+## ACL Binding Dry-Run
+
+- [ ] Access/trunk variables are unset unless intentionally testing them too.
+- [ ] `ARIA_UNDERLAY_TEST_VLAN` is unset unless intentionally testing VLAN too.
+- [ ] Dry-run contains `CreateAcl` for the absent test ACL id.
+- [ ] Dry-run contains `CreateAclBinding` for the selected interface/direction.
+- [ ] Dry-run contains no `UpdateAcl`.
+- [ ] Dry-run contains no `DeleteAcl`.
+- [ ] Dry-run contains no `UpdateAclBinding`.
+- [ ] Dry-run contains no `DeleteAclBinding`.
+
+## ACL Binding Apply
+
+- [ ] Apply returned `Success` or `SuccessWithWarning`.
+- [ ] Transaction strategy is recorded.
+- [ ] `tx_id` is recorded.
+- [ ] Readback shows test ACL exists.
+- [ ] Readback shows selected interface/direction bound to the test ACL.
+- [ ] Readback confirms no unrelated binding appears in the scoped result.
+
+## ACL Binding Cleanup
+
+- [ ] Cleanup dry-run shows unbind before ACL delete.
+- [ ] Cleanup executed with `--yes`.
+- [ ] Cleanup readback shows selected interface/direction binding absent.
+- [ ] Cleanup readback shows test ACL absent.
+
 ## Closeout
 
 - [ ] Adapter logs were checked for unexpected errors.
 - [ ] No recoverable transaction remains for the tested device.
 - [ ] No test ACL remains.
+- [ ] No test ACL binding remains.
 - [ ] The completed record is stored with release or lab notes.
 - [ ] Any skipped case has a written reason.

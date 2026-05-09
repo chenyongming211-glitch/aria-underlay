@@ -139,6 +139,7 @@ pub fn observed_access_state(device_id: &str, vlan_id: u32) -> adapter::Observed
             }),
         }],
         acls: Vec::new(),
+        acl_bindings: Vec::new(),
     }
 }
 
@@ -284,5 +285,12 @@ fn observed_state_for_scope(
             .any(|name| name == &interface.name)
     });
     state.acls.retain(|acl| scope.acl_ids.contains(&acl.acl_id));
+    state.acl_bindings.retain(|binding| {
+        scope
+            .interface_names
+            .iter()
+            .any(|name| name == &binding.interface_name)
+            || scope.acl_ids.contains(&binding.acl_id)
+    });
     state
 }

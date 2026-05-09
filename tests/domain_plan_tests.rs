@@ -1,11 +1,12 @@
 use aria_underlay::intent::interface::InterfaceIntent;
 use aria_underlay::intent::vlan::VlanIntent;
 use aria_underlay::intent::{
-    AclIntent, ManagementEndpointIntent, SwitchMemberIntent, UnderlayDomainIntent,
+    AclBindingIntent, AclIntent, ManagementEndpointIntent, SwitchMemberIntent, UnderlayDomainIntent,
     UnderlayTopology,
 };
 use aria_underlay::model::{
-    AclAction, AclProtocol, AclRule, AdminState, DeviceId, DeviceRole, PortMode, Vendor,
+    AclAction, AclDirection, AclProtocol, AclRule, AdminState, DeviceId, DeviceRole, PortMode,
+    Vendor,
 };
 use aria_underlay::planner::domain_plan::plan_underlay_domain;
 
@@ -118,6 +119,37 @@ fn acl_intent_is_planned_to_each_management_endpoint() {
 }
 
 #[test]
+fn acl_binding_intent_is_planned_to_owning_management_endpoint() {
+    let mut intent = domain_intent(
+        UnderlayTopology::MlagDualManagementIp,
+        vec![endpoint("leaf-a-mgmt"), endpoint("leaf-b-mgmt")],
+        vec![
+            member("leaf-a", Some(DeviceRole::LeafA), "leaf-a-mgmt"),
+            member("leaf-b", Some(DeviceRole::LeafB), "leaf-b-mgmt"),
+        ],
+        vec![
+            access_interface("leaf-a", "GE1/0/1"),
+            access_interface("leaf-b", "GE1/0/1"),
+        ],
+    );
+    intent.acls = vec![acl_intent(3999)];
+    intent.acl_bindings = vec![AclBindingIntent {
+        device_id: DeviceId("leaf-b".into()),
+        interface_name: "GE1/0/1".into(),
+        direction: AclDirection::Inbound,
+        acl_id: 3999,
+    }];
+
+    let states = plan_underlay_domain(&intent).expect("ACL binding domain should plan");
+
+    assert!(states[0].acl_bindings.is_empty());
+    assert_eq!(
+        states[1].acl_bindings["GE1/0/1|inbound"].acl_id,
+        3999
+    );
+}
+
+#[test]
 fn unknown_member_reference_fails_validation() {
     let intent = domain_intent(
         UnderlayTopology::SmallFabric,
@@ -152,6 +184,7 @@ fn domain_intent(
         }],
         interfaces,
         acls: vec![],
+        acl_bindings: vec![],
     }
 }
 

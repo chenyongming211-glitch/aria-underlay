@@ -600,6 +600,7 @@ fn domain_intent(vlan_id: u16) -> UnderlayDomainIntent {
             mode: PortMode::Access { vlan_id },
         }],
         acls: vec![],
+        acl_bindings: vec![],
     }
 }
 
@@ -632,6 +633,7 @@ fn observed_state_with_unrelated_objects() -> adapter::ObservedDeviceState {
             }),
         }],
         acls: Vec::new(),
+        acl_bindings: Vec::new(),
     }
 }
 

@@ -225,6 +225,70 @@ def test_h3c_parser_reads_real_comware_ipv4_advanced_acl_shape():
     ]
 
 
+def test_h3c_parser_reads_real_comware_acl_interface_bindings():
+    state = H3cStateParser(model_hint="S5560-54C-EI").parse_running(
+        """
+        <data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+          <top xmlns="http://www.h3c.com/netconf/config:1.0">
+            <ACL>
+              <Groups>
+                <Group>
+                  <GroupType>1</GroupType>
+                  <GroupID>3999</GroupID>
+                </Group>
+              </Groups>
+              <PfilterApply>
+                <Pfilter>
+                  <AppObjType>1</AppObjType>
+                  <AppObjIndex>13</AppObjIndex>
+                  <AppDirection>1</AppDirection>
+                  <AppAclType>1</AppAclType>
+                  <AppAclGroup>3999</AppAclGroup>
+                </Pfilter>
+                <Pfilter>
+                  <AppObjType>1</AppObjType>
+                  <AppObjIndex>14</AppObjIndex>
+                  <AppDirection>2</AppDirection>
+                  <AppAclType>1</AppAclType>
+                  <AppAclGroup>3998</AppAclGroup>
+                </Pfilter>
+                <Pfilter>
+                  <AppObjType>1</AppObjType>
+                  <AppObjIndex>15</AppObjIndex>
+                  <AppDirection>1</AppDirection>
+                  <AppAclType>5</AppAclType>
+                  <AppAclGroup>0</AppAclGroup>
+                </Pfilter>
+              </PfilterApply>
+            </ACL>
+          </top>
+        </data>
+        """,
+        scope=SimpleNamespace(
+            full=False,
+            vlan_ids=[],
+            interface_names=[
+                "GigabitEthernet1/0/13",
+                "GigabitEthernet1/0/14",
+            ],
+            acl_ids=[3998, 3999],
+        ),
+    )
+
+    assert state["acl_bindings"] == [
+        {
+            "interface_name": "GigabitEthernet1/0/13",
+            "direction": "inbound",
+            "acl_id": 3999,
+        },
+        {
+            "interface_name": "GigabitEthernet1/0/14",
+            "direction": "outbound",
+            "acl_id": 3998,
+        },
+    ]
+
+
 def test_h3c_scoped_parser_skips_unrequested_ifindex_without_model_hint():
     scope = SimpleNamespace(
         full=False,

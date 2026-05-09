@@ -33,10 +33,13 @@ class _DesiredState:
     vlans: list
     interfaces: list
     acls: list | None = None
+    acl_bindings: list | None = None
 
     def __post_init__(self):
         if self.acls is None:
             self.acls = []
+        if self.acl_bindings is None:
+            self.acl_bindings = []
 
 
 @dataclass
@@ -67,6 +70,13 @@ class _Acl:
     def __post_init__(self):
         if self.rules is None:
             self.rules = []
+
+
+@dataclass
+class _AclBinding:
+    interface_name: str
+    direction: str | int
+    acl_id: int
 
 
 def test_xml_renderer_escapes_text():
@@ -406,6 +416,33 @@ def test_h3c_renderer_builds_ipv4_advanced_acl_edit_config_document():
     assert rules[1].find(f"{{{ns}}}ProtocolType").text == "6"
     assert rules[1].find(f"{{{ns}}}DstPort/{{{ns}}}DstPortOp").text == "2"
     assert rules[1].find(f"{{{ns}}}DstPort/{{{ns}}}DstPortValue1").text == "443"
+
+
+def test_h3c_renderer_builds_interface_acl_binding_document():
+    xml = H3cRenderer().render_edit_config(
+        _DesiredState(
+            vlans=[],
+            interfaces=[],
+            acls=[],
+            acl_bindings=[
+                _AclBinding(
+                    interface_name="GigabitEthernet1/0/13",
+                    direction="inbound",
+                    acl_id=3999,
+                )
+            ],
+        )
+    )
+    root = ElementTree.fromstring(xml)
+    ns = H3cRenderer().ACL_NAMESPACE
+
+    binding = root.find(f".//{{{ns}}}ACL/{{{ns}}}PfilterApply/{{{ns}}}Pfilter")
+    assert binding is not None
+    assert binding.find(f"{{{ns}}}AppObjType").text == "1"
+    assert binding.find(f"{{{ns}}}AppObjIndex").text == "13"
+    assert binding.find(f"{{{ns}}}AppDirection").text == "1"
+    assert binding.find(f"{{{ns}}}AppAclType").text == "1"
+    assert binding.find(f"{{{ns}}}AppAclGroup").text == "3999"
 
 
 @pytest.mark.parametrize("renderer", [HuaweiRenderer()])

@@ -1137,7 +1137,7 @@ def test_get_current_state_empty_scope_returns_empty_state_without_device_read()
 
     state = backend.get_current_state(scope=_Scope(full=False, vlan_ids=[], interface_names=[]))
 
-    assert state == {"vlans": [], "interfaces": [], "acls": []}
+    assert state == {"vlans": [], "interfaces": [], "acls": [], "acl_bindings": []}
     assert session.calls == []
 
 

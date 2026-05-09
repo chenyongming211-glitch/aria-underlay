@@ -20,6 +20,8 @@ private keys, session tokens, or full secrets.
 | Test VLAN description |  |
 | Test ACL |  |
 | Test ACL description |  |
+| Test ACL binding interface |  |
+| Test ACL binding direction |  |
 
 ## Baseline
 
@@ -34,6 +36,7 @@ private keys, session tokens, or full secrets.
 | Trunk original description |  |
 | Existing IPv4 advanced ACL ids |  |
 | Test ACL present before write | No |
+| ACL binding present before write | No |
 
 ## Access Acceptance
 
@@ -87,12 +90,32 @@ private keys, session tokens, or full secrets.
 | Cleanup result |  |
 | Cleanup readback result |  |
 
+## ACL Binding Acceptance
+
+| Check | Result |
+| --- | --- |
+| Candidate ACL was absent before write |  |
+| Candidate ACL was re-checked immediately before write |  |
+| Binding interface/direction had no existing IPv4 ACL binding |  |
+| Dry-run contained `CreateAcl` for test ACL |  |
+| Dry-run contained `CreateAclBinding` for selected interface/direction |  |
+| Dry-run contained no ACL or binding update/delete |  |
+| Apply status |  |
+| Transaction strategy |  |
+| tx_id |  |
+| Readback ACL result |  |
+| Readback binding result |  |
+| Cleanup dry-run showed unbind before ACL delete |  |
+| Cleanup result |  |
+| Cleanup readback result |  |
+
 ## Logs And Follow-Up
 
 | Item | Value |
 | --- | --- |
 | Adapter log anomalies |  |
 | Recoverable transactions after test |  |
+| Test ACL binding remains after cleanup |  |
 | Manual changes required |  |
 | Open follow-up issue or PR |  |
 

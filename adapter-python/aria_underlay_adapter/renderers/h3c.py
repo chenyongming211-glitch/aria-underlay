@@ -60,6 +60,10 @@ class H3cRenderer:
             for acl in getattr(desired_state, "acls", [])
             for rule_node in self.render_acl_rules(acl)
         ]
+        acl_binding_nodes = [
+            self.render_acl_binding(binding)
+            for binding in getattr(desired_state, "acl_bindings", [])
+        ]
         ifmgr_nodes = []
         access_nodes = []
         trunk_nodes = []
@@ -130,6 +134,14 @@ class H3cRenderer:
                     "IPv4AdvanceRules",
                     namespace=self.ACL_NAMESPACE,
                     children=acl_rule_nodes,
+                )
+            )
+        if acl_binding_nodes:
+            acl_children.append(
+                XmlElement(
+                    "PfilterApply",
+                    namespace=self.ACL_NAMESPACE,
+                    children=acl_binding_nodes,
                 )
             )
         if acl_children:
@@ -310,6 +322,34 @@ class H3cRenderer:
             children.append(_acl_port_node("Dst", destination_port, protocol, self.ACL_NAMESPACE))
         return XmlElement("Rule", namespace=self.ACL_NAMESPACE, children=children)
 
+    def render_acl_binding(self, binding) -> XmlElement:
+        interface_name = _required_text(binding, "interface_name")
+        return XmlElement(
+            "Pfilter",
+            namespace=self.ACL_NAMESPACE,
+            children=[
+                XmlElement("AppObjType", namespace=self.ACL_NAMESPACE, children=["1"]),
+                XmlElement(
+                    "AppObjIndex",
+                    namespace=self.ACL_NAMESPACE,
+                    children=[str(_interface_ifindex(interface_name))],
+                ),
+                XmlElement(
+                    "AppDirection",
+                    namespace=self.ACL_NAMESPACE,
+                    children=[str(_acl_direction_code(_field(binding, "direction")))],
+                ),
+                XmlElement("AppAclType", namespace=self.ACL_NAMESPACE, children=["1"]),
+                XmlElement(
+                    "AppAclGroup",
+                    namespace=self.ACL_NAMESPACE,
+                    children=[
+                        str(_validate_acl_id(_field(binding, "acl_id"), "acl_binding.acl_id"))
+                    ],
+                ),
+            ],
+        )
+
 
 def _field(message, name):
     if isinstance(message, dict):
@@ -413,6 +453,15 @@ def _acl_protocol(value) -> str:
     if normalized in {"icmp", 4}:
         return "icmp"
     raise ValueError(f"unknown ACL protocol: {value}")
+
+
+def _acl_direction_code(value) -> int:
+    normalized = value.strip().lower() if isinstance(value, str) else value
+    if normalized in {"inbound", "in", 1}:
+        return 1
+    if normalized in {"outbound", "out", 2}:
+        return 2
+    raise ValueError(f"unknown ACL direction: {value}")
 
 
 def _h3c_acl_action_code(action: str) -> int:

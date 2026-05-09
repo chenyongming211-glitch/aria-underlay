@@ -14,6 +14,12 @@ pub enum AclProtocol {
     Icmp,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum AclDirection {
+    Inbound,
+    Outbound,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AclEndpoint {
     pub address: String,
@@ -40,3 +46,23 @@ pub struct AclConfig {
     pub rules: Vec<AclRule>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AclBinding {
+    pub interface_name: String,
+    pub direction: AclDirection,
+    pub acl_id: u16,
+}
+
+impl AclBinding {
+    pub fn key(&self) -> String {
+        acl_binding_key(&self.interface_name, &self.direction)
+    }
+}
+
+pub fn acl_binding_key(interface_name: &str, direction: &AclDirection) -> String {
+    let direction = match direction {
+        AclDirection::Inbound => "inbound",
+        AclDirection::Outbound => "outbound",
+    };
+    format!("{interface_name}|{direction}")
+}

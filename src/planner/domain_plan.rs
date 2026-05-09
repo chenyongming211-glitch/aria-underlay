@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::intent::validation::validate_underlay_domain_intent;
 use crate::intent::UnderlayDomainIntent;
-use crate::model::{AclConfig, DeviceId, InterfaceConfig, VlanConfig};
+use crate::model::{AclBinding, AclConfig, DeviceId, InterfaceConfig, VlanConfig};
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::{UnderlayError, UnderlayResult};
 
@@ -60,6 +60,7 @@ pub fn plan_underlay_domain(
                             )
                         })
                         .collect(),
+                    acl_bindings: BTreeMap::new(),
                 },
             )
         })
@@ -87,6 +88,27 @@ pub fn plan_underlay_domain(
                 mode: interface.mode.clone(),
             },
         );
+    }
+
+    for binding in &intent.acl_bindings {
+        let endpoint_id = member_to_endpoint.get(&binding.device_id).ok_or_else(|| {
+            UnderlayError::InvalidIntent(format!(
+                "ACL binding references unknown switch member {}",
+                binding.device_id.0
+            ))
+        })?;
+        let state = states.get_mut(endpoint_id).ok_or_else(|| {
+            UnderlayError::InvalidIntent(format!(
+                "member references unknown management endpoint {}",
+                endpoint_id.0
+            ))
+        })?;
+        let binding = AclBinding {
+            interface_name: binding.interface_name.clone(),
+            direction: binding.direction.clone(),
+            acl_id: binding.acl_id,
+        };
+        state.acl_bindings.insert(binding.key(), binding);
     }
 
     Ok(states.into_values().collect())

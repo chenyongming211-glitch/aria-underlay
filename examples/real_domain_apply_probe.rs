@@ -10,11 +10,11 @@ use aria_underlay::engine::diff::ChangeOp;
 use aria_underlay::intent::interface::InterfaceIntent;
 use aria_underlay::intent::vlan::VlanIntent;
 use aria_underlay::intent::{
-    AclIntent, ManagementEndpointIntent, SwitchMemberIntent, UnderlayDomainIntent,
+    AclBindingIntent, AclIntent, ManagementEndpointIntent, SwitchMemberIntent, UnderlayDomainIntent,
     UnderlayTopology,
 };
 use aria_underlay::model::{
-    AclAction, AclEndpoint, AclProtocol, AclRule, AdminState, DeviceId, DeviceRole,
+    AclAction, AclDirection, AclEndpoint, AclProtocol, AclRule, AdminState, DeviceId, DeviceRole,
     PortMode, Vendor,
 };
 use aria_underlay::state::drift::DriftPolicy;
@@ -50,6 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let interfaces = desired_interfaces(&member_id, test_vlan)?;
     let acls = desired_acls()?;
+    let acl_bindings = desired_acl_bindings(&member_id, &acls)?;
     let vlans = if interfaces.is_empty() && !test_vlan_was_set {
         Vec::new()
     } else {
@@ -105,6 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             vlans,
             interfaces,
             acls,
+            acl_bindings,
         },
         options: ApplyOptions {
             dry_run: false,
@@ -128,16 +130,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     | ChangeOp::DeleteInterfaceConfig { .. }
                     | ChangeOp::DeleteAcl { .. }
                     | ChangeOp::UpdateAcl { .. }
+                    | ChangeOp::UpdateAclBinding { .. }
+                    | ChangeOp::DeleteAclBinding { .. }
             )
         })
     {
         return Err(io::Error::new(
             io::ErrorKind::Other,
-            "dry-run planned a delete or existing ACL update; refusing real device write",
+            "dry-run planned a delete or existing ACL/binding update; refusing real device write",
         )
         .into());
     }
     ensure_requested_acls_are_creates(&dry_run.change_sets, &request.intent.acls)?;
+    ensure_requested_acl_bindings_are_creates(
+        &dry_run.change_sets,
+        &request.intent.acl_bindings,
+    )?;
 
     let response = service.apply_domain_intent(request).await?;
     println!("real_apply_status={:?}", response.status);
@@ -190,6 +198,37 @@ fn desired_acls() -> Result<Vec<AclIntent>, Box<dyn std::error::Error>> {
     }])
 }
 
+fn desired_acl_bindings(
+    member_id: &str,
+    acls: &[AclIntent],
+) -> Result<Vec<AclBindingIntent>, Box<dyn std::error::Error>> {
+    let Some(interface_name) = optional_env("ARIA_UNDERLAY_ACL_BIND_INTERFACE") else {
+        return Ok(Vec::new());
+    };
+    if interface_name.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let acl_id = match optional_env("ARIA_UNDERLAY_ACL_BIND_ID") {
+        Some(value) => value.parse::<u16>()?,
+        None => acls.first().map(|acl| acl.acl_id).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "ARIA_UNDERLAY_ACL_BIND_INTERFACE requires a declared test ACL",
+            )
+        })?,
+    };
+    Ok(vec![AclBindingIntent {
+        device_id: DeviceId(member_id.into()),
+        interface_name,
+        direction: acl_direction(
+            optional_env("ARIA_UNDERLAY_ACL_BIND_DIRECTION")
+                .unwrap_or_else(|| "inbound".into())
+                .as_str(),
+        )?,
+        acl_id,
+    }])
+}
+
 fn ensure_requested_acls_are_creates(
     change_sets: &[aria_underlay::engine::diff::ChangeSet],
     acls: &[AclIntent],
@@ -205,6 +244,37 @@ fn ensure_requested_acls_are_creates(
                 format!(
                     "ACL {} was not planned as CreateAcl; choose a non-existing ACL id",
                     acl.acl_id
+                ),
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn ensure_requested_acl_bindings_are_creates(
+    change_sets: &[aria_underlay::engine::diff::ChangeSet],
+    bindings: &[AclBindingIntent],
+) -> Result<(), Box<dyn std::error::Error>> {
+    for binding in bindings {
+        let created = change_sets
+            .iter()
+            .flat_map(|change_set| &change_set.ops)
+            .any(|op| {
+                matches!(
+                    op,
+                    ChangeOp::CreateAclBinding(created)
+                        if created.interface_name == binding.interface_name
+                            && created.direction == binding.direction
+                            && created.acl_id == binding.acl_id
+                )
+            });
+        if !created {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "ACL binding {} {:?} was not planned as CreateAclBinding; choose an unbound test interface",
+                    binding.interface_name, binding.direction
                 ),
             )
             .into());
@@ -329,6 +399,18 @@ fn acl_protocol(value: &str) -> Result<AclProtocol, Box<dyn std::error::Error>> 
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "ACL rule protocol must be ip, tcp, udp, or icmp",
+        )
+        .into()),
+    }
+}
+
+fn acl_direction(value: &str) -> Result<AclDirection, Box<dyn std::error::Error>> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "inbound" | "in" => Ok(AclDirection::Inbound),
+        "outbound" | "out" => Ok(AclDirection::Outbound),
+        other => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unsupported ACL binding direction {other}"),
         )
         .into()),
     }

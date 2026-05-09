@@ -11,12 +11,13 @@ acceptance procedure. The current production-verified surface is:
 - Trunk port allowed VLAN update.
 - Access/trunk interface description update.
 - Isolated numeric IPv4 advanced ACL create/read/verify.
+- Interface packet-filter binding for an isolated numeric IPv4 advanced ACL.
 - Scoped get-current-state readback and verify.
 
 The procedure has been exercised against H3C S5560 and S6800 representatives.
 It is intentionally scoped; do not use it as proof for admin-down, trunk native
-VLAN, deletes through normal apply, ACL bindings, or cross-device atomic
-behavior.
+VLAN, deletes through normal apply, PBR/QoS/NQA/BGP ACL consumers, or
+cross-device atomic behavior.
 
 ## Preconditions
 
@@ -51,6 +52,8 @@ For each switch/model under test, record these values before writing:
 | Trunk original description | Exact text to restore, or explicit empty |
 | Test ACL | Optional IPv4 advanced ACL number absent before the test |
 | Test ACL description | Optional temporary ACL description |
+| Test ACL binding interface | Optional approved idle port with no existing binding in the chosen direction |
+| Test ACL binding direction | `inbound` or `outbound` |
 
 The acceptance VLAN used in previous lab runs was `4093`; this is only a
 convention, not a requirement.
@@ -83,6 +86,10 @@ operator wrapper. The required evidence is:
 - No unapproved interface appears in the scoped readback.
 - If testing ACL, the candidate ACL number is absent before the write.
 - If testing ACL, no existing ACL number is reused.
+- If testing ACL binding, the binding interface is approved for temporary
+  packet-filter binding.
+- If testing ACL binding, the selected interface and direction have no existing
+  IPv4 ACL binding before the write.
 
 4. Prepare the environment file from
 `docs/examples/real-device-acceptance.env.example`.
@@ -331,6 +338,97 @@ python3 scripts/real_device_cleanup.py \
 
 Read back the ACL scope again. The test ACL must be absent.
 
+## ACL Binding Acceptance
+
+This case proves the interface packet-filter binding boundary. It creates an
+isolated ACL and binds it to one approved interface/direction. It does not
+prove PBR, QoS traffic-classifier, NQA, BGP, or other ACL consumers.
+
+1. Confirm the candidate ACL and binding target are clean.
+
+- The test ACL id must be absent by live readback.
+- The selected interface must be approved for temporary packet-filter binding.
+- The selected direction must have no existing IPv4 ACL binding on that
+  interface.
+
+If any of these checks fail, choose a different absent ACL id or a different
+approved idle port.
+
+2. Set ACL and binding variables.
+
+Unset access and trunk variables. Do not set `ARIA_UNDERLAY_TEST_VLAN` unless
+the same run is intentionally testing VLAN behavior. The binding references an
+existing interface by name; it does not require changing that interface's
+access or trunk configuration.
+
+```bash
+set -a
+. ./real-device-acceptance.env
+set +a
+unset ARIA_UNDERLAY_ACCESS_INTERFACE
+unset ARIA_UNDERLAY_TRUNK_INTERFACE
+unset ARIA_UNDERLAY_TEST_VLAN
+export ARIA_UNDERLAY_TEST_ACL_ID=<absent-acl-id>
+export ARIA_UNDERLAY_TEST_ACL_DESCRIPTION="aria isolated acl binding"
+export ARIA_UNDERLAY_ACL_BIND_INTERFACE=<approved-idle-interface>
+export ARIA_UNDERLAY_ACL_BIND_DIRECTION=inbound
+unset ARIA_UNDERLAY_ACL_BIND_ID
+```
+
+When `ARIA_UNDERLAY_ACL_BIND_ID` is unset, the probe binds the first declared
+test ACL. Set it only when the same run declares more than one temporary ACL.
+
+3. Run the real apply probe.
+
+```bash
+/opt/aria-underlay/probes/real_domain_apply_probe
+```
+
+The dry-run must show `CreateAcl` for the chosen ACL id and
+`CreateAclBinding` for the selected interface/direction. If it shows
+`UpdateAcl`, `DeleteAcl`, `UpdateAclBinding`, `DeleteAclBinding`, or no
+`CreateAclBinding` for the requested target, stop.
+
+4. Read back the ACL and binding scope.
+
+Acceptance requires:
+
+- The test ACL exists and rules match the request.
+- The selected interface/direction is bound to the test ACL id.
+- No unrelated ACL binding appears in the scoped readback.
+
+5. Clean up and verify again.
+
+Run cleanup in dry-run first. The cleanup order is important: unbind first,
+then delete the ACL.
+
+```bash
+python3 scripts/real_device_cleanup.py \
+  --host "$ARIA_UNDERLAY_MGMT_IP" \
+  --secret-ref "$ARIA_UNDERLAY_SECRET_REF" \
+  --unbind-acl-interface "$ARIA_UNDERLAY_ACL_BIND_INTERFACE" \
+  --unbind-acl-direction "$ARIA_UNDERLAY_ACL_BIND_DIRECTION" \
+  --unbind-acl-id "$ARIA_UNDERLAY_TEST_ACL_ID" \
+  --delete-acl "$ARIA_UNDERLAY_TEST_ACL_ID" \
+  --dry-run
+```
+
+Then execute:
+
+```bash
+python3 scripts/real_device_cleanup.py \
+  --host "$ARIA_UNDERLAY_MGMT_IP" \
+  --secret-ref "$ARIA_UNDERLAY_SECRET_REF" \
+  --unbind-acl-interface "$ARIA_UNDERLAY_ACL_BIND_INTERFACE" \
+  --unbind-acl-direction "$ARIA_UNDERLAY_ACL_BIND_DIRECTION" \
+  --unbind-acl-id "$ARIA_UNDERLAY_TEST_ACL_ID" \
+  --delete-acl "$ARIA_UNDERLAY_TEST_ACL_ID" \
+  --yes
+```
+
+Read back the ACL and binding scope again. The binding must be absent and the
+test ACL must be absent.
+
 ## Running Cleanup In The Adapter Container
 
 If the host Python environment does not have `ncclient`, run cleanup through the
@@ -360,6 +458,9 @@ also needs SSH access to the switch management address, normally TCP 22.
   is not scoped safely enough for real-device acceptance.
 - If ACL dry-run contains `UpdateAcl` or `DeleteAcl`, stop. The candidate ACL
   is not a clean isolated create.
+- If ACL binding dry-run contains `UpdateAclBinding` or `DeleteAclBinding`,
+  stop. The selected interface/direction already has state that this run would
+  disturb.
 - If the apply fails before a `tx_id` is produced, collect adapter logs and the
   probe output; no transaction recovery action is expected.
 - If the apply fails after a `tx_id` is produced, record the `tx_id`, strategy,
@@ -368,6 +469,8 @@ also needs SSH access to the switch management address, normally TCP 22.
   Restore the recorded original state first.
 - If readback after cleanup still shows the test VLAN or test port state, keep
   the record open and treat the switch as manually dirty.
+- If readback after cleanup still shows the test ACL binding, unbind it before
+  deleting or reusing the ACL id.
 
 ## Exit Criteria
 
@@ -379,6 +482,7 @@ The acceptance run is complete only when:
 - Every cleanup has a readback proof.
 - No test VLAN remains.
 - No test ACL remains.
+- No test ACL binding remains.
 - Every changed port is restored to its recorded original PVID/allowed VLAN and
   description state.
 - The record template is filled in and stored with the release/test notes.

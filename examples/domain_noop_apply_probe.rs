@@ -120,5 +120,6 @@ fn stack_single_management_ip_intent() -> UnderlayDomainIntent {
             mode: PortMode::Access { vlan_id: 100 },
         }],
         acls: vec![],
+        acl_bindings: vec![],
     }
 }

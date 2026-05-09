@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::engine::normalize::{normalize_desired_state, normalize_shadow_state};
-use crate::model::{AclConfig, DeviceId, InterfaceConfig, VlanConfig};
+use crate::model::{AclBinding, AclConfig, AclDirection, DeviceId, InterfaceConfig, VlanConfig};
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::state::DeviceShadowState;
 
@@ -35,6 +35,15 @@ pub enum ChangeOp {
     },
     DeleteAcl {
         acl_id: u16,
+    },
+    CreateAclBinding(AclBinding),
+    UpdateAclBinding {
+        before: AclBinding,
+        after: AclBinding,
+    },
+    DeleteAclBinding {
+        interface_name: String,
+        direction: AclDirection,
     },
 }
 
@@ -92,6 +101,28 @@ pub fn compute_diff(desired: &DeviceDesiredState, current: &DeviceShadowState) -
                 after: desired_acl.clone(),
             }),
             None => change_set.ops.push(ChangeOp::CreateAcl(desired_acl.clone())),
+        }
+    }
+
+    for (key, desired_binding) in &desired.acl_bindings {
+        match current.acl_bindings.get(key) {
+            Some(current_binding) if current_binding == desired_binding => {}
+            Some(current_binding) => change_set.ops.push(ChangeOp::UpdateAclBinding {
+                before: current_binding.clone(),
+                after: desired_binding.clone(),
+            }),
+            None => change_set
+                .ops
+                .push(ChangeOp::CreateAclBinding(desired_binding.clone())),
+        }
+    }
+
+    for (key, current_binding) in &current.acl_bindings {
+        if !desired.acl_bindings.contains_key(key) {
+            change_set.ops.push(ChangeOp::DeleteAclBinding {
+                interface_name: current_binding.interface_name.clone(),
+                direction: current_binding.direction.clone(),
+            });
         }
     }
 

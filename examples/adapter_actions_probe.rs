@@ -111,5 +111,6 @@ fn desired_state(device_id: DeviceId) -> DeviceDesiredState {
         vlans,
         interfaces,
         acls: BTreeMap::new(),
+        acl_bindings: BTreeMap::new(),
     }
 }

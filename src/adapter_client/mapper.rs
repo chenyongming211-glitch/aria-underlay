@@ -1,8 +1,8 @@
 use crate::device::{capability::BackendKind, DeviceCapabilityProfile, DeviceInfo, HostKeyPolicy};
 use crate::engine::diff::{ChangeOp, ChangeSet};
 use crate::model::{
-    AclAction, AclConfig, AclEndpoint, AclProtocol, AclRule, AdminState, DeviceId,
-    InterfaceConfig, PortMode, Vendor, VlanConfig,
+    AclAction, AclBinding, AclConfig, AclDirection, AclEndpoint, AclProtocol, AclRule, AdminState,
+    DeviceId, InterfaceConfig, PortMode, Vendor, VlanConfig,
 };
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::proto::adapter;
@@ -129,10 +129,27 @@ pub fn desired_state_to_proto(desired: &DeviceDesiredState) -> adapter::DesiredD
             .map(interface_to_proto)
             .collect(),
         acls: desired.acls.values().map(acl_to_proto).collect(),
+        acl_bindings: desired
+            .acl_bindings
+            .values()
+            .map(acl_binding_to_proto)
+            .collect(),
     }
 }
 
 pub fn state_scope_from_desired(desired: &DeviceDesiredState) -> adapter::StateScope {
+    let interface_names = desired
+        .interfaces
+        .keys()
+        .cloned()
+        .chain(
+            desired
+                .acl_bindings
+                .values()
+                .map(|binding| binding.interface_name.clone()),
+        )
+        .collect::<std::collections::BTreeSet<_>>();
+
     adapter::StateScope {
         full: false,
         vlan_ids: desired
@@ -140,11 +157,15 @@ pub fn state_scope_from_desired(desired: &DeviceDesiredState) -> adapter::StateS
             .keys()
             .map(|vlan_id| u32::from(*vlan_id))
             .collect(),
-        interface_names: desired.interfaces.keys().cloned().collect(),
+        interface_names: interface_names.into_iter().collect(),
         acl_ids: desired
             .acls
             .keys()
-            .map(|acl_id| u32::from(*acl_id))
+            .copied()
+            .chain(desired.acl_bindings.values().map(|binding| binding.acl_id))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .map(u32::from)
             .collect(),
     }
 }
@@ -184,6 +205,22 @@ pub fn state_scope_from_change_set(change_set: &ChangeSet) -> adapter::StateScop
             }
             ChangeOp::DeleteAcl { acl_id } => {
                 acl_ids.insert(u32::from(*acl_id));
+            }
+            ChangeOp::CreateAclBinding(binding) => {
+                interface_names.insert(binding.interface_name.clone());
+                acl_ids.insert(u32::from(binding.acl_id));
+            }
+            ChangeOp::UpdateAclBinding { before, after } => {
+                interface_names.insert(before.interface_name.clone());
+                interface_names.insert(after.interface_name.clone());
+                acl_ids.insert(u32::from(before.acl_id));
+                acl_ids.insert(u32::from(after.acl_id));
+            }
+            ChangeOp::DeleteAclBinding {
+                interface_name,
+                direction: _,
+            } => {
+                interface_names.insert(interface_name.clone());
             }
         }
     }
@@ -240,12 +277,19 @@ pub fn shadow_state_from_proto(proto: adapter::ObservedDeviceState, warnings: Ve
         acls.insert(acl.acl_id, acl);
     }
 
+    let mut acl_bindings = std::collections::BTreeMap::new();
+    for binding in proto.acl_bindings {
+        let binding = acl_binding_from_proto(binding)?;
+        acl_bindings.insert(binding.key(), binding);
+    }
+
     Ok(DeviceShadowState {
         device_id: DeviceId(proto.device_id),
         revision: 0,
         vlans,
         interfaces,
         acls,
+        acl_bindings,
         warnings,
     })
 }
@@ -329,6 +373,14 @@ fn acl_to_proto(acl: &AclConfig) -> adapter::AclConfig {
     }
 }
 
+fn acl_binding_to_proto(binding: &AclBinding) -> adapter::AclBinding {
+    adapter::AclBinding {
+        interface_name: binding.interface_name.clone(),
+        direction: acl_direction_to_proto(&binding.direction) as i32,
+        acl_id: u32::from(binding.acl_id),
+    }
+}
+
 fn acl_rule_to_proto(rule: &AclRule) -> adapter::AclRule {
     adapter::AclRule {
         sequence: u32::from(rule.sequence),
@@ -360,6 +412,22 @@ fn acl_from_proto(proto: adapter::AclConfig) -> UnderlayResult<AclConfig> {
             .into_iter()
             .map(acl_rule_from_proto)
             .collect::<UnderlayResult<Vec<_>>>()?,
+    })
+}
+
+fn acl_binding_from_proto(proto: adapter::AclBinding) -> UnderlayResult<AclBinding> {
+    if proto.interface_name.trim().is_empty() {
+        return Err(UnderlayError::AdapterOperation {
+            code: "INVALID_ACL_BINDING".into(),
+            message: "adapter returned ACL binding without interface_name".into(),
+            retryable: false,
+            errors: Vec::new(),
+        });
+    }
+    Ok(AclBinding {
+        interface_name: proto.interface_name,
+        direction: acl_direction_from_i32(proto.direction)?,
+        acl_id: acl_id_from_u32(proto.acl_id, "adapter returned invalid ACL binding ACL id")?,
     })
 }
 
@@ -440,6 +508,26 @@ fn acl_protocol_from_i32(value: i32) -> UnderlayResult<AclProtocol> {
         _ => Err(UnderlayError::AdapterOperation {
             code: "INVALID_ACL_PROTOCOL".into(),
             message: "adapter returned invalid ACL protocol".into(),
+            retryable: false,
+            errors: Vec::new(),
+        }),
+    }
+}
+
+fn acl_direction_to_proto(direction: &AclDirection) -> adapter::AclDirection {
+    match direction {
+        AclDirection::Inbound => adapter::AclDirection::Inbound,
+        AclDirection::Outbound => adapter::AclDirection::Outbound,
+    }
+}
+
+fn acl_direction_from_i32(value: i32) -> UnderlayResult<AclDirection> {
+    match adapter::AclDirection::try_from(value).unwrap_or(adapter::AclDirection::Unspecified) {
+        adapter::AclDirection::Inbound => Ok(AclDirection::Inbound),
+        adapter::AclDirection::Outbound => Ok(AclDirection::Outbound),
+        _ => Err(UnderlayError::AdapterOperation {
+            code: "INVALID_ACL_DIRECTION".into(),
+            message: "adapter returned invalid ACL direction".into(),
             retryable: false,
             errors: Vec::new(),
         }),

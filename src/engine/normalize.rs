@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use crate::model::{AclConfig, AclRule, InterfaceConfig, PortMode, VlanConfig};
+use crate::model::{
+    AclBinding, AclConfig, AclRule, InterfaceConfig, PortMode, VlanConfig,
+};
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::state::DeviceShadowState;
 
@@ -78,6 +80,13 @@ impl Normalize for AclRule {
     }
 }
 
+impl Normalize for AclBinding {
+    fn normalize(mut self) -> Self {
+        self.interface_name = canonical_interface_name(&self.interface_name);
+        self
+    }
+}
+
 pub fn normalize_desired_state(mut state: DeviceDesiredState) -> DeviceDesiredState {
     state.vlans = state
         .vlans
@@ -103,6 +112,15 @@ pub fn normalize_desired_state(mut state: DeviceDesiredState) -> DeviceDesiredSt
         .map(|acl| {
             let acl = acl.normalize();
             (acl.acl_id, acl)
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    state.acl_bindings = state
+        .acl_bindings
+        .into_values()
+        .map(|binding| {
+            let binding = binding.normalize();
+            (binding.key(), binding)
         })
         .collect::<BTreeMap<_, _>>();
 
@@ -134,6 +152,15 @@ pub fn normalize_shadow_state(mut state: DeviceShadowState) -> DeviceShadowState
         .map(|acl| {
             let acl = acl.normalize();
             (acl.acl_id, acl)
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    state.acl_bindings = state
+        .acl_bindings
+        .into_values()
+        .map(|binding| {
+            let binding = binding.normalize();
+            (binding.key(), binding)
         })
         .collect::<BTreeMap<_, _>>();
 

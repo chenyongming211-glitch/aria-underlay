@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use crate::intent::{acl::AclIntent, interface::InterfaceIntent, vlan::VlanIntent};
+use crate::intent::{
+    acl::{AclBindingIntent, AclIntent},
+    interface::InterfaceIntent,
+    vlan::VlanIntent,
+};
 use crate::model::{DeviceRole, Vendor};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -13,6 +17,8 @@ pub struct UnderlayDomainIntent {
     pub interfaces: Vec<InterfaceIntent>,
     #[serde(default)]
     pub acls: Vec<AclIntent>,
+    #[serde(default)]
+    pub acl_bindings: Vec<AclBindingIntent>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

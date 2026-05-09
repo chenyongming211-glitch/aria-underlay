@@ -1,7 +1,7 @@
 use aria_underlay::engine::diff::{compute_diff, ChangeOp, ChangeSet};
 use aria_underlay::model::{
-    AclAction, AclConfig, AclEndpoint, AclProtocol, AclRule, AdminState, DeviceId,
-    InterfaceConfig, PortMode, VlanConfig,
+    AclAction, AclBinding, AclConfig, AclDirection, AclEndpoint, AclProtocol, AclRule,
+    AdminState, DeviceId, InterfaceConfig, PortMode, VlanConfig,
 };
 use aria_underlay::planner::device_plan::DeviceDesiredState;
 use aria_underlay::state::DeviceShadowState;
@@ -172,6 +172,82 @@ fn extra_acl_deletes_acl() {
     assert_eq!(change_set.ops, vec![ChangeOp::DeleteAcl { acl_id: 3999 }]);
 }
 
+#[test]
+fn missing_acl_binding_creates_binding() {
+    let desired = desired_state_with_acl_bindings(
+        vec![],
+        vec![],
+        vec![acl(3999, "temporary")],
+        vec![acl_binding("GE1/0/13", AclDirection::Inbound, 3999)],
+    );
+    let current = shadow_state_with_acl_bindings(vec![], vec![], vec![], vec![]);
+
+    let change_set = compute_diff(&desired, &current);
+
+    assert_eq!(
+        change_set.ops,
+        vec![ChangeOp::CreateAclBinding(acl_binding(
+            "GE1/0/13",
+            AclDirection::Inbound,
+            3999
+        ))]
+    );
+}
+
+#[test]
+fn changed_acl_binding_updates_binding() {
+    let desired = desired_state_with_acl_bindings(
+        vec![],
+        vec![],
+        vec![acl(3999, "new")],
+        vec![acl_binding("GE1/0/13", AclDirection::Inbound, 3999)],
+    );
+    let current = shadow_state_with_acl_bindings(
+        vec![],
+        vec![],
+        vec![acl(3998, "old")],
+        vec![acl_binding("GE1/0/13", AclDirection::Inbound, 3998)],
+    );
+
+    let change_set = compute_diff(&desired, &current);
+
+    assert_eq!(
+        change_set.ops,
+        vec![
+            ChangeOp::CreateAcl(acl(3999, "new")),
+            ChangeOp::UpdateAclBinding {
+                before: acl_binding("GE1/0/13", AclDirection::Inbound, 3998),
+                after: acl_binding("GE1/0/13", AclDirection::Inbound, 3999),
+            },
+            ChangeOp::DeleteAcl { acl_id: 3998 },
+        ]
+    );
+}
+
+#[test]
+fn extra_acl_binding_deletes_binding() {
+    let desired = desired_state_with_acl_bindings(vec![], vec![], vec![], vec![]);
+    let current = shadow_state_with_acl_bindings(
+        vec![],
+        vec![],
+        vec![acl(3999, "old")],
+        vec![acl_binding("GE1/0/13", AclDirection::Outbound, 3999)],
+    );
+
+    let change_set = compute_diff(&desired, &current);
+
+    assert_eq!(
+        change_set.ops,
+        vec![
+            ChangeOp::DeleteAclBinding {
+                interface_name: "GE1/0/13".into(),
+                direction: AclDirection::Outbound,
+            },
+            ChangeOp::DeleteAcl { acl_id: 3999 },
+        ]
+    );
+}
+
 fn desired_state(vlans: Vec<VlanConfig>, interfaces: Vec<InterfaceConfig>) -> DeviceDesiredState {
     desired_state_with_acls(vlans, interfaces, vec![])
 }
@@ -181,6 +257,15 @@ fn desired_state_with_acls(
     interfaces: Vec<InterfaceConfig>,
     acls: Vec<AclConfig>,
 ) -> DeviceDesiredState {
+    desired_state_with_acl_bindings(vlans, interfaces, acls, vec![])
+}
+
+fn desired_state_with_acl_bindings(
+    vlans: Vec<VlanConfig>,
+    interfaces: Vec<InterfaceConfig>,
+    acls: Vec<AclConfig>,
+    acl_bindings: Vec<AclBinding>,
+) -> DeviceDesiredState {
     DeviceDesiredState {
         device_id: DeviceId("leaf-a".into()),
         vlans: vlans.into_iter().map(|vlan| (vlan.vlan_id, vlan)).collect(),
@@ -189,6 +274,10 @@ fn desired_state_with_acls(
             .map(|interface| (interface.name.clone(), interface))
             .collect(),
         acls: acls.into_iter().map(|acl| (acl.acl_id, acl)).collect(),
+        acl_bindings: acl_bindings
+            .into_iter()
+            .map(|binding| (binding.key(), binding))
+            .collect(),
     }
 }
 
@@ -201,6 +290,15 @@ fn shadow_state_with_acls(
     interfaces: Vec<InterfaceConfig>,
     acls: Vec<AclConfig>,
 ) -> DeviceShadowState {
+    shadow_state_with_acl_bindings(vlans, interfaces, acls, vec![])
+}
+
+fn shadow_state_with_acl_bindings(
+    vlans: Vec<VlanConfig>,
+    interfaces: Vec<InterfaceConfig>,
+    acls: Vec<AclConfig>,
+    acl_bindings: Vec<AclBinding>,
+) -> DeviceShadowState {
     DeviceShadowState {
         device_id: DeviceId("leaf-a".into()),
         revision: 1,
@@ -210,6 +308,10 @@ fn shadow_state_with_acls(
             .map(|interface| (interface.name.clone(), interface))
             .collect(),
         acls: acls.into_iter().map(|acl| (acl.acl_id, acl)).collect(),
+        acl_bindings: acl_bindings
+            .into_iter()
+            .map(|binding| (binding.key(), binding))
+            .collect(),
         warnings: vec![],
     }
 }
@@ -266,5 +368,13 @@ fn acl(acl_id: u16, description: &str) -> AclConfig {
             destination_port_eq: None,
             description: None,
         }],
+    }
+}
+
+fn acl_binding(interface_name: &str, direction: AclDirection, acl_id: u16) -> AclBinding {
+    AclBinding {
+        interface_name: interface_name.into(),
+        direction,
+        acl_id,
     }
 }

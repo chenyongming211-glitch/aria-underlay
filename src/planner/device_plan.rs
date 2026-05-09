@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::intent::SwitchPairIntent;
-use crate::model::{AclConfig, DeviceId, InterfaceConfig, VlanConfig};
+use crate::model::{AclBinding, AclConfig, DeviceId, InterfaceConfig, VlanConfig};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceDesiredState {
@@ -12,6 +12,8 @@ pub struct DeviceDesiredState {
     pub interfaces: BTreeMap<String, InterfaceConfig>,
     #[serde(default)]
     pub acls: BTreeMap<u16, AclConfig>,
+    #[serde(default)]
+    pub acl_bindings: BTreeMap<String, AclBinding>,
 }
 
 pub fn plan_switch_pair(intent: &SwitchPairIntent) -> Vec<DeviceDesiredState> {
@@ -56,6 +58,7 @@ pub fn plan_switch_pair(intent: &SwitchPairIntent) -> Vec<DeviceDesiredState> {
                 vlans,
                 interfaces,
                 acls: BTreeMap::new(),
+                acl_bindings: BTreeMap::new(),
             }
         })
         .collect()

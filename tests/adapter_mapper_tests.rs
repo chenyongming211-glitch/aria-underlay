@@ -6,8 +6,8 @@ use aria_underlay::adapter_client::mapper::{
 use aria_underlay::device::{DeviceInfo, DeviceLifecycleState, HostKeyPolicy};
 use aria_underlay::engine::diff::{ChangeOp, ChangeSet};
 use aria_underlay::model::{
-    AclAction, AclConfig, AclEndpoint, AclProtocol, AclRule, AdminState, DeviceId,
-    DeviceRole, InterfaceConfig, PortMode, Vendor, VlanConfig,
+    AclAction, AclBinding, AclConfig, AclDirection, AclEndpoint, AclProtocol, AclRule,
+    AdminState, DeviceId, DeviceRole, InterfaceConfig, PortMode, Vendor, VlanConfig,
 };
 use aria_underlay::planner::device_plan::DeviceDesiredState;
 use aria_underlay::proto::adapter;
@@ -160,6 +160,11 @@ fn maps_observed_state_to_shadow_state() {
                     description: None,
                 }],
             }],
+            acl_bindings: vec![adapter::AclBinding {
+                interface_name: "GE1/0/1".into(),
+                direction: adapter::AclDirection::Inbound as i32,
+                acl_id: 3999,
+            }],
         },
         vec!["test warning".into()],
     )
@@ -174,6 +179,14 @@ fn maps_observed_state_to_shadow_state() {
     ));
     assert_eq!(shadow.acls[&3999].description.as_deref(), Some("temporary acl"));
     assert_eq!(shadow.acls[&3999].rules[0].action, AclAction::Permit);
+    assert_eq!(
+        shadow.acl_bindings["GE1/0/1|inbound"],
+        AclBinding {
+            interface_name: "GE1/0/1".into(),
+            direction: AclDirection::Inbound,
+            acl_id: 3999,
+        }
+    );
 }
 
 #[test]
@@ -201,6 +214,10 @@ fn maps_desired_state_to_proto() {
             },
         )]),
         acls: BTreeMap::from([(3999, acl(3999))]),
+        acl_bindings: BTreeMap::from([(
+            "GE1/0/1|inbound".into(),
+            acl_binding("GE1/0/1", AclDirection::Inbound, 3999),
+        )]),
     };
 
     let proto = desired_state_to_proto(&desired);
@@ -211,6 +228,12 @@ fn maps_desired_state_to_proto() {
     assert_eq!(proto.acls[0].acl_id, 3999);
     assert_eq!(proto.acls[0].rules[0].protocol, adapter::AclProtocol::Tcp as i32);
     assert_eq!(proto.acls[0].rules[0].destination_port_eq, Some(443));
+    assert_eq!(proto.acl_bindings[0].interface_name, "GE1/0/1");
+    assert_eq!(
+        proto.acl_bindings[0].direction,
+        adapter::AclDirection::Inbound as i32
+    );
+    assert_eq!(proto.acl_bindings[0].acl_id, 3999);
 }
 
 #[test]
@@ -278,6 +301,11 @@ fn derives_state_scope_from_change_set_including_deletes() {
             },
             ChangeOp::CreateAcl(acl(3999)),
             ChangeOp::DeleteAcl { acl_id: 3998 },
+            ChangeOp::CreateAclBinding(acl_binding(
+                "GE1/0/3",
+                AclDirection::Inbound,
+                3999,
+            )),
         ],
     };
 
@@ -285,7 +313,10 @@ fn derives_state_scope_from_change_set_including_deletes() {
 
     assert!(!scope.full);
     assert_eq!(scope.vlan_ids, vec![100, 200]);
-    assert_eq!(scope.interface_names, vec!["GE1/0/1", "GE1/0/2"]);
+    assert_eq!(
+        scope.interface_names,
+        vec!["GE1/0/1", "GE1/0/2", "GE1/0/3"]
+    );
     assert_eq!(scope.acl_ids, vec![3998, 3999]);
 }
 
@@ -348,6 +379,10 @@ fn desired_state() -> DeviceDesiredState {
             },
         )]),
         acls: BTreeMap::from([(3999, acl(3999))]),
+        acl_bindings: BTreeMap::from([(
+            "GE1/0/1|inbound".into(),
+            acl_binding("GE1/0/1", AclDirection::Inbound, 3999),
+        )]),
     }
 }
 
@@ -372,5 +407,13 @@ fn acl(acl_id: u16) -> AclConfig {
             destination_port_eq: Some(443),
             description: None,
         }],
+    }
+}
+
+fn acl_binding(interface_name: &str, direction: AclDirection, acl_id: u16) -> AclBinding {
+    AclBinding {
+        interface_name: interface_name.into(),
+        direction,
+        acl_id,
     }
 }

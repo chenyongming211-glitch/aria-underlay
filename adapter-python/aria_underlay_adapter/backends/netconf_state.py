@@ -135,6 +135,7 @@ def _validate_observed_state_shape(state: dict) -> dict:
     state.setdefault("vlans", [])
     state.setdefault("interfaces", [])
     state.setdefault("acls", [])
+    state.setdefault("acl_bindings", [])
     return state
 
 
@@ -153,6 +154,7 @@ def desired_state_is_empty(desired_state) -> bool:
         not list(getattr(desired_state, "vlans", []))
         and not list(getattr(desired_state, "interfaces", []))
         and not list(getattr(desired_state, "acls", []))
+        and not list(getattr(desired_state, "acl_bindings", []))
     )
 
 
@@ -342,6 +344,28 @@ def verify_acls(desired_state, observed: dict, scope=None) -> None:
             )
 
 
+def verify_acl_bindings(desired_state, observed: dict, scope=None) -> None:
+    observed_by_key = {
+        _acl_binding_key(binding["interface_name"], binding["direction"]): binding
+        for binding in observed["acl_bindings"]
+    }
+    for desired_binding in _desired_acl_bindings_in_scope(desired_state, scope):
+        interface_name = _field(desired_binding, "interface_name")
+        direction = _acl_direction_text(_field(desired_binding, "direction"))
+        key = _acl_binding_key(interface_name, direction)
+        observed_binding = observed_by_key.get(key)
+        if observed_binding is None:
+            raise _verify_mismatch(
+                f"ACL binding {interface_name} {direction} missing from observed scoped state"
+            )
+        expected_acl_id = _field(desired_binding, "acl_id")
+        if observed_binding.get("acl_id") != expected_acl_id:
+            raise _verify_mismatch(
+                f"ACL binding {interface_name} {direction} mismatch: expected "
+                f"ACL {expected_acl_id}, got ACL {observed_binding.get('acl_id')}"
+            )
+
+
 def _desired_vlans_in_scope(desired_state, scope=None):
     if scope is not None and not getattr(scope, "full", False) and not getattr(scope, "vlan_ids", []):
         return
@@ -403,6 +427,30 @@ def _scoped_acl_ids(scope=None, observed=None):
             return []
         return {acl["acl_id"] for acl in observed["acls"]}
     return set(getattr(scope, "acl_ids", []))
+
+
+def _desired_acl_bindings_in_scope(desired_state, scope=None):
+    if (
+        scope is not None
+        and not getattr(scope, "full", False)
+        and not getattr(scope, "interface_names", [])
+        and not getattr(scope, "acl_ids", [])
+    ):
+        return
+    interface_names = (
+        {_interface_alias_key(name) for name in getattr(scope, "interface_names", [])}
+        if scope is not None
+        else set()
+    )
+    acl_ids = set(getattr(scope, "acl_ids", [])) if scope is not None else set()
+    for binding in getattr(desired_state, "acl_bindings", []):
+        if (
+            getattr(scope, "full", False)
+            or scope is None
+            or _interface_alias_key(_field(binding, "interface_name")) in interface_names
+            or _field(binding, "acl_id") in acl_ids
+        ):
+            yield binding
 
 
 def _field(message, name):
@@ -503,6 +551,17 @@ def _acl_protocol_text(value) -> str:
     raise _verify_mismatch(f"unknown ACL protocol during verification: {value!r}")
 
 
+def _acl_direction_text(value) -> str:
+    if isinstance(value, str):
+        return value.strip().lower()
+    numeric = int(value or 0)
+    if numeric == 1:
+        return "inbound"
+    if numeric == 2:
+        return "outbound"
+    raise _verify_mismatch(f"unknown ACL direction during verification: {value!r}")
+
+
 def _acl_endpoint_dict(endpoint) -> dict | None:
     if endpoint is None:
         return None
@@ -523,6 +582,10 @@ def _interface_alias_key(name) -> str:
         if text.startswith(long_name):
             return f"{short_name}{text[len(long_name):]}"
     return text
+
+
+def _acl_binding_key(interface_name: str, direction: str) -> tuple[str, str]:
+    return (_interface_alias_key(interface_name), direction)
 
 
 def _verify_mismatch(message: str) -> AdapterError:

@@ -539,6 +539,7 @@ fn shadow_state(
             .map(|interface| (interface.name.clone(), interface))
             .collect::<BTreeMap<_, _>>(),
         acls: BTreeMap::new(),
+        acl_bindings: BTreeMap::new(),
         warnings: Vec::new(),
     }
 }

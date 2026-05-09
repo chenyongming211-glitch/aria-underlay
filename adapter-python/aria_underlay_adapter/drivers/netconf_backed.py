@@ -329,6 +329,7 @@ class NetconfBackedDriver:
         vlans = state.get("vlans", [])
         interfaces = state.get("interfaces", [])
         acls = state.get("acls", [])
+        acl_bindings = state.get("acl_bindings", [])
         if not isinstance(vlans, list):
             raise _parsed_state_error(f"vlans must be a list, got {type(vlans).__name__}")
         if not isinstance(interfaces, list):
@@ -337,6 +338,10 @@ class NetconfBackedDriver:
             )
         if not isinstance(acls, list):
             raise _parsed_state_error(f"acls must be a list, got {type(acls).__name__}")
+        if not isinstance(acl_bindings, list):
+            raise _parsed_state_error(
+                f"acl_bindings must be a list, got {type(acl_bindings).__name__}"
+            )
 
         return pb2.ObservedDeviceState(
             device_id=device_id,
@@ -351,6 +356,10 @@ class NetconfBackedDriver:
             acls=[
                 self._acl_to_proto(acl, index)
                 for index, acl in enumerate(acls)
+            ],
+            acl_bindings=[
+                self._acl_binding_to_proto(binding, index)
+                for index, binding in enumerate(acl_bindings)
             ],
         )
 
@@ -451,6 +460,23 @@ class NetconfBackedDriver:
             kwargs["description"] = acl.get("description")
         return pb2.AclConfig(**kwargs)
 
+    def _acl_binding_to_proto(self, binding: dict, index: int):
+        if not isinstance(binding, dict):
+            raise _parsed_state_error(
+                f"acl_bindings[{index}] must be an object, got {type(binding).__name__}"
+            )
+        interface_name = binding.get("interface_name")
+        if not isinstance(interface_name, str) or not interface_name.strip():
+            raise _parsed_state_error(f"acl_bindings[{index}].interface_name must be non-empty")
+        return pb2.AclBinding(
+            interface_name=interface_name,
+            direction=_acl_direction_to_proto(
+                binding.get("direction"),
+                f"acl_bindings[{index}].direction",
+            ),
+            acl_id=_parsed_acl_id(binding.get("acl_id"), f"acl_bindings[{index}].acl_id"),
+        )
+
     def _acl_rule_to_proto(self, rule: dict, index: int, *, path: str):
         if not isinstance(rule, dict):
             raise _parsed_state_error(
@@ -509,6 +535,7 @@ def _desired_state_is_empty(desired_state) -> bool:
             not list(getattr(desired_state, "vlans", []))
             and not list(getattr(desired_state, "interfaces", []))
             and not list(getattr(desired_state, "acls", []))
+            and not list(getattr(desired_state, "acl_bindings", []))
         )
     )
 
@@ -601,6 +628,15 @@ def _acl_protocol_to_proto(value, path: str):
         return pb2.ACL_PROTOCOL_UDP
     if normalized == "icmp" or normalized == pb2.ACL_PROTOCOL_ICMP:
         return pb2.ACL_PROTOCOL_ICMP
+    raise _parsed_state_error(f"{path} has unsupported value: {value!r}")
+
+
+def _acl_direction_to_proto(value, path: str):
+    normalized = value.strip().lower() if isinstance(value, str) else value
+    if normalized == "inbound" or normalized == pb2.ACL_DIRECTION_INBOUND:
+        return pb2.ACL_DIRECTION_INBOUND
+    if normalized == "outbound" or normalized == pb2.ACL_DIRECTION_OUTBOUND:
+        return pb2.ACL_DIRECTION_OUTBOUND
     raise _parsed_state_error(f"{path} has unsupported value: {value!r}")
 
 

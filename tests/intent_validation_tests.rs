@@ -4,11 +4,11 @@ use aria_underlay::intent::validation::{
 };
 use aria_underlay::intent::vlan::VlanIntent;
 use aria_underlay::intent::{
-    AclIntent, ManagementEndpointIntent, SwitchIntent, SwitchMemberIntent, SwitchPairIntent,
-    UnderlayDomainIntent, UnderlayTopology,
+    AclBindingIntent, AclIntent, ManagementEndpointIntent, SwitchIntent, SwitchMemberIntent,
+    SwitchPairIntent, UnderlayDomainIntent, UnderlayTopology,
 };
 use aria_underlay::model::{
-    AclAction, AclEndpoint, AclProtocol, AclRule, AdminState, DeviceId, DeviceRole,
+    AclAction, AclDirection, AclEndpoint, AclProtocol, AclRule, AdminState, DeviceId, DeviceRole,
     PortMode, Vendor,
 };
 
@@ -133,6 +133,53 @@ fn domain_rejects_acl_port_on_ip_protocol() {
     assert!(format!("{err}").contains("destination_port_eq but protocol is not tcp/udp"));
 }
 
+#[test]
+fn domain_rejects_acl_binding_to_undeclared_acl() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    intent.acl_bindings = vec![acl_binding_intent(3999)];
+
+    let err = validate_underlay_domain_intent(&intent).unwrap_err();
+
+    assert!(format!("{err}").contains("references undeclared ACL 3999"));
+}
+
+#[test]
+fn domain_rejects_acl_binding_to_unknown_member() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    intent.acls = vec![acl_intent(3999)];
+    intent.acl_bindings = vec![AclBindingIntent {
+        device_id: DeviceId("missing-member".into()),
+        interface_name: "GE1/0/1".into(),
+        direction: AclDirection::Inbound,
+        acl_id: 3999,
+    }];
+
+    let err = validate_underlay_domain_intent(&intent).unwrap_err();
+
+    assert!(format!("{err}").contains("references unknown switch member missing-member"));
+}
+
+#[test]
+fn domain_rejects_duplicate_acl_binding_direction_on_same_interface() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    intent.acls = vec![acl_intent(3999)];
+    intent.acl_bindings = vec![acl_binding_intent(3999), acl_binding_intent(3999)];
+
+    let err = validate_underlay_domain_intent(&intent).unwrap_err();
+
+    assert!(format!("{err}").contains("duplicate ACL binding on GE1/0/1"));
+}
+
+#[test]
+fn domain_accepts_acl_binding_to_declared_acl_and_existing_interface_reference() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    intent.interfaces = vec![];
+    intent.acls = vec![acl_intent(3999)];
+    intent.acl_bindings = vec![acl_binding_intent(3999)];
+
+    validate_underlay_domain_intent(&intent).expect("declared ACL binding should validate");
+}
+
 fn switch_pair_intent() -> SwitchPairIntent {
     SwitchPairIntent {
         pair_id: "pair-a".into(),
@@ -191,6 +238,7 @@ fn domain_intent(topology: UnderlayTopology) -> UnderlayDomainIntent {
             mode: PortMode::Access { vlan_id: 100 },
         }],
         acls: vec![],
+        acl_bindings: vec![],
     }
 }
 
@@ -212,5 +260,14 @@ fn acl_intent(acl_id: u16) -> AclIntent {
             destination_port_eq: Some(443),
             description: None,
         }],
+    }
+}
+
+fn acl_binding_intent(acl_id: u16) -> AclBindingIntent {
+    AclBindingIntent {
+        device_id: DeviceId("member-a".into()),
+        interface_name: "GE1/0/1".into(),
+        direction: AclDirection::Inbound,
+        acl_id,
     }
 }

@@ -149,5 +149,6 @@ fn changed_stack_intent() -> UnderlayDomainIntent {
             mode: PortMode::Access { vlan_id: 100 },
         }],
         acls: vec![],
+        acl_bindings: vec![],
     }
 }

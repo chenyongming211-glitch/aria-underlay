@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from xml.etree import ElementTree
 
+from aria_underlay_adapter.errors import AdapterError
 from aria_underlay_adapter.state_parsers.common import (
     FixtureStateParser,
     _children,
@@ -58,10 +59,20 @@ class H3cStateParser(FixtureStateParser):
             else []
         )
         acls = _parse_real_acls(acl_node) if acl_node is not None else []
+        acl_bindings = (
+            _parse_real_acl_bindings(
+                acl_node,
+                model_hint=self._model_hint,
+                scope=scope,
+            )
+            if acl_node is not None
+            else []
+        )
         return {
             "vlans": _filter_vlans(vlans, scope),
             "interfaces": _filter_interfaces(interfaces, scope),
             "acls": _filter_acls(acls, scope),
+            "acl_bindings": _filter_acl_bindings(acl_bindings, scope),
         }
 
 
@@ -202,6 +213,50 @@ def _parse_acl_rule(rule, acl_id: int) -> dict:
     }
 
 
+def _parse_real_acl_bindings(acl_node, *, model_hint: str, scope) -> list[dict]:
+    bindings = []
+    seen = set()
+    scope_names = _scope_names_by_ifindex(scope)
+    for binding in _children(_first_child(acl_node, "PfilterApply"), "Pfilter"):
+        if _optional_text(binding, "AppObjType") != "1":
+            continue
+        if _optional_text(binding, "AppAclType") != "1":
+            continue
+        raw_acl_id = _required_text(binding, "AppAclGroup", "ACL/Pfilter/AppAclGroup")
+        if raw_acl_id == "0":
+            continue
+        acl_id = _parse_acl_id(raw_acl_id)
+        ifindex = _parse_ifindex_from_text(
+            _required_text(binding, "AppObjIndex", "ACL/Pfilter/AppObjIndex"),
+            "ACL/Pfilter/AppObjIndex",
+        )
+        if not _scope_includes_acl_binding(scope, scope_names, ifindex, acl_id):
+            continue
+        try:
+            interface_name = _interface_name(
+                ifindex,
+                model_hint=model_hint,
+                scope_names=scope_names,
+            )
+        except AdapterError:
+            continue
+        direction = _parse_acl_direction(
+            _required_text(binding, "AppDirection", "ACL/Pfilter/AppDirection")
+        )
+        key = (interface_name, direction)
+        if key in seen:
+            raise _parse_error(f"duplicate ACL binding {interface_name} {direction}")
+        seen.add(key)
+        bindings.append(
+            {
+                "interface_name": interface_name,
+                "direction": direction,
+                "acl_id": acl_id,
+            }
+        )
+    return sorted(bindings, key=lambda item: (item["interface_name"], item["direction"]))
+
+
 def _parse_acl_endpoint(rule, prefix: str) -> dict | None:
     any_value = _optional_text(rule, f"{prefix}Any")
     node = _first_child(rule, f"{prefix}IPv4")
@@ -236,12 +291,16 @@ def _parse_acl_port(rule, prefix: str) -> int | None:
 
 def _parse_ifindex(interface) -> int:
     value = _required_text(interface, "IfIndex", "interface/IfIndex")
+    return _parse_ifindex_from_text(value, "interface/IfIndex")
+
+
+def _parse_ifindex_from_text(value: str, path: str) -> int:
     try:
         ifindex = int(value)
     except ValueError as exc:
-        raise _parse_error(f"invalid IfIndex {value}") from exc
+        raise _parse_error(f"invalid {path} {value}") from exc
     if ifindex <= 0:
-        raise _parse_error(f"invalid IfIndex {ifindex}")
+        raise _parse_error(f"invalid {path} {ifindex}")
     return ifindex
 
 
@@ -305,6 +364,14 @@ def _parse_acl_protocol(value: str) -> str:
     raise _parse_error(f"unsupported ACL protocol {value}")
 
 
+def _parse_acl_direction(value: str) -> str:
+    if value == "1":
+        return "inbound"
+    if value == "2":
+        return "outbound"
+    raise _parse_error(f"unsupported ACL binding direction {value}")
+
+
 def _descriptions_by_ifindex(root) -> dict[int, str]:
     descriptions = {}
     for interface in _descendants(root, "Interface"):
@@ -338,6 +405,27 @@ def _scope_includes_ifindex(scope, scope_names: dict[int, str], ifindex: int) ->
     if not getattr(scope, "interface_names", []):
         return False
     return ifindex in scope_names
+
+
+def _scope_includes_acl_binding(
+    scope,
+    scope_names: dict[int, str],
+    ifindex: int,
+    acl_id: int,
+) -> bool:
+    if scope is None or getattr(scope, "full", False):
+        return True
+    interface_names = getattr(scope, "interface_names", [])
+    acl_ids = getattr(scope, "acl_ids", [])
+    if not interface_names and not acl_ids:
+        return False
+    scoped_acl_ids = set()
+    for value in acl_ids:
+        try:
+            scoped_acl_ids.add(int(value))
+        except (TypeError, ValueError) as exc:
+            raise _parse_error(f"scope.acl_ids contains non-integer value {value!r}") from exc
+    return ifindex in scope_names or acl_id in scoped_acl_ids
 
 
 def _interface_name(ifindex: int, *, model_hint: str, scope_names: dict[int, str]) -> str:
@@ -375,6 +463,41 @@ def _filter_acls(acls: list[dict], scope) -> list[dict]:
     if not scoped_ids:
         return acls
     return [acl for acl in acls if acl["acl_id"] in scoped_ids]
+
+
+def _filter_acl_bindings(bindings: list[dict], scope) -> list[dict]:
+    if scope is None or getattr(scope, "full", False):
+        return bindings
+    scoped_interfaces = {
+        _interface_alias_key(name)
+        for name in getattr(scope, "interface_names", [])
+    }
+    scoped_acl_ids = set()
+    for acl_id in getattr(scope, "acl_ids", []):
+        try:
+            scoped_acl_ids.add(int(acl_id))
+        except (TypeError, ValueError) as exc:
+            raise _parse_error(f"scope.acl_ids contains non-integer value {acl_id!r}") from exc
+    if not scoped_interfaces and not scoped_acl_ids:
+        return bindings
+    return [
+        binding
+        for binding in bindings
+        if _interface_alias_key(binding["interface_name"]) in scoped_interfaces
+        or binding["acl_id"] in scoped_acl_ids
+    ]
+
+
+def _interface_alias_key(name: str) -> str:
+    text = str(name).strip()
+    for long_name, short_name in (
+        ("GigabitEthernet", "GE"),
+        ("Ten-GigabitEthernet", "XGE"),
+        ("FortyGigE", "FGE"),
+    ):
+        if text.startswith(long_name):
+            return f"{short_name}{text[len(long_name):]}"
+    return text
 
 
 def _first_descendant(parent, tag: str):

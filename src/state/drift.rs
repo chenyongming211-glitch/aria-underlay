@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::engine::normalize::normalize_shadow_state;
-use crate::model::{AclConfig, DeviceId, InterfaceConfig, VlanConfig};
+use crate::model::{AclBinding, AclConfig, DeviceId, InterfaceConfig, VlanConfig};
 use crate::state::shadow::DeviceShadowState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +28,9 @@ pub enum DriftType {
     MissingAcl,
     ExtraAcl,
     AclAttributeMismatch,
+    MissingAclBinding,
+    ExtraAclBinding,
+    AclBindingAttributeMismatch,
     AdapterWarning,
 }
 
@@ -154,6 +157,31 @@ pub fn detect_drift(expected: &DeviceShadowState, observed: &DeviceShadowState) 
         }
     }
 
+    for (key, expected_binding) in &expected.acl_bindings {
+        match observed.acl_bindings.get(key) {
+            Some(observed_binding) => {
+                compare_acl_binding(key, expected_binding, observed_binding, &mut findings)
+            }
+            None => findings.push(DriftFinding {
+                drift_type: DriftType::MissingAclBinding,
+                path: format!("acl_bindings.{key}"),
+                expected: Some(acl_binding_summary(expected_binding)),
+                actual: None,
+            }),
+        }
+    }
+
+    for (key, observed_binding) in &observed.acl_bindings {
+        if !expected.acl_bindings.contains_key(key) {
+            findings.push(DriftFinding {
+                drift_type: DriftType::ExtraAclBinding,
+                path: format!("acl_bindings.{key}"),
+                expected: None,
+                actual: Some(acl_binding_summary(observed_binding)),
+            });
+        }
+    }
+
     let warnings = observed.warnings.clone();
     findings.extend(warnings.iter().map(|warning| DriftFinding {
         drift_type: DriftType::AdapterWarning,
@@ -237,6 +265,22 @@ fn interface_summary(interface: &InterfaceConfig) -> String {
     )
 }
 
+fn compare_acl_binding(
+    key: &str,
+    expected: &AclBinding,
+    observed: &AclBinding,
+    findings: &mut Vec<DriftFinding>,
+) {
+    if expected != observed {
+        findings.push(DriftFinding {
+            drift_type: DriftType::AclBindingAttributeMismatch,
+            path: format!("acl_bindings.{key}"),
+            expected: Some(acl_binding_summary(expected)),
+            actual: Some(acl_binding_summary(observed)),
+        });
+    }
+}
+
 fn acl_summary(acl: &AclConfig) -> String {
     format!(
         "id={},name={},description={},rules={}",
@@ -244,5 +288,12 @@ fn acl_summary(acl: &AclConfig) -> String {
         acl.name.as_deref().unwrap_or(""),
         acl.description.as_deref().unwrap_or(""),
         acl.rules.len()
+    )
+}
+
+fn acl_binding_summary(binding: &AclBinding) -> String {
+    format!(
+        "interface={},direction={:?},acl_id={}",
+        binding.interface_name, binding.direction, binding.acl_id
     )
 }
