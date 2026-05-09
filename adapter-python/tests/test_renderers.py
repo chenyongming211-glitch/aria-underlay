@@ -384,6 +384,7 @@ def test_h3c_renderer_builds_ipv4_advanced_acl_edit_config_document():
                             protocol="ip",
                             source=_AclEndpoint("192.0.2.1", "0.0.0.0"),
                             destination=_AclEndpoint("198.51.100.0", "0.0.0.255"),
+                            description="allow test flow",
                         ),
                         _AclRule(
                             sequence=20,
@@ -410,6 +411,7 @@ def test_h3c_renderer_builds_ipv4_advanced_acl_edit_config_document():
     assert [rule.find(f"{{{ns}}}RuleID").text for rule in rules] == ["10", "20"]
     assert rules[0].find(f"{{{ns}}}Action").text == "2"
     assert rules[0].find(f"{{{ns}}}ProtocolType").text == "256"
+    assert rules[0].find(f"{{{ns}}}Description").text == "allow test flow"
     assert rules[0].find(f"{{{ns}}}SrcIPv4/{{{ns}}}SrcIPv4Addr").text == "192.0.2.1"
     assert rules[0].find(f"{{{ns}}}DstIPv4/{{{ns}}}DstIPv4Wildcard").text == "0.0.0.255"
     assert rules[1].find(f"{{{ns}}}Action").text == "1"

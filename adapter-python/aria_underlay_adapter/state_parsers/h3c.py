@@ -209,7 +209,7 @@ def _parse_acl_rule(rule, acl_id: int) -> dict:
         "destination": _parse_acl_endpoint(rule, "Dst"),
         "source_port_eq": _parse_acl_port(rule, "Src"),
         "destination_port_eq": _parse_acl_port(rule, "Dst"),
-        "description": None,
+        "description": _optional_text(rule, "Description"),
     }
 
 

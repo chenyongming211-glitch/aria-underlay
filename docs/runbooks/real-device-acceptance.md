@@ -3,7 +3,7 @@
 ## Scope
 
 This runbook turns the H3C real-switch validation flow into a repeatable
-acceptance procedure. The current production-verified surface is:
+acceptance procedure. The current supported acceptance surface is:
 
 - VLAN create/update through NETCONF running edit-config.
 - VLAN description update.
@@ -11,10 +11,13 @@ acceptance procedure. The current production-verified surface is:
 - Trunk port allowed VLAN update.
 - Access/trunk interface description update.
 - Isolated numeric IPv4 advanced ACL create/read/verify.
+- IPv4 advanced ACL rule description.
 - Interface packet-filter binding for an isolated numeric IPv4 advanced ACL.
 - Scoped get-current-state readback and verify.
 
-The procedure has been exercised against H3C S5560 and S6800 representatives.
+The base VLAN/access/trunk/ACL procedure has been exercised against H3C S5560
+and S6800 representatives; newly documented fields still require the same
+write/readback/cleanup loop before being marked accepted for a specific model.
 It is intentionally scoped; do not use it as proof for admin-down, trunk native
 VLAN, deletes through normal apply, PBR/QoS/NQA/BGP ACL consumers, or
 cross-device atomic behavior.
@@ -292,6 +295,7 @@ export ARIA_UNDERLAY_ACL_RULE_SOURCE=192.0.2.1
 export ARIA_UNDERLAY_ACL_RULE_SOURCE_WILDCARD=0.0.0.0
 export ARIA_UNDERLAY_ACL_RULE_DESTINATION=198.51.100.0
 export ARIA_UNDERLAY_ACL_RULE_DESTINATION_WILDCARD=0.0.0.255
+export ARIA_UNDERLAY_ACL_RULE_DESCRIPTION="aria isolated acl rule"
 ```
 
 3. Run the real apply probe.
@@ -312,6 +316,7 @@ Acceptance requires:
 - The test ACL description matches when configured.
 - The test rule sequence, action, protocol, source, destination, and ports
   match the requested values.
+- The test rule description matches when configured.
 - No ACL binding has been added.
 
 5. Clean up and verify again.

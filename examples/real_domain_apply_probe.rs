@@ -187,7 +187,7 @@ fn desired_acls() -> Result<Vec<AclIntent>, Box<dyn std::error::Error>> {
         destination_port_eq: optional_env("ARIA_UNDERLAY_ACL_RULE_DESTINATION_PORT_EQ")
             .map(|value| value.parse::<u16>())
             .transpose()?,
-        description: None,
+        description: optional_env("ARIA_UNDERLAY_ACL_RULE_DESCRIPTION"),
     };
 
     Ok(vec![AclIntent {

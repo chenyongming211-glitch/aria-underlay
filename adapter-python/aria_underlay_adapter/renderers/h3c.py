@@ -307,6 +307,11 @@ class H3cRenderer:
                 children=[str(_h3c_acl_protocol_code(protocol))],
             ),
         ]
+        description = _optional_text(rule, "description")
+        if description is not None:
+            children.append(
+                XmlElement("Description", namespace=self.ACL_NAMESPACE, children=[description])
+            )
         source = _optional_field(rule, "source")
         if source is not None:
             children.extend(_acl_endpoint_nodes("Src", source, self.ACL_NAMESPACE))
