@@ -49,6 +49,7 @@ use crate::tx::recovery::RecoveryReport;
 use crate::tx::{
     EndpointLockTable, InMemoryTxJournalStore, LockAcquisitionPolicy, TxJournalStore,
 };
+use crate::utils::time::now_unix_secs;
 use crate::UnderlayResult;
 
 #[derive(Debug, Clone)]
@@ -309,6 +310,17 @@ impl AriaUnderlayService {
             self.product_audit_store.clone(),
             self.adapter_pool.clone(),
         )
+    }
+
+    pub async fn recover_timed_out_confirmed_commits(
+        &self,
+    ) -> UnderlayResult<RecoveryReport> {
+        self.recovery_coordinator()
+            .recover_timed_out_confirmed_commits(
+                now_unix_secs(),
+                self.confirmed_commit_timeout_secs as u64,
+            )
+            .await
     }
 
     pub async fn apply_domain_intent(

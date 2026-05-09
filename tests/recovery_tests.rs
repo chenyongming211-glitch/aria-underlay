@@ -268,23 +268,24 @@ async fn recover_timed_out_confirmed_commits_recovers_only_stale_records() {
     let change_set = create_vlan_change_set("leaf-a", 200, "tenant-200");
     journal
         .put(
-            &stamped_journal_record("tx-stale-final-confirm", TxPhase::FinalConfirming, "leaf-a", 1)
-                .with_desired_states(vec![desired])
-                .with_change_sets(vec![change_set])
-                .with_strategy(TransactionStrategy::ConfirmedCommit),
+            &with_timestamp(
+                journal_record("tx-stale-final-confirm", TxPhase::FinalConfirming, "leaf-a")
+                    .with_desired_states(vec![desired])
+                    .with_change_sets(vec![change_set])
+                    .with_strategy(TransactionStrategy::ConfirmedCommit),
+                1,
+            ),
         )
         .expect("stale final-confirming journal record should be stored");
     journal
         .put(
-            &stamped_journal_record(
-                "tx-fresh-final-confirm",
-                TxPhase::FinalConfirming,
-                "leaf-b",
+            &with_timestamp(
+                journal_record("tx-fresh-final-confirm", TxPhase::FinalConfirming, "leaf-b")
+                    .with_desired_states(vec![desired_vlan_state("leaf-b", 300, "tenant-300")])
+                    .with_change_sets(vec![create_vlan_change_set("leaf-b", 300, "tenant-300")])
+                    .with_strategy(TransactionStrategy::ConfirmedCommit),
                 u64::MAX,
-            )
-            .with_desired_states(vec![desired_vlan_state("leaf-b", 300, "tenant-300")])
-            .with_change_sets(vec![create_vlan_change_set("leaf-b", 300, "tenant-300")])
-            .with_strategy(TransactionStrategy::ConfirmedCommit),
+            ),
         )
         .expect("fresh final-confirming journal record should be stored");
 
@@ -784,13 +785,7 @@ fn journal_record(tx_id: &str, phase: TxPhase, device_id: &str) -> TxJournalReco
     .with_phase(phase)
 }
 
-fn stamped_journal_record(
-    tx_id: &str,
-    phase: TxPhase,
-    device_id: &str,
-    updated_at_unix_secs: u64,
-) -> TxJournalRecord {
-    let mut record = journal_record(tx_id, phase, device_id);
+fn with_timestamp(mut record: TxJournalRecord, updated_at_unix_secs: u64) -> TxJournalRecord {
     record.created_at_unix_secs = updated_at_unix_secs;
     record.updated_at_unix_secs = updated_at_unix_secs;
     record

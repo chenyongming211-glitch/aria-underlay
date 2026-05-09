@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::sync::Arc;
 
+use aria_underlay::api::AriaUnderlayService;
+use aria_underlay::device::DeviceInventory;
 use aria_underlay::model::{DeviceId, InterfaceConfig, VlanConfig};
 use aria_underlay::state::{DeviceShadowState, ShadowStateStore};
 use aria_underlay::telemetry::{
@@ -13,6 +15,9 @@ use aria_underlay::tx::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore,
 use aria_underlay::worker::drift_auditor::{
     DriftAuditSchedule, DriftAuditSnapshot, DriftAuditWorker, DriftAuditor,
     DriftObservationSource,
+};
+use aria_underlay::worker::confirmed_commit::{
+    ConfirmedCommitTimeoutWatcher, ConfirmedCommitTimeoutWatcherSchedule,
 };
 use aria_underlay::worker::gc::{
     JournalGc, JournalGcReport, JournalGcSchedule, JournalGcWorker, RetentionPolicy,
@@ -120,6 +125,36 @@ async fn worker_runtime_runs_gc_and_drift_workers_under_one_shutdown() {
     );
 
     fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn worker_runtime_runs_confirmed_commit_timeout_watcher() {
+    let watcher = ConfirmedCommitTimeoutWatcher::new(AriaUnderlayService::new(
+        DeviceInventory::default(),
+    ));
+
+    let report = UnderlayWorkerRuntime::new()
+        .with_confirmed_commit_timeout_watcher(
+            watcher,
+            ConfirmedCommitTimeoutWatcherSchedule {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+        )
+        .run_until_shutdown(async {})
+        .await
+        .expect("runtime should run confirmed-commit timeout watcher");
+
+    let watcher_report = report
+        .confirmed_commit_timeout
+        .expect("runtime should include confirmed-commit timeout watcher report");
+    assert_eq!(watcher_report.runs, 1);
+    assert_eq!(
+        watcher_report
+            .last_report
+            .expect("watcher should retain last report"),
+        RecoveryReport::default()
+    );
 }
 
 #[tokio::test]

@@ -1,4 +1,5 @@
 pub mod daemon;
+pub mod confirmed_commit;
 pub mod deployment;
 pub mod drift_auditor;
 pub mod gc;
