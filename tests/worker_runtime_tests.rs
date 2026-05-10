@@ -341,6 +341,70 @@ async fn worker_runtime_keeps_other_workers_running_when_one_worker_fails() {
 }
 
 #[tokio::test]
+async fn worker_runtime_records_worker_panic_and_keeps_other_workers_running() {
+    let expected_store = Arc::new(aria_underlay::state::InMemoryShadowStateStore::default());
+    expected_store
+        .put(shadow_state("leaf-panic", vec![vlan(100, "prod")], vec![]))
+        .expect("panic test expected state should be stored");
+    let panic_worker = DriftAuditWorker::new(
+        DriftAuditor::from_source(expected_store, Arc::new(PanickingObservationSource)),
+        Arc::new(InMemoryEventSink::default()),
+    );
+
+    let summary_store = Arc::new(InMemoryOperationSummaryStore::default());
+    summary_store
+        .record_event(&recovery_event("req-alert-after-panic", 1))
+        .expect("healthy alert worker input should record");
+    let alert_sink = Arc::new(InMemoryOperationAlertSink::default());
+    let checkpoint = Arc::new(InMemoryOperationAlertCheckpointStore::default());
+
+    let report = UnderlayWorkerRuntime::new()
+        .with_drift_audit(
+            panic_worker,
+            DriftAuditSchedule {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+        )
+        .with_operation_alert_delivery(
+            OperationAlertDeliveryWorker::new(
+                summary_store,
+                alert_sink.clone(),
+                checkpoint,
+            ),
+            OperationAlertDeliverySchedule {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+        )
+        .run_until_shutdown(async {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        })
+        .await
+        .expect("runtime should isolate worker panics");
+
+    assert_eq!(report.worker_errors.len(), 1);
+    assert!(
+        report.worker_errors[0].contains("worker_runtime"),
+        "panic should be recorded as a runtime worker error: {:?}",
+        report.worker_errors
+    );
+    assert!(
+        report.worker_errors[0].contains("panicked"),
+        "panic error should retain join-error context: {:?}",
+        report.worker_errors
+    );
+    assert_eq!(
+        report
+            .operation_alert_delivery
+            .expect("healthy alert worker should still report")
+            .runs,
+        1
+    );
+    assert_eq!(alert_sink.alerts().len(), 1);
+}
+
+#[tokio::test]
 async fn journal_gc_skips_malformed_journal_file_and_continues() {
     let temp = temp_test_dir("gc-skips-malformed-journal");
     let journal_root = temp.join("journal");
@@ -413,6 +477,19 @@ impl DriftObservationSource for PartiallyFailingObservationSource {
             ));
         }
         Ok(shadow_state(&device_id.0, vec![], vec![]))
+    }
+}
+
+#[derive(Debug)]
+struct PanickingObservationSource;
+
+#[async_trait]
+impl DriftObservationSource for PanickingObservationSource {
+    async fn get_observed_state(
+        &self,
+        _device_id: &DeviceId,
+    ) -> UnderlayResult<DeviceShadowState> {
+        panic!("panic observation source")
     }
 }
 
