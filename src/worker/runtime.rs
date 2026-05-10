@@ -207,8 +207,10 @@ impl UnderlayWorkerRuntime {
                 _ = &mut shutdown => {
                     let _ = shutdown_tx.send(true);
                     while let Some(joined) = tasks.join_next().await {
-                        let outcome = joined.map_err(runtime_join_error)?;
-                        record_worker_outcome(outcome, &mut report);
+                        match joined {
+                            Ok(outcome) => record_worker_outcome(outcome, &mut report),
+                            Err(err) => record_worker_join_error(&mut report, err),
+                        }
                     }
                     return Ok(report);
                 }
@@ -224,9 +226,10 @@ impl UnderlayWorkerRuntime {
                             }
                         }
                         Err(err) => {
-                            let _ = shutdown_tx.send(true);
-                            drain_workers(&mut tasks).await;
-                            return Err(runtime_join_error(err));
+                            record_worker_join_error(&mut report, err);
+                            if tasks.is_empty() {
+                                return Ok(report);
+                            }
                         }
                     }
                 }
@@ -320,8 +323,11 @@ fn record_worker_error(
     report.worker_errors.push(format!("{worker_name}: {err}"));
 }
 
-async fn drain_workers(tasks: &mut JoinSet<RuntimeWorkerOutcome>) {
-    while tasks.join_next().await.is_some() {}
+fn record_worker_join_error(
+    report: &mut UnderlayWorkerRuntimeReport,
+    err: tokio::task::JoinError,
+) {
+    record_worker_error(report, "worker_runtime", runtime_join_error(err));
 }
 
 fn runtime_join_error(err: tokio::task::JoinError) -> UnderlayError {
