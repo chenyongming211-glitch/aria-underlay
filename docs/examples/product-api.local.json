@@ -5,10 +5,21 @@
   "product_audit_path": "var/aria-underlay/ops/product-audit.jsonl",
   "static_tokens": {
     "local-viewer-token": {
-      "operator_id": "local-viewer"
+      "operator_id": "local-viewer",
+      "allowed_actions": [
+        "list_operation_summaries",
+        "get_product_status_bundle",
+        "get_worker_reload_status"
+      ]
     },
     "local-auditor-token": {
-      "operator_id": "local-auditor"
+      "operator_id": "local-auditor",
+      "allowed_actions": [
+        "list_operation_summaries",
+        "get_product_status_bundle",
+        "get_worker_reload_status",
+        "export_audit_history"
+      ]
     }
   }
 }

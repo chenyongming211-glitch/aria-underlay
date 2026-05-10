@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Iterable, Protocol
 
 from aria_underlay_adapter.backends.base import BackendCapability
+from aria_underlay_adapter.backends.base import CandidateCommitResult
 from aria_underlay_adapter.backends.base import CandidateDryRunResult
+from aria_underlay_adapter.backends.base import PreparedCandidateResult
 from aria_underlay_adapter.backends.netconf_errors import (
     adapter_error_from_ncclient_exception as _adapter_error_from_ncclient_exception,
 )
@@ -42,6 +45,9 @@ from aria_underlay_adapter.backends.netconf_state import (
 )
 from aria_underlay_adapter.backends.netconf_state import (
     read_running_config as _read_running_config,
+)
+from aria_underlay_adapter.backends.netconf_state import (
+    read_candidate_config as _read_candidate_config,
 )
 from aria_underlay_adapter.backends.netconf_state import scope_is_empty as _scope_is_empty
 from aria_underlay_adapter.backends.netconf_state import scope_summary as _scope_summary
@@ -208,7 +214,7 @@ class NcclientNetconfBackend:
             config_xml=config_xml,
         )
 
-    def prepare_candidate(self, desired_state=None) -> None:
+    def prepare_candidate(self, desired_state=None) -> PreparedCandidateResult:
         if desired_state is None:
             raise AdapterError(
                 code="MISSING_DESIRED_STATE",
@@ -229,7 +235,7 @@ class NcclientNetconfBackend:
                     and capability.supports_rollback_on_error
                 ):
                     self._edit_running_with_rollback_on_error(session, desired_state)
-                    return
+                    return PreparedCandidateResult()
                 if not capability.supports_candidate:
                     raise AdapterError(
                         code="NETCONF_PREPARE_STRATEGY_UNSUPPORTED",
@@ -244,11 +250,13 @@ class NcclientNetconfBackend:
                 self._lock_candidate(session)
                 original_error = None
                 candidate_changed = False
+                candidate_checksum = ""
 
                 try:
                     self._edit_candidate(session, desired_state)
                     candidate_changed = True
                     self._validate_candidate(session)
+                    candidate_checksum = self._candidate_checksum(session)
                 except AdapterError as exc:
                     original_error = exc
                     self._discard_candidate_preserving_error(session, original_error)
@@ -271,6 +279,7 @@ class NcclientNetconfBackend:
                     if candidate_changed:
                         self._discard_candidate_preserving_error(session, unlock_error)
                     raise unlock_error
+                return PreparedCandidateResult(candidate_checksum=candidate_checksum)
         except AdapterError:
             raise
         except Exception as exc:
@@ -414,12 +423,17 @@ class NcclientNetconfBackend:
                 retryable=False,
             ) from exc
 
+    def _candidate_checksum(self, session) -> str:
+        xml = _read_candidate_config(session)
+        return hashlib.sha256(xml.encode("utf-8")).hexdigest()
+
     def commit_candidate(
         self,
         strategy=None,
         tx_id: str | None = None,
         confirm_timeout_secs: int = 120,
-    ) -> None:
+        prepared_candidate_checksum: str | None = None,
+    ) -> CandidateCommitResult:
         if strategy == TRANSACTION_STRATEGY_CONFIRMED_COMMIT:
             if not tx_id:
                 raise AdapterError(
@@ -429,28 +443,14 @@ class NcclientNetconfBackend:
                     raw_error_summary="CommitRequest.context.tx_id is empty",
                     retryable=False,
                 )
-            try:
-                with self._connect() as session:
-                    session.commit(
-                        confirmed=True,
-                        timeout=confirm_timeout_secs or 120,
-                        persist=tx_id,
-                    )
-            except AdapterError:
-                raise
-            except Exception as exc:
-                raise _adapter_operation_error(
-                    code="NETCONF_CONFIRMED_COMMIT_FAILED",
-                    message="NETCONF confirmed-commit failed",
-                    exc=exc,
-                    retryable=True,
-                ) from exc
-            return
 
         if strategy == TRANSACTION_STRATEGY_RUNNING_ROLLBACK_ON_ERROR:
-            return
+            return CandidateCommitResult()
 
-        if strategy != TRANSACTION_STRATEGY_CANDIDATE_COMMIT:
+        if strategy not in (
+            TRANSACTION_STRATEGY_CONFIRMED_COMMIT,
+            TRANSACTION_STRATEGY_CANDIDATE_COMMIT,
+        ):
             raise AdapterError(
                 code="NETCONF_COMMIT_STRATEGY_UNSUPPORTED",
                 message="NETCONF commit strategy is unsupported",
@@ -461,9 +461,118 @@ class NcclientNetconfBackend:
 
         try:
             with self._connect() as session:
-                session.commit()
+                return self._commit_locked_candidate(
+                    session,
+                    strategy=strategy,
+                    tx_id=tx_id,
+                    confirm_timeout_secs=confirm_timeout_secs,
+                    prepared_candidate_checksum=prepared_candidate_checksum,
+                )
         except AdapterError:
             raise
+        except Exception as exc:
+            raise _adapter_error_from_ncclient_exception(exc) from exc
+
+    def _commit_locked_candidate(
+        self,
+        session,
+        *,
+        strategy,
+        tx_id: str | None,
+        confirm_timeout_secs: int,
+        prepared_candidate_checksum: str | None,
+    ) -> CandidateCommitResult:
+        self._lock_candidate(session)
+        committed = False
+        original_error = None
+
+        try:
+            if prepared_candidate_checksum:
+                self._verify_prepared_candidate_checksum(
+                    session,
+                    prepared_candidate_checksum,
+                )
+            self._validate_candidate(session)
+            self._commit_candidate_session(
+                session,
+                strategy=strategy,
+                tx_id=tx_id,
+                confirm_timeout_secs=confirm_timeout_secs,
+            )
+            committed = True
+        except AdapterError as exc:
+            original_error = exc
+        except Exception as exc:
+            original_error = _adapter_error_from_ncclient_exception(exc)
+
+        unlock_error = None
+        try:
+            self._unlock_candidate(session)
+        except AdapterError as exc:
+            unlock_error = exc
+
+        if original_error is not None:
+            if unlock_error is not None:
+                _append_secondary_error(original_error, "unlock", unlock_error)
+            raise original_error
+
+        if unlock_error is not None:
+            if committed:
+                return CandidateCommitResult(
+                    warnings=[
+                        "candidate commit completed, but candidate unlock failed: "
+                        f"{unlock_error.raw_error_summary or unlock_error.message}"
+                    ]
+                )
+            raise unlock_error
+
+        return CandidateCommitResult()
+
+    def _verify_prepared_candidate_checksum(
+        self,
+        session,
+        prepared_candidate_checksum: str,
+    ) -> None:
+        current_checksum = self._candidate_checksum(session)
+        if current_checksum == prepared_candidate_checksum:
+            return
+        raise AdapterError(
+            code="NETCONF_CANDIDATE_CHANGED",
+            message="NETCONF candidate changed after prepare",
+            normalized_error="candidate changed after prepare",
+            raw_error_summary=(
+                f"prepared_candidate_checksum={prepared_candidate_checksum}, "
+                f"current_candidate_checksum={current_checksum}"
+            ),
+            retryable=False,
+        )
+
+    def _commit_candidate_session(
+        self,
+        session,
+        *,
+        strategy,
+        tx_id: str | None,
+        confirm_timeout_secs: int,
+    ) -> None:
+        if strategy == TRANSACTION_STRATEGY_CONFIRMED_COMMIT:
+            try:
+                session.commit(
+                    confirmed=True,
+                    timeout=confirm_timeout_secs or 120,
+                    persist=tx_id,
+                )
+            except Exception as exc:
+                raise _adapter_operation_error(
+                    code="NETCONF_CONFIRMED_COMMIT_FAILED",
+                    message="NETCONF confirmed-commit failed",
+                    exc=exc,
+                    retryable=True,
+                ) from exc
+            return
+
+        try:
+            session.commit()
         except Exception as exc:
             raise _adapter_operation_error(
                 code="NETCONF_COMMIT_FAILED",
@@ -542,6 +651,21 @@ class NcclientNetconfBackend:
             retryable=False,
         )
 
+    def force_unlock(self, lock_owner: str, reason: str | None = None) -> None:
+        session_id = _force_unlock_session_id(lock_owner)
+        try:
+            with self._connect() as session:
+                session.kill_session(session_id)
+        except AdapterError:
+            raise
+        except Exception as exc:
+            raise _adapter_operation_error(
+                code="NETCONF_FORCE_UNLOCK_FAILED",
+                message="NETCONF kill-session failed",
+                exc=exc,
+                retryable=True,
+            ) from exc
+
     def verify_running(self, desired_state, scope=None) -> None:
         if _scope_is_empty(scope):
             return
@@ -575,6 +699,19 @@ def _append_secondary_error(
     secondary_raw = secondary_error.raw_error_summary or secondary_error.message
     original_error.raw_error_summary = (
         f"{original_raw}; {operation} also failed: {secondary_raw}"
+    )
+
+
+def _force_unlock_session_id(lock_owner: str | None) -> str:
+    session_id = (lock_owner or "").strip()
+    if session_id.isdigit() and int(session_id) > 0:
+        return session_id
+    raise AdapterError(
+        code="NETCONF_FORCE_UNLOCK_SESSION_ID_INVALID",
+        message="NETCONF force unlock requires lock_owner to be a NETCONF session-id",
+        normalized_error="invalid force unlock session id",
+        raw_error_summary=f"lock_owner={lock_owner!r}",
+        retryable=False,
     )
 
 

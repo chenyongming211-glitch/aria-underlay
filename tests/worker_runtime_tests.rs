@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::sync::Arc;
 
+use aria_underlay::api::AriaUnderlayService;
+use aria_underlay::device::DeviceInventory;
 use aria_underlay::model::{DeviceId, InterfaceConfig, VlanConfig};
 use aria_underlay::state::{DeviceShadowState, ShadowStateStore};
 use aria_underlay::telemetry::{
@@ -13,6 +15,9 @@ use aria_underlay::tx::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore,
 use aria_underlay::worker::drift_auditor::{
     DriftAuditSchedule, DriftAuditSnapshot, DriftAuditWorker, DriftAuditor,
     DriftObservationSource,
+};
+use aria_underlay::worker::confirmed_commit::{
+    ConfirmedCommitTimeoutWatcher, ConfirmedCommitTimeoutWatcherSchedule,
 };
 use aria_underlay::worker::gc::{
     JournalGc, JournalGcReport, JournalGcSchedule, JournalGcWorker, RetentionPolicy,
@@ -120,6 +125,36 @@ async fn worker_runtime_runs_gc_and_drift_workers_under_one_shutdown() {
     );
 
     fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn worker_runtime_runs_confirmed_commit_timeout_watcher() {
+    let watcher = ConfirmedCommitTimeoutWatcher::new(AriaUnderlayService::new(
+        DeviceInventory::default(),
+    ));
+
+    let report = UnderlayWorkerRuntime::new()
+        .with_confirmed_commit_timeout_watcher(
+            watcher,
+            ConfirmedCommitTimeoutWatcherSchedule {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+        )
+        .run_until_shutdown(async {})
+        .await
+        .expect("runtime should run confirmed-commit timeout watcher");
+
+    let watcher_report = report
+        .confirmed_commit_timeout
+        .expect("runtime should include confirmed-commit timeout watcher report");
+    assert_eq!(watcher_report.runs, 1);
+    assert_eq!(
+        watcher_report
+            .last_report
+            .expect("watcher should retain last report"),
+        RecoveryReport::default()
+    );
 }
 
 #[tokio::test]
@@ -250,8 +285,8 @@ async fn worker_runtime_rejects_invalid_schedule_before_spawning_workers() {
 }
 
 #[tokio::test]
-async fn worker_runtime_keeps_other_workers_running_when_one_worker_fails() {
-    let temp = temp_test_dir("runtime-isolates-worker-error");
+async fn worker_runtime_reports_gc_path_failure_without_worker_error() {
+    let temp = temp_test_dir("runtime-reports-gc-path-failure");
     let failing_journal_root = temp.join("journal-root-is-file");
     fs::create_dir_all(&temp).expect("temp root should be created");
     fs::write(&failing_journal_root, b"not a directory")
@@ -290,10 +325,21 @@ async fn worker_runtime_keeps_other_workers_running_when_one_worker_fails() {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         })
         .await
-        .expect("runtime should isolate worker errors");
+        .expect("runtime should report gc path failures without worker errors");
 
-    assert_eq!(report.worker_errors.len(), 1);
-    assert!(report.worker_errors[0].contains("journal_gc"));
+    assert!(report.worker_errors.is_empty());
+    let gc_report = report
+        .journal_gc
+        .expect("gc worker should still return scheduler report");
+    assert_eq!(gc_report.runs, 1);
+    let gc_run = gc_report
+        .last_report
+        .expect("gc worker should retain the failed run report");
+    assert_eq!(gc_run.journals_failed, 1);
+    assert_eq!(
+        gc_run.failed_journal_refs,
+        vec!["journal-root-is-file".to_string()]
+    );
     assert_eq!(
         report
             .drift_audit
@@ -303,6 +349,70 @@ async fn worker_runtime_keeps_other_workers_running_when_one_worker_fails() {
     );
 
     fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn worker_runtime_records_worker_panic_and_keeps_other_workers_running() {
+    let expected_store = Arc::new(aria_underlay::state::InMemoryShadowStateStore::default());
+    expected_store
+        .put(shadow_state("leaf-panic", vec![vlan(100, "prod")], vec![]))
+        .expect("panic test expected state should be stored");
+    let panic_worker = DriftAuditWorker::new(
+        DriftAuditor::from_source(expected_store, Arc::new(PanickingObservationSource)),
+        Arc::new(InMemoryEventSink::default()),
+    );
+
+    let summary_store = Arc::new(InMemoryOperationSummaryStore::default());
+    summary_store
+        .record_event(&recovery_event("req-alert-after-panic", 1))
+        .expect("healthy alert worker input should record");
+    let alert_sink = Arc::new(InMemoryOperationAlertSink::default());
+    let checkpoint = Arc::new(InMemoryOperationAlertCheckpointStore::default());
+
+    let report = UnderlayWorkerRuntime::new()
+        .with_drift_audit(
+            panic_worker,
+            DriftAuditSchedule {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+        )
+        .with_operation_alert_delivery(
+            OperationAlertDeliveryWorker::new(
+                summary_store,
+                alert_sink.clone(),
+                checkpoint,
+            ),
+            OperationAlertDeliverySchedule {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+        )
+        .run_until_shutdown(async {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        })
+        .await
+        .expect("runtime should isolate worker panics");
+
+    assert_eq!(report.worker_errors.len(), 1);
+    assert!(
+        report.worker_errors[0].contains("worker_runtime"),
+        "panic should be recorded as a runtime worker error: {:?}",
+        report.worker_errors
+    );
+    assert!(
+        report.worker_errors[0].contains("panicked"),
+        "panic error should retain join-error context: {:?}",
+        report.worker_errors
+    );
+    assert_eq!(
+        report
+            .operation_alert_delivery
+            .expect("healthy alert worker should still report")
+            .runs,
+        1
+    );
+    assert_eq!(alert_sink.alerts().len(), 1);
 }
 
 #[tokio::test]
@@ -352,6 +462,50 @@ async fn drift_audit_skips_failed_device_observation_and_continues() {
     assert_eq!(summary.drifted_devices, vec![DeviceId("leaf-a".into())]);
 }
 
+#[tokio::test]
+async fn drift_audit_expected_store_listing_failure_is_reported_without_runtime_error() {
+    let sink = Arc::new(InMemoryEventSink::default());
+    let drift_worker = DriftAuditWorker::new(
+        DriftAuditor::from_source(
+            Arc::new(FailingExpectedShadowStateStore),
+            Arc::new(PartiallyFailingObservationSource),
+        ),
+        sink.clone(),
+    );
+
+    let report = UnderlayWorkerRuntime::new()
+        .with_drift_audit(
+            drift_worker,
+            DriftAuditSchedule {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+        )
+        .run_until_shutdown(async {})
+        .await
+        .expect("runtime should report expected-store listing failures without worker errors");
+
+    assert!(report.worker_errors.is_empty());
+    let summary = report
+        .drift_audit
+        .expect("drift worker should return scheduler report")
+        .last_summary
+        .expect("drift worker should retain the failed listing run summary");
+    assert_eq!(
+        summary.expected_store_listing_error.as_deref(),
+        Some("internal error: expected store list failed")
+    );
+
+    let events = sink.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, UnderlayEventKind::UnderlayDriftAuditCompleted);
+    assert_eq!(events[0].result.as_deref(), Some("partial_failure"));
+    assert_eq!(
+        events[0].error_code.as_deref(),
+        Some("DRIFT_EXPECTED_STORE_LIST_FAILED")
+    );
+}
+
 fn recovery_event(request_id: &str, in_doubt: usize) -> UnderlayEvent {
     UnderlayEvent::recovery_completed(
         request_id,
@@ -378,6 +532,40 @@ impl DriftObservationSource for PartiallyFailingObservationSource {
             ));
         }
         Ok(shadow_state(&device_id.0, vec![], vec![]))
+    }
+}
+
+#[derive(Debug)]
+struct FailingExpectedShadowStateStore;
+
+impl ShadowStateStore for FailingExpectedShadowStateStore {
+    fn get(&self, _device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
+        Ok(None)
+    }
+
+    fn put(&self, state: DeviceShadowState) -> UnderlayResult<DeviceShadowState> {
+        Ok(state)
+    }
+
+    fn remove(&self, _device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
+        Ok(None)
+    }
+
+    fn list(&self) -> UnderlayResult<Vec<DeviceShadowState>> {
+        Err(UnderlayError::Internal("expected store list failed".into()))
+    }
+}
+
+#[derive(Debug)]
+struct PanickingObservationSource;
+
+#[async_trait]
+impl DriftObservationSource for PanickingObservationSource {
+    async fn get_observed_state(
+        &self,
+        _device_id: &DeviceId,
+    ) -> UnderlayResult<DeviceShadowState> {
+        panic!("panic observation source")
     }
 }
 

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,6 +21,20 @@ use crate::{UnderlayError, UnderlayResult};
 
 const RECOVERY_TRANSPORT_RETRY_ATTEMPTS: usize = 3;
 const RECOVERY_TRANSPORT_RETRY_DELAY: Duration = Duration::from_millis(25);
+
+enum RecoveryReportScope {
+    AllRecoverable,
+    AttemptedTxIds,
+}
+
+#[derive(Clone, Copy)]
+enum RecoveryRecordGate {
+    AnyRecoverable,
+    TimedOutConfirmedCommit {
+        now_unix_secs: u64,
+        timeout_secs: u64,
+    },
+}
 
 #[derive(Clone)]
 pub(crate) struct RecoveryCoordinator {
@@ -52,10 +67,54 @@ impl RecoveryCoordinator {
 
     pub(crate) async fn recover_pending_transactions(&self) -> UnderlayResult<RecoveryReport> {
         let recoverable = self.journal.list_recoverable()?;
-        let mut decisions = Vec::with_capacity(recoverable.len());
+        self.recover_records(
+            recoverable,
+            RecoveryReportScope::AllRecoverable,
+            RecoveryRecordGate::AnyRecoverable,
+            "recovery",
+            "recovery",
+        )
+        .await
+    }
+
+    pub(crate) async fn recover_timed_out_confirmed_commits(
+        &self,
+        now_unix_secs: u64,
+        timeout_secs: u64,
+    ) -> UnderlayResult<RecoveryReport> {
+        let recoverable = self.journal.list_recoverable()?;
+        let candidates = recoverable
+            .into_iter()
+            .filter(|record| {
+                is_timed_out_confirmed_commit(record, now_unix_secs, timeout_secs)
+            })
+            .collect::<Vec<_>>();
+        self.recover_records(
+            candidates,
+            RecoveryReportScope::AttemptedTxIds,
+            RecoveryRecordGate::TimedOutConfirmedCommit {
+                now_unix_secs,
+                timeout_secs,
+            },
+            "confirmed-commit-timeout-watcher",
+            "confirmed-commit-timeout-watcher",
+        )
+        .await
+    }
+
+    async fn recover_records(
+        &self,
+        candidates: Vec<TxJournalRecord>,
+        report_scope: RecoveryReportScope,
+        record_gate: RecoveryRecordGate,
+        request_id: &str,
+        trace_id: &str,
+    ) -> UnderlayResult<RecoveryReport> {
+        let mut decisions = Vec::with_capacity(candidates.len());
+        let mut attempted_tx_ids = BTreeSet::new();
         let mut recovered = 0;
 
-        for candidate in recoverable {
+        for candidate in candidates {
             let _endpoint_guard = self.endpoint_locks.acquire_many(&candidate.devices).await?;
             let Some(record) = self.journal.get(&candidate.tx_id)? else {
                 continue;
@@ -65,6 +124,10 @@ impl RecoveryCoordinator {
             if !record.phase.requires_recovery() {
                 continue;
             }
+            if !record_gate.matches(&record) {
+                continue;
+            }
+            attempted_tx_ids.insert(record.tx_id.clone());
 
             match decision.action {
                 RecoveryAction::Noop => {}
@@ -113,7 +176,15 @@ impl RecoveryCoordinator {
             }
         }
 
-        let pending_records = self.journal.list_recoverable()?;
+        let pending_records = match &report_scope {
+            RecoveryReportScope::AllRecoverable => self.journal.list_recoverable()?,
+            RecoveryReportScope::AttemptedTxIds => self
+                .journal
+                .list_recoverable()?
+                .into_iter()
+                .filter(|record| attempted_tx_ids.contains(&record.tx_id))
+                .collect::<Vec<_>>(),
+        };
         let in_doubt = pending_records
             .iter()
             .filter(|record| record.phase == TxPhase::InDoubt)
@@ -130,11 +201,8 @@ impl RecoveryCoordinator {
             tx_ids,
             decisions,
         };
-        self.event_sink.emit(UnderlayEvent::recovery_completed(
-            "recovery",
-            "recovery",
-            &report,
-        ));
+        self.event_sink
+            .emit(UnderlayEvent::recovery_completed(request_id, trace_id, &report));
         Ok(report)
     }
 
@@ -351,4 +419,32 @@ impl RecoveryCoordinator {
 
         Ok(())
     }
+}
+
+impl RecoveryRecordGate {
+    fn matches(self, record: &TxJournalRecord) -> bool {
+        match self {
+            Self::AnyRecoverable => true,
+            Self::TimedOutConfirmedCommit {
+                now_unix_secs,
+                timeout_secs,
+            } => is_timed_out_confirmed_commit(record, now_unix_secs, timeout_secs),
+        }
+    }
+}
+
+fn is_timed_out_confirmed_commit(
+    record: &TxJournalRecord,
+    now_unix_secs: u64,
+    timeout_secs: u64,
+) -> bool {
+    record.strategy == Some(TransactionStrategy::ConfirmedCommit)
+        && matches!(
+            record.phase,
+            TxPhase::Committing
+                | TxPhase::Verifying
+                | TxPhase::FinalConfirming
+                | TxPhase::Recovering
+        )
+        && now_unix_secs.saturating_sub(record.updated_at_unix_secs) >= timeout_secs.max(1)
 }

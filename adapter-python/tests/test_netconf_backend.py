@@ -673,8 +673,9 @@ def test_prepare_candidate_edits_and_validates_when_renderer_is_configured():
     session = _RecordingSession()
     backend = _BackendWithSession(session, config_renderer=_StaticRenderer("<config/>"))
 
-    backend.prepare_candidate(desired_state=object())
+    result = backend.prepare_candidate(desired_state=object())
 
+    assert result.candidate_checksum
     assert session.calls == [
         ("lock", "candidate"),
         (
@@ -687,6 +688,7 @@ def test_prepare_candidate_edits_and_validates_when_renderer_is_configured():
             },
         ),
         ("validate", "candidate"),
+        ("get_config", {"source": "candidate"}),
         ("unlock", "candidate"),
     ]
 
@@ -825,6 +827,7 @@ def test_prepare_candidate_discards_successful_candidate_when_unlock_fails():
             },
         ),
         ("validate", "candidate"),
+        ("get_config", {"source": "candidate"}),
         ("unlock", "candidate"),
         ("discard_changes",),
     ]
@@ -879,7 +882,7 @@ def test_netconf_driver_adapter_recovery_confirms_pending_confirmed_commit():
     assert backend.rollback_calls == []
 
 
-def test_netconf_driver_adapter_recovery_treats_consumed_persist_id_as_committed():
+def test_netconf_driver_adapter_recovery_does_not_infer_consumed_persist_id_from_text():
     backend = _RecordingRecoveryBackend(
         final_confirm_error=AdapterError(
             code="NETCONF_FINAL_CONFIRM_FAILED",
@@ -898,9 +901,11 @@ def test_netconf_driver_adapter_recovery_treats_consumed_persist_id_as_committed
         action=pb2.RECOVERY_ACTION_ADAPTER_RECOVER,
     )
 
-    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_COMMITTED
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_ROLLED_BACK
     assert backend.final_confirm_calls == ["tx-1"]
-    assert backend.rollback_calls == []
+    assert backend.rollback_calls == [
+        (pb2.TRANSACTION_STRATEGY_CONFIRMED_COMMIT, "tx-1")
+    ]
 
 
 def test_netconf_driver_adapter_recovery_uses_structured_consumed_persist_id_code():
@@ -925,10 +930,74 @@ def test_netconf_driver_adapter_recovery_uses_structured_consumed_persist_id_cod
     assert backend.rollback_calls == []
 
 
+def test_netconf_driver_adapter_recovery_uses_structured_consumed_persist_id_normalized_error():
+    backend = _RecordingRecoveryBackend(
+        final_confirm_error=AdapterError(
+            code="NETCONF_FINAL_CONFIRM_FAILED",
+            message="NETCONF final confirm failed",
+            normalized_error="unknown persist-id",
+            raw_error_summary="vendor rpc error",
+            retryable=False,
+        )
+    )
+    driver = NetconfBackedDriver(backend)
+
+    response = driver.recover(
+        tx_id="tx-1",
+        device=pb2.DeviceRef(device_id="leaf-a"),
+        strategy=pb2.TRANSACTION_STRATEGY_CONFIRMED_COMMIT,
+        action=pb2.RECOVERY_ACTION_ADAPTER_RECOVER,
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_COMMITTED
+    assert backend.final_confirm_calls == ["tx-1"]
+    assert backend.rollback_calls == []
+
+
 def test_ncclient_authorization_error_is_not_authentication_failure():
     error = _adapter_error_from_ncclient_exception(RuntimeError("authorization denied"))
 
     assert error.code == "NETCONF_CONNECT_FAILED"
+
+
+def test_commit_candidate_rejects_candidate_changed_after_prepare():
+    prepare_session = _RecordingSession(reply="<candidate>prepared</candidate>")
+    commit_session = _RecordingSession(reply="<candidate>external</candidate>")
+    backend = _BackendWithSessions(
+        [prepare_session, commit_session],
+        config_renderer=_StaticRenderer("<config/>"),
+    )
+
+    prepared = backend.prepare_candidate(desired_state=object())
+
+    with pytest.raises(AdapterError) as exc_info:
+        backend.commit_candidate(
+            strategy=TRANSACTION_STRATEGY_CANDIDATE_COMMIT,
+            tx_id="tx-1",
+            prepared_candidate_checksum=prepared.candidate_checksum,
+        )
+
+    assert exc_info.value.code == "NETCONF_CANDIDATE_CHANGED"
+    assert prepare_session.calls == [
+        ("lock", "candidate"),
+        (
+            "edit_config",
+            {
+                "target": "candidate",
+                "config": "<config/>",
+                "default_operation": "merge",
+                "error_option": "rollback-on-error",
+            },
+        ),
+        ("validate", "candidate"),
+        ("get_config", {"source": "candidate"}),
+        ("unlock", "candidate"),
+    ]
+    assert commit_session.calls == [
+        ("lock", "candidate"),
+        ("get_config", {"source": "candidate"}),
+        ("unlock", "candidate"),
+    ]
 
 
 def test_commit_candidate_commits_for_candidate_strategy():
@@ -940,7 +1009,12 @@ def test_commit_candidate_commits_for_candidate_strategy():
         tx_id="tx-1",
     )
 
-    assert session.calls == [("commit", {})]
+    assert session.calls == [
+        ("lock", "candidate"),
+        ("validate", "candidate"),
+        ("commit", {}),
+        ("unlock", "candidate"),
+    ]
 
 
 def test_commit_candidate_noops_for_running_rollback_on_error_strategy():
@@ -966,6 +1040,8 @@ def test_commit_candidate_starts_confirmed_commit_with_persist_token():
     )
 
     assert session.calls == [
+        ("lock", "candidate"),
+        ("validate", "candidate"),
         (
             "commit",
             {
@@ -973,7 +1049,8 @@ def test_commit_candidate_starts_confirmed_commit_with_persist_token():
                 "timeout": 120,
                 "persist": "tx-1",
             },
-        )
+        ),
+        ("unlock", "candidate"),
     ]
 
 
@@ -1020,7 +1097,12 @@ def test_commit_candidate_maps_device_commit_failure():
     else:
         raise AssertionError("commit failure should fail closed")
 
-    assert session.calls == [("commit", {})]
+    assert session.calls == [
+        ("lock", "candidate"),
+        ("validate", "candidate"),
+        ("commit", {}),
+        ("unlock", "candidate"),
+    ]
 
 
 def test_final_confirm_commits_persist_id():
@@ -1030,6 +1112,52 @@ def test_final_confirm_commits_persist_id():
     backend.final_confirm(tx_id="tx-1")
 
     assert session.calls == [("commit", {"persist_id": "tx-1"})]
+
+
+def test_netconf_driver_force_unlock_commits_when_kill_session_succeeds():
+    session = _RecordingSession()
+    driver = NetconfBackedDriver(_BackendWithSession(session))
+
+    response = driver.force_unlock(
+        device=pb2.DeviceRef(device_id="leaf-a"),
+        lock_owner="42",
+        reason="operator break-glass",
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_COMMITTED
+    assert response.result.changed is True
+    assert list(response.result.errors) == []
+
+
+def test_force_unlock_sends_kill_session_rpc():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    backend.force_unlock(lock_owner="42", reason="operator break-glass")
+
+    assert session.calls == [("kill_session", "42")]
+
+
+def test_force_unlock_rejects_missing_lock_owner_before_device_call():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    with pytest.raises(AdapterError) as exc_info:
+        backend.force_unlock(lock_owner="", reason="operator break-glass")
+
+    assert exc_info.value.code == "NETCONF_FORCE_UNLOCK_SESSION_ID_INVALID"
+    assert session.calls == []
+
+
+def test_force_unlock_maps_kill_session_rpc_failure():
+    session = _RecordingSession(fail_kill_session=True)
+    backend = _BackendWithSession(session)
+
+    with pytest.raises(AdapterError) as exc_info:
+        backend.force_unlock(lock_owner="42", reason="operator break-glass")
+
+    assert exc_info.value.code == "NETCONF_FORCE_UNLOCK_FAILED"
+    assert exc_info.value.retryable is True
 
 
 def test_rollback_candidate_discards_candidate_strategy():
@@ -1488,6 +1616,19 @@ class _BackendWithSession(NcclientNetconfBackend):
         return self._session
 
 
+class _BackendWithSessions(NcclientNetconfBackend):
+    def __init__(self, sessions, config_renderer=None, state_parser=None):
+        super().__init__(
+            host="127.0.0.1",
+            config_renderer=config_renderer,
+            state_parser=state_parser,
+        )
+        object.__setattr__(self, "_sessions", list(sessions))
+
+    def _connect(self):
+        return self._sessions.pop(0)
+
+
 class _FakeManager:
     def __init__(self, sessions):
         self.sessions = list(sessions)
@@ -1524,6 +1665,7 @@ class _RecordingSession:
         fail_commit=False,
         fail_discard=False,
         fail_unlock=False,
+        fail_kill_session=False,
         reply="<data/>",
         server_capabilities=None,
     ):
@@ -1532,6 +1674,7 @@ class _RecordingSession:
         self.fail_commit = fail_commit
         self.fail_discard = fail_discard
         self.fail_unlock = fail_unlock
+        self.fail_kill_session = fail_kill_session
         self.reply = reply
         self.server_capabilities = server_capabilities or [BASE_10, CANDIDATE]
 
@@ -1569,6 +1712,11 @@ class _RecordingSession:
 
     def cancel_commit(self, **kwargs):
         self.calls.append(("cancel_commit", kwargs))
+
+    def kill_session(self, session_id):
+        self.calls.append(("kill_session", session_id))
+        if self.fail_kill_session:
+            raise RuntimeError("kill-session failed")
 
     def get_config(self, **kwargs):
         self.calls.append(("get_config", kwargs))

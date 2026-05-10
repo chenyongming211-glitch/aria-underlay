@@ -125,6 +125,10 @@ impl UnderlayEvent {
             "artifacts_deleted".into(),
             report.artifacts_deleted.to_string(),
         );
+        fields.insert(
+            "artifacts_failed".into(),
+            report.artifacts_failed.to_string(),
+        );
         fields.insert("deleted_total".into(), report.deleted_total().to_string());
         if !report.journal_deleted_tx_ids.is_empty() {
             fields.insert(
@@ -142,6 +146,12 @@ impl UnderlayEvent {
             fields.insert(
                 "failed_journal_refs".into(),
                 report.failed_journal_refs.join(","),
+            );
+        }
+        if !report.failed_artifact_refs.is_empty() {
+            fields.insert(
+                "failed_artifact_refs".into(),
+                report.failed_artifact_refs.join(","),
             );
         }
 
@@ -166,9 +176,28 @@ impl UnderlayEvent {
         audited_device_count: usize,
         drifted_devices: &[DeviceId],
     ) -> Self {
+        Self::drift_audit_completed_with_failures(
+            request_id,
+            trace_id,
+            audited_device_count,
+            drifted_devices,
+            &[],
+            None,
+        )
+    }
+
+    pub fn drift_audit_completed_with_failures(
+        request_id: impl Into<String>,
+        trace_id: impl Into<String>,
+        audited_device_count: usize,
+        drifted_devices: &[DeviceId],
+        failed_devices: &[DeviceId],
+        expected_store_listing_error: Option<&str>,
+    ) -> Self {
         let mut fields = BTreeMap::new();
         fields.insert("audited_device_count".into(), audited_device_count.to_string());
         fields.insert("drifted_device_count".into(), drifted_devices.len().to_string());
+        fields.insert("failed_device_count".into(), failed_devices.len().to_string());
         if !drifted_devices.is_empty() {
             fields.insert(
                 "drifted_devices".into(),
@@ -179,6 +208,22 @@ impl UnderlayEvent {
                     .join(","),
             );
         }
+        if !failed_devices.is_empty() {
+            fields.insert(
+                "failed_devices".into(),
+                failed_devices
+                    .iter()
+                    .map(|device_id| device_id.0.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+        }
+        if let Some(error) = expected_store_listing_error {
+            fields.insert("expected_store_listing_failed".into(), "true".into());
+            fields.insert("expected_store_listing_error".into(), error.into());
+        }
+
+        let has_failures = !failed_devices.is_empty() || expected_store_listing_error.is_some();
 
         Self {
             kind: UnderlayEventKind::UnderlayDriftAuditCompleted,
@@ -188,13 +233,16 @@ impl UnderlayEvent {
             device_id: None,
             phase: None,
             strategy: None,
-            result: Some(if drifted_devices.is_empty() {
+            result: Some(if has_failures {
+                "partial_failure".into()
+            } else if drifted_devices.is_empty() {
                 "clean".into()
             } else {
                 "drift_detected".into()
             }),
-            error_code: None,
-            error_message: None,
+            error_code: expected_store_listing_error
+                .map(|_| "DRIFT_EXPECTED_STORE_LIST_FAILED".into()),
+            error_message: expected_store_listing_error.map(str::to_string),
             fields,
         }
     }

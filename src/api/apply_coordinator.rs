@@ -517,7 +517,7 @@ impl ApplyCoordinator {
             *journal_record = journal_record.clone().with_strategy(strategy);
             self.journal.put(journal_record)?;
 
-            self.prepare_endpoint(
+            let prepared_candidate_checksum = self.prepare_endpoint(
                 &mut client,
                 &managed.info,
                 &rpc_context,
@@ -530,6 +530,7 @@ impl ApplyCoordinator {
                 &managed.info,
                 &rpc_context,
                 strategy,
+                prepared_candidate_checksum.as_deref(),
                 journal_record,
             )
             .await?;
@@ -564,19 +565,19 @@ impl ApplyCoordinator {
         context: &RequestContext,
         desired: &DeviceDesiredState,
         journal_record: &mut TxJournalRecord,
-    ) -> UnderlayResult<()> {
+    ) -> UnderlayResult<Option<String>> {
         let prepare = match client.prepare_with_context(device, context, desired).await {
             Ok(prepare) => prepare,
             Err(err) => {
-                return self
-                    .rollback_after_endpoint_failure_preserving_primary(
-                        client,
-                        device,
-                        context,
-                        journal_record,
-                        err,
-                    )
-                    .await;
+                self.rollback_after_endpoint_failure_preserving_primary(
+                    client,
+                    device,
+                    context,
+                    journal_record,
+                    err,
+                )
+                .await?;
+                return Ok(None);
             }
         };
         if prepare.status != AdapterOperationStatus::Prepared {
@@ -586,19 +587,19 @@ impl ApplyCoordinator {
                 retryable: false,
                 errors: Vec::new(),
             };
-            return self
-                .rollback_after_endpoint_failure_preserving_primary(
-                    client,
-                    device,
-                    context,
-                    journal_record,
-                    err,
-                )
-                .await;
+            self.rollback_after_endpoint_failure_preserving_primary(
+                client,
+                device,
+                context,
+                journal_record,
+                err,
+            )
+            .await?;
+            return Ok(None);
         }
         *journal_record = journal_record.clone().with_phase(TxPhase::Prepared);
         self.journal.put(journal_record)?;
-        Ok(())
+        Ok(prepare.prepared_candidate_checksum)
     }
 
     async fn commit_endpoint(
@@ -607,6 +608,7 @@ impl ApplyCoordinator {
         device: &DeviceInfo,
         context: &RequestContext,
         strategy: TransactionStrategy,
+        prepared_candidate_checksum: Option<&str>,
         journal_record: &mut TxJournalRecord,
     ) -> UnderlayResult<()> {
         *journal_record = journal_record.clone().with_phase(TxPhase::Committing);
@@ -617,6 +619,7 @@ impl ApplyCoordinator {
                 context,
                 strategy,
                 self.confirmed_commit_timeout_secs,
+                prepared_candidate_checksum,
             )
             .await
         {

@@ -33,6 +33,7 @@ pub struct DriftAuditRunSummary {
     pub audited_devices: usize,
     pub failed_devices: Vec<DeviceId>,
     pub drifted_devices: Vec<DeviceId>,
+    pub expected_store_listing_error: Option<String>,
     pub reports: Vec<DriftReport>,
 }
 
@@ -54,7 +55,15 @@ impl DriftAuditRunSummary {
             audited_devices,
             failed_devices,
             drifted_devices,
+            expected_store_listing_error: None,
             reports,
+        }
+    }
+
+    fn from_expected_store_listing_error(error: UnderlayError) -> Self {
+        Self {
+            expected_store_listing_error: Some(error.to_string()),
+            ..Default::default()
         }
     }
 }
@@ -116,7 +125,14 @@ impl DriftAuditor {
         if let (Some(expected_store), Some(observed_source)) =
             (&self.expected_store, &self.observed_source)
         {
-            let expected_states = expected_store.list()?;
+            let expected_states = match expected_store.list() {
+                Ok(states) => states,
+                Err(error) => {
+                    return Ok(DriftAuditRunSummary::from_expected_store_listing_error(
+                        error,
+                    ));
+                }
+            };
             let mut reports = Vec::new();
             let mut failed_devices = Vec::new();
             for expected in &expected_states {
@@ -184,11 +200,13 @@ impl DriftAuditWorker {
                 report,
             ));
         }
-        self.event_sink.emit(UnderlayEvent::drift_audit_completed(
+        self.event_sink.emit(UnderlayEvent::drift_audit_completed_with_failures(
             self.request_id.clone(),
             self.trace_id.clone(),
             summary.audited_devices,
             &summary.drifted_devices,
+            &summary.failed_devices,
+            summary.expected_store_listing_error.as_deref(),
         ));
         Ok(summary)
     }

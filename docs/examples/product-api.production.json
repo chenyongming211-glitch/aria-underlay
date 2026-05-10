@@ -5,10 +5,31 @@
   "product_audit_path": "/var/lib/aria-underlay/ops/product-audit.jsonl",
   "static_tokens": {
     "replace-with-internal-viewer-token": {
-      "operator_id": "internal-viewer"
+      "operator_id": "internal-viewer",
+      "allowed_actions": [
+        "list_operation_summaries",
+        "get_product_status_bundle",
+        "get_worker_reload_status"
+      ]
     },
     "replace-with-internal-admin-token": {
-      "operator_id": "internal-admin"
+      "operator_id": "internal-admin",
+      "allowed_actions": [
+        "list_operation_summaries",
+        "list_alerts",
+        "list_in_doubt_transactions",
+        "acknowledge_alert",
+        "resolve_alert",
+        "suppress_alert",
+        "expire_alert",
+        "force_resolve_transaction",
+        "force_unlock_session",
+        "change_retention_policy",
+        "change_daemon_schedule",
+        "get_product_status_bundle",
+        "get_worker_reload_status",
+        "export_audit_history"
+      ]
     }
   }
 }

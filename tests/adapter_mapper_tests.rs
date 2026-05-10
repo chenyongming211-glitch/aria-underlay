@@ -350,12 +350,17 @@ fn maps_adapter_result_success() {
         errors: vec![],
         rollback_artifact: None,
         normalized_state: None,
+        prepared_candidate_checksum: "sha256:test".into(),
     })
     .expect("result should map");
 
     assert_eq!(outcome.status, AdapterOperationStatus::Prepared);
     assert!(outcome.changed);
     assert_eq!(outcome.warnings, vec!["degraded"]);
+    assert_eq!(
+        outcome.prepared_candidate_checksum.as_deref(),
+        Some("sha256:test")
+    );
 }
 
 #[test]
@@ -373,6 +378,7 @@ fn maps_adapter_result_error() {
         }],
         rollback_artifact: None,
         normalized_state: None,
+        prepared_candidate_checksum: String::new(),
     })
     .expect_err("adapter error should map to UnderlayError");
 

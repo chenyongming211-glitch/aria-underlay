@@ -1,5 +1,10 @@
 # 当前缺陷 / 技术债清单 — 2026-05-07
 
+> 历史快照。2026-05-09 已重新按当前 `main` 代码复核并拆分
+> confirmed-open / intentional-boundary / stale-fixed：见
+> `docs/bug-inventory-current-2026-05-09.md`。本文保留 05-07 复核过程和历史证据，
+> 不再作为当前 open bug 队列使用。
+
 ## 当前需求边界
 
 目标部署形态：

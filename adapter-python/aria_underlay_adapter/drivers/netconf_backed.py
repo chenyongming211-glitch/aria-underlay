@@ -96,7 +96,7 @@ class NetconfBackedDriver:
     def prepare(self, request):
         try:
             backend = self._backend_for_prepare(request)
-            backend.prepare_candidate(getattr(request, "desired_state", None))
+            prepared = backend.prepare_candidate(getattr(request, "desired_state", None))
         except AdapterError as error:
             return pb2.PrepareResponse(result=_failed_result(error))
         except Exception as exc:
@@ -106,6 +106,11 @@ class NetconfBackedDriver:
             result=pb2.AdapterResult(
                 status=pb2.ADAPTER_OPERATION_STATUS_PREPARED,
                 changed=True,
+                prepared_candidate_checksum=getattr(
+                    prepared,
+                    "candidate_checksum",
+                    "",
+                ),
             )
         )
 
@@ -154,12 +159,20 @@ class NetconfBackedDriver:
                 object.__setattr__(backend, name, value)
             return backend
 
-    def commit(self, tx_id, device, strategy=None, confirm_timeout_secs=120):
+    def commit(
+        self,
+        tx_id,
+        device,
+        strategy=None,
+        confirm_timeout_secs=120,
+        prepared_candidate_checksum: str | None = None,
+    ):
         try:
-            self._backend.commit_candidate(
+            result = self._backend.commit_candidate(
                 strategy=strategy,
                 tx_id=tx_id,
                 confirm_timeout_secs=confirm_timeout_secs or 120,
+                prepared_candidate_checksum=prepared_candidate_checksum,
             )
         except AdapterError as error:
             return pb2.CommitResponse(result=_failed_result(error))
@@ -174,6 +187,7 @@ class NetconfBackedDriver:
                     else pb2.ADAPTER_OPERATION_STATUS_COMMITTED
                 ),
                 changed=True,
+                warnings=list(getattr(result, "warnings", [])),
             )
         )
 
@@ -303,12 +317,30 @@ class NetconfBackedDriver:
         )
 
     def force_unlock(self, device, lock_owner, reason):
-        raise AdapterError(
-            code="NOT_IMPLEMENTED",
-            message="force unlock is not implemented for NETCONF backend",
-            normalized_error="force unlock operation missing",
-            raw_error_summary="NETCONF kill-session support is not implemented yet",
-            retryable=False,
+        try:
+            self._backend.force_unlock(lock_owner=lock_owner, reason=reason)
+        except AdapterError as error:
+            return pb2.ForceUnlockResponse(result=_failed_result(error))
+        except AttributeError as exc:
+            return pb2.ForceUnlockResponse(
+                result=_failed_result(
+                    AdapterError(
+                        code="NOT_IMPLEMENTED",
+                        message="force unlock is not implemented for selected NETCONF backend",
+                        normalized_error="force unlock operation missing",
+                        raw_error_summary=str(exc),
+                        retryable=False,
+                    )
+                )
+            )
+        except Exception as exc:
+            return pb2.ForceUnlockResponse(result=_failed_result(_unexpected_error(exc)))
+
+        return pb2.ForceUnlockResponse(
+            result=pb2.AdapterResult(
+                status=pb2.ADAPTER_OPERATION_STATUS_COMMITTED,
+                changed=True,
+            )
         )
 
     def _backend_kind_to_proto(self, backend: str):
@@ -706,17 +738,4 @@ def _persist_id_already_consumed(error: AdapterError) -> bool:
         "unknown persist-id",
     }:
         return True
-
-    text = " ".join(
-        part
-        for part in [
-            error.code,
-            error.message,
-            error.normalized_error,
-            error.raw_error_summary,
-        ]
-        if part
-    ).lower()
-    return "persist" in text and any(
-        marker in text for marker in ["unknown", "not found", "consumed"]
-    )
+    return False

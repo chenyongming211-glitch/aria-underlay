@@ -1,10 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::{UnderlayError, UnderlayResult};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AdminAction {
     ListOperationSummaries,
     ListAlerts,
@@ -20,6 +21,29 @@ pub enum AdminAction {
     GetProductStatusBundle,
     GetWorkerReloadStatus,
     ExportAuditHistory,
+}
+
+impl AdminAction {
+    pub fn all_actions() -> BTreeSet<Self> {
+        [
+            Self::ListOperationSummaries,
+            Self::ListAlerts,
+            Self::ListInDoubtTransactions,
+            Self::AcknowledgeAlert,
+            Self::ResolveAlert,
+            Self::SuppressAlert,
+            Self::ExpireAlert,
+            Self::ForceResolveTransaction,
+            Self::ForceUnlockSession,
+            Self::ChangeRetentionPolicy,
+            Self::ChangeDaemonSchedule,
+            Self::GetProductStatusBundle,
+            Self::GetWorkerReloadStatus,
+            Self::ExportAuditHistory,
+        ]
+        .into_iter()
+        .collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,7 +94,7 @@ impl AuthorizationPolicy for PermitAllAuthorizationPolicy {
 
 #[derive(Debug, Default)]
 pub struct StaticAuthorizationPolicy {
-    operators: BTreeSet<String>,
+    operators: BTreeMap<String, BTreeSet<AdminAction>>,
 }
 
 impl StaticAuthorizationPolicy {
@@ -79,17 +103,37 @@ impl StaticAuthorizationPolicy {
     }
 
     pub fn with_operator(mut self, operator_id: impl Into<String>) -> Self {
-        self.operators.insert(operator_id.into());
+        self.operators
+            .insert(operator_id.into(), AdminAction::all_actions());
+        self
+    }
+
+    pub fn with_allowed_actions<I>(
+        mut self,
+        operator_id: impl Into<String>,
+        actions: I,
+    ) -> Self
+    where
+        I: IntoIterator<Item = AdminAction>,
+    {
+        self.operators
+            .insert(operator_id.into(), actions.into_iter().collect());
         self
     }
 }
 
 impl AuthorizationPolicy for StaticAuthorizationPolicy {
     fn authorize(&self, request: &AuthorizationRequest) -> UnderlayResult<AuthorizationDecision> {
-        if !self.operators.contains(&request.operator_id) {
+        let Some(allowed_actions) = self.operators.get(&request.operator_id) else {
             return Err(UnderlayError::AuthorizationDenied(format!(
                 "operator {} is not registered for local admin operations",
                 request.operator_id
+            )));
+        };
+        if !allowed_actions.contains(&request.action) {
+            return Err(UnderlayError::AuthorizationDenied(format!(
+                "operator {} is not authorized for {:?}",
+                request.operator_id, request.action
             )));
         }
         Ok(AuthorizationDecision {

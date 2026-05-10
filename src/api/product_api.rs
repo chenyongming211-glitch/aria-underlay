@@ -14,7 +14,7 @@ use crate::api::product_ops::{
     ProductStatusBundleResponse,
 };
 use crate::api::worker_config_admin::WorkerConfigAdminResponse;
-use crate::authz::PermitAllAuthorizationPolicy;
+use crate::authz::{AdminAction, StaticAuthorizationPolicy};
 use crate::telemetry::{OperationSummaryStore, ProductAuditStore};
 use crate::worker::daemon::WorkerReloadCheckpoint;
 use crate::{UnderlayError, UnderlayResult};
@@ -46,6 +46,7 @@ pub struct ProductApiRequestMetadata {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductSession {
     pub operator_id: String,
+    pub allowed_actions: std::collections::BTreeSet<AdminAction>,
 }
 
 pub trait ProductSessionExtractor: std::fmt::Debug + Send + Sync {
@@ -179,9 +180,14 @@ impl ProductOpsApi {
         Ok(api_response(metadata, session, trace_id, body))
     }
 
-    fn manager_for_session(&self, _session: &ProductSession) -> ProductOpsManager {
+    fn manager_for_session(&self, session: &ProductSession) -> ProductOpsManager {
         ProductOpsManager::new(
-            Arc::new(PermitAllAuthorizationPolicy),
+            Arc::new(
+                StaticAuthorizationPolicy::new().with_allowed_actions(
+                    session.operator_id.clone(),
+                    session.allowed_actions.clone(),
+                ),
+            ),
             self.operation_summary_store.clone(),
             self.product_audit_store.clone(),
         )
@@ -211,7 +217,10 @@ impl ProductSessionExtractor for HeaderProductSessionExtractor {
         validate_non_empty("product api request_id", &metadata.request_id)?;
         let operator_id = header_value(&metadata.headers, &self.operator_header)
             .ok_or_else(|| missing_header_error(&self.operator_header))?;
-        Ok(ProductSession { operator_id })
+        Ok(ProductSession {
+            operator_id,
+            allowed_actions: AdminAction::all_actions(),
+        })
     }
 }
 

@@ -3,6 +3,10 @@ use std::future::Future;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
+use crate::worker::confirmed_commit::{
+    ConfirmedCommitTimeoutWatcher, ConfirmedCommitTimeoutWatcherSchedule,
+    ConfirmedCommitTimeoutWatcherSchedulerReport,
+};
 use crate::worker::drift_auditor::{
     DriftAuditSchedule, DriftAuditSchedulerReport, DriftAuditWorker,
 };
@@ -24,6 +28,10 @@ use crate::{UnderlayError, UnderlayResult};
 #[derive(Debug, Default)]
 pub struct UnderlayWorkerRuntime {
     journal_gc: Option<(JournalGcWorker, JournalGcSchedule)>,
+    confirmed_commit_timeout: Option<(
+        ConfirmedCommitTimeoutWatcher,
+        ConfirmedCommitTimeoutWatcherSchedule,
+    )>,
     drift_audit: Option<(DriftAuditWorker, DriftAuditSchedule)>,
     operation_alert_delivery:
         Option<(OperationAlertDeliveryWorker, OperationAlertDeliverySchedule)>,
@@ -36,6 +44,7 @@ pub struct UnderlayWorkerRuntime {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UnderlayWorkerRuntimeReport {
     pub journal_gc: Option<JournalGcSchedulerReport>,
+    pub confirmed_commit_timeout: Option<ConfirmedCommitTimeoutWatcherSchedulerReport>,
     pub drift_audit: Option<DriftAuditSchedulerReport>,
     pub operation_alert_delivery: Option<OperationAlertDeliverySchedulerReport>,
     pub operation_summary_compaction: Option<OperationSummaryCompactionSchedulerReport>,
@@ -45,6 +54,7 @@ pub struct UnderlayWorkerRuntimeReport {
 
 enum RuntimeWorkerOutcome {
     JournalGc(UnderlayResult<JournalGcSchedulerReport>),
+    ConfirmedCommitTimeout(UnderlayResult<ConfirmedCommitTimeoutWatcherSchedulerReport>),
     DriftAudit(UnderlayResult<DriftAuditSchedulerReport>),
     OperationAlertDelivery(UnderlayResult<OperationAlertDeliverySchedulerReport>),
     OperationSummaryCompaction(UnderlayResult<OperationSummaryCompactionSchedulerReport>),
@@ -62,6 +72,15 @@ impl UnderlayWorkerRuntime {
         schedule: JournalGcSchedule,
     ) -> Self {
         self.journal_gc = Some((worker, schedule));
+        self
+    }
+
+    pub fn with_confirmed_commit_timeout_watcher(
+        mut self,
+        worker: ConfirmedCommitTimeoutWatcher,
+        schedule: ConfirmedCommitTimeoutWatcherSchedule,
+    ) -> Self {
+        self.confirmed_commit_timeout = Some((worker, schedule));
         self
     }
 
@@ -125,6 +144,17 @@ impl UnderlayWorkerRuntime {
             });
         }
 
+        if let Some((worker, schedule)) = self.confirmed_commit_timeout {
+            let worker_shutdown = shutdown_rx.clone();
+            tasks.spawn(async move {
+                RuntimeWorkerOutcome::ConfirmedCommitTimeout(
+                    worker
+                        .run_periodic_until_shutdown(schedule, wait_for_shutdown(worker_shutdown))
+                        .await,
+                )
+            });
+        }
+
         if let Some((worker, schedule)) = self.drift_audit {
             let worker_shutdown = shutdown_rx.clone();
             tasks.spawn(async move {
@@ -177,8 +207,10 @@ impl UnderlayWorkerRuntime {
                 _ = &mut shutdown => {
                     let _ = shutdown_tx.send(true);
                     while let Some(joined) = tasks.join_next().await {
-                        let outcome = joined.map_err(runtime_join_error)?;
-                        record_worker_outcome(outcome, &mut report);
+                        match joined {
+                            Ok(outcome) => record_worker_outcome(outcome, &mut report),
+                            Err(err) => record_worker_join_error(&mut report, err),
+                        }
                     }
                     return Ok(report);
                 }
@@ -194,9 +226,10 @@ impl UnderlayWorkerRuntime {
                             }
                         }
                         Err(err) => {
-                            let _ = shutdown_tx.send(true);
-                            drain_workers(&mut tasks).await;
-                            return Err(runtime_join_error(err));
+                            record_worker_join_error(&mut report, err);
+                            if tasks.is_empty() {
+                                return Ok(report);
+                            }
                         }
                     }
                 }
@@ -207,6 +240,12 @@ impl UnderlayWorkerRuntime {
     fn validate_schedules(&self) -> UnderlayResult<()> {
         if let Some((_, schedule)) = &self.journal_gc {
             validate_interval("journal GC", schedule.interval_secs)?;
+        }
+        if let Some((_, schedule)) = &self.confirmed_commit_timeout {
+            validate_interval(
+                "confirmed-commit timeout watcher",
+                schedule.interval_secs,
+            )?;
         }
         if let Some((_, schedule)) = &self.drift_audit {
             validate_interval("drift audit", schedule.interval_secs)?;
@@ -253,6 +292,10 @@ fn record_worker_outcome(
             Ok(worker_report) => report.journal_gc = Some(worker_report),
             Err(err) => record_worker_error(report, "journal_gc", err),
         },
+        RuntimeWorkerOutcome::ConfirmedCommitTimeout(worker_report) => match worker_report {
+            Ok(worker_report) => report.confirmed_commit_timeout = Some(worker_report),
+            Err(err) => record_worker_error(report, "confirmed_commit_timeout", err),
+        },
         RuntimeWorkerOutcome::DriftAudit(worker_report) => match worker_report {
             Ok(worker_report) => report.drift_audit = Some(worker_report),
             Err(err) => record_worker_error(report, "drift_audit", err),
@@ -280,8 +323,11 @@ fn record_worker_error(
     report.worker_errors.push(format!("{worker_name}: {err}"));
 }
 
-async fn drain_workers(tasks: &mut JoinSet<RuntimeWorkerOutcome>) {
-    while tasks.join_next().await.is_some() {}
+fn record_worker_join_error(
+    report: &mut UnderlayWorkerRuntimeReport,
+    err: tokio::task::JoinError,
+) {
+    record_worker_error(report, "worker_runtime", runtime_join_error(err));
 }
 
 fn runtime_join_error(err: tokio::task::JoinError) -> UnderlayError {
