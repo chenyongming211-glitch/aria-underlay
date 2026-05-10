@@ -8,7 +8,7 @@
 ## 核实基线
 
 - 代码：`codex/product-api-rbac`
-- 本地验证：`python3 -m pytest -q adapter-python/tests` -> `290 passed`
+- 本地验证：`python3 -m pytest -q adapter-python/tests` -> `294 passed`
 - GitHub Actions：当前分支 CI 已通过 Python Adapter、Rust `cargo check` /
   `cargo test`、real-device apply probe build 和 fake-adapter integration matrix。
 - 本地限制：当前机器 `cargo` 不在 `PATH`，Rust 编译/测试以 GitHub Actions
@@ -32,6 +32,7 @@
 | Worker panic/join error 终止 runtime | worker task `JoinError` 现在会记录为 `worker_runtime` 的 `worker_errors`，不会触发 runtime `Err`，也不会提前 shutdown 其他 worker；健康 worker 可继续跑到正常 shutdown。 | `src/worker/runtime.rs`, `tests/worker_runtime_tests.rs` | 已通过 GitHub Actions run `25615539760`；新增 panic 隔离回归测试覆盖 panic worker 与健康 worker 并行运行。 |
 | Journal GC 目录级/删除级失败终止 worker | journal root `read_dir`、单条 journal 删除失败、artifact root/device 遍历失败和 artifact 删除失败现在都会记录到 `JournalGcReport`，不再让 `run_once` 返回 `Err`；artifact 失败新增 `artifacts_failed` 和 `failed_artifact_refs`，runtime 仍能拿到 GC scheduler report。 | `src/worker/gc.rs`, `src/telemetry/events.rs`, `tests/gc_tests.rs`, `tests/worker_runtime_tests.rs`, `tests/telemetry_tests.rs` | 已通过 GitHub Actions run `25616940842`；新增只读目录/删除失败回归测试和 runtime report 预期测试。 |
 | Drift audit expected-store listing 失败报告化 | `expected_store.list()` 失败现在会写入 `DriftAuditRunSummary.expected_store_listing_error`，worker 仍会发出 `drift.audit_completed` 事件并以 `partial_failure`、`DRIFT_EXPECTED_STORE_LIST_FAILED`、`expected_store_listing_failed=true` 报告，不再让 runtime 记录 worker error。 | `src/worker/drift_auditor.rs`, `src/telemetry/events.rs`, `src/telemetry/ops.rs`, `tests/drift_tests.rs`, `tests/worker_runtime_tests.rs` | 已通过 GitHub Actions run `25617655465`；新增 expected-store listing failure summary/event 回归测试和 runtime report 预期测试。 |
+| NETCONF force unlock 未实现 | Python real NETCONF backend 现在校验 `lock_owner` 必须是正整数 NETCONF session-id，并调用 ncclient `kill_session(session_id)`；RPC 失败映射为 `NETCONF_FORCE_UNLOCK_FAILED`，非法 session-id 映射为 `NETCONF_FORCE_UNLOCK_SESSION_ID_INVALID`。 | `adapter-python/aria_underlay_adapter/backends/base.py`, `adapter-python/aria_underlay_adapter/backends/netconf.py`, `adapter-python/aria_underlay_adapter/drivers/netconf_backed.py`, `adapter-python/tests/test_netconf_backend.py` | 已通过 GitHub Actions run `25619885493`；本地 Python adapter `294 passed`，新增 force-unlock 成功、非法 session-id 和 kill-session 失败映射回归测试。 |
 
 ## Confirmed-open
 
@@ -41,7 +42,6 @@
 | --- | --- | --- | --- | --- |
 | P0/条件阻塞 | Python Adapter gRPC 无 TLS/mTLS | server 只调用 `add_insecure_port(config.listen)`，配置也没有证书/client-auth 字段。 | `adapter-python/aria_underlay_adapter/server.py:163-169`, `adapter-python/aria_underlay_adapter/config.py:7-31` | 若 Core/Adapter 跨主机或网络不可信，先修；loopback/sidecar 部署可后置。 |
 | P2 | `_persist_id_already_consumed` 保留 vendor 字符串 fallback | 已优先识别结构化 code/normalized_error，但仍 fallback 到 `"persist" + marker` 字符串匹配。 | `adapter-python/aria_underlay_adapter/drivers/netconf_backed.py:694-719` | 等真实厂商错误码覆盖后逐步收窄或按 vendor profile 限定。 |
-| P2/功能缺口 | NETCONF force unlock 未实现 | Rust/API/RPC 已接线，Python real NETCONF driver 直接返回 `NOT_IMPLEMENTED`。 | `src/api/admin_ops.rs:75-105`, `adapter-python/aria_underlay_adapter/drivers/netconf_backed.py:305-312` | 只有需要 break-glass kill-session/force-unlock 时升优先级。 |
 
 ## Intentional-boundary
 
@@ -86,7 +86,6 @@
 默认先做最小可验证切片，不一次性铺开所有 open 项：
 
 1. 若 Core/Adapter 有跨主机部署：先修 adapter gRPC TLS/mTLS 或写入强制 sidecar/tunnel 配置边界。
-2. 然后按真实厂商反馈收窄 persist-id 字符串 fallback。
-3. 最后补 NETCONF force unlock，除非 break-glass 运维需求先升级。
+2. 然后按真实厂商反馈收窄 persist-id 字符串 fallback，或先按 vendor profile 限定 fallback。
 
 当前不建议先做 active-active、跨设备全局事务、AutoReconcile 或非 H3C vendor 扩展。
