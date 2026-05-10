@@ -285,8 +285,8 @@ async fn worker_runtime_rejects_invalid_schedule_before_spawning_workers() {
 }
 
 #[tokio::test]
-async fn worker_runtime_keeps_other_workers_running_when_one_worker_fails() {
-    let temp = temp_test_dir("runtime-isolates-worker-error");
+async fn worker_runtime_reports_gc_path_failure_without_worker_error() {
+    let temp = temp_test_dir("runtime-reports-gc-path-failure");
     let failing_journal_root = temp.join("journal-root-is-file");
     fs::create_dir_all(&temp).expect("temp root should be created");
     fs::write(&failing_journal_root, b"not a directory")
@@ -325,10 +325,21 @@ async fn worker_runtime_keeps_other_workers_running_when_one_worker_fails() {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         })
         .await
-        .expect("runtime should isolate worker errors");
+        .expect("runtime should report gc path failures without worker errors");
 
-    assert_eq!(report.worker_errors.len(), 1);
-    assert!(report.worker_errors[0].contains("journal_gc"));
+    assert!(report.worker_errors.is_empty());
+    let gc_report = report
+        .journal_gc
+        .expect("gc worker should still return scheduler report");
+    assert_eq!(gc_report.runs, 1);
+    let gc_run = gc_report
+        .last_report
+        .expect("gc worker should retain the failed run report");
+    assert_eq!(gc_run.journals_failed, 1);
+    assert_eq!(
+        gc_run.failed_journal_refs,
+        vec!["journal-root-is-file".to_string()]
+    );
     assert_eq!(
         report
             .drift_audit
