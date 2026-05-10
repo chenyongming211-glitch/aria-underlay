@@ -16,6 +16,7 @@ Copy this checklist for every switch/model acceptance run.
 - [ ] Test VLAN description:
 - [ ] Test ACL:
 - [ ] Test ACL description:
+- [ ] Test ACL rule description:
 - [ ] Test ACL binding interface:
 - [ ] Test ACL binding direction:
 
@@ -111,6 +112,7 @@ Copy this checklist for every switch/model acceptance run.
 - [ ] Readback shows test ACL exists.
 - [ ] Readback shows test ACL description when configured.
 - [ ] Readback shows ACL rule fields match requested values.
+- [ ] Readback shows ACL rule description when configured.
 - [ ] Readback confirms no ACL binding was added.
 
 ## ACL Cleanup

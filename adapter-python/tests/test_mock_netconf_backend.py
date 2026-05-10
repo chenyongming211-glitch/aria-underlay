@@ -115,6 +115,19 @@ def test_commit_candidate_publishes_candidate_state():
     assert state["vlans"][0]["name"] == "tenant-100"
 
 
+def test_commit_candidate_applies_explicit_vlan_delete():
+    backend = MockNetconfBackend("candidate_only")
+    desired = _desired_state_without_vlan()
+    desired.delete_vlan_ids = [100]
+    desired.interfaces = []
+
+    backend.prepare_candidate(desired)
+    backend.commit_candidate(strategy=2, tx_id="tx-1")
+
+    state = backend.get_current_state()
+    assert state["vlans"] == []
+
+
 def test_rollback_confirmed_commit_restores_previous_running_state():
     backend = MockNetconfBackend("confirmed")
     desired = _desired_state(vlan_name="tenant-100")

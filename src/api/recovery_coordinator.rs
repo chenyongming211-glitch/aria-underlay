@@ -339,8 +339,14 @@ impl RecoveryCoordinator {
                     record.tx_id, device_id.0
                 ))
             })?;
-            self.shadow_store
-                .put(DeviceShadowState::from_desired(desired, 0))?;
+            let existing = self.shadow_store.get(device_id)?;
+            let recovered_shadow = if let Some(change_set) = change_set_for_record(record, device_id)
+            {
+                change_set.apply_to_shadow(existing.as_ref(), desired, 0)
+            } else {
+                DeviceShadowState::from_desired(desired, 0)
+            };
+            self.shadow_store.put(recovered_shadow)?;
         }
 
         Ok(())

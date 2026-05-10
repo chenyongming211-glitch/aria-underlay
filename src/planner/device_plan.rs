@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +14,12 @@ pub struct DeviceDesiredState {
     pub acls: BTreeMap<u16, AclConfig>,
     #[serde(default)]
     pub acl_bindings: BTreeMap<String, AclBinding>,
+    #[serde(default)]
+    pub delete_vlan_ids: BTreeSet<u16>,
+    #[serde(default)]
+    pub delete_acl_ids: BTreeSet<u16>,
+    #[serde(default)]
+    pub delete_acl_bindings: BTreeMap<String, AclBinding>,
 }
 
 pub fn plan_switch_pair(intent: &SwitchPairIntent) -> Vec<DeviceDesiredState> {
@@ -59,6 +65,9 @@ pub fn plan_switch_pair(intent: &SwitchPairIntent) -> Vec<DeviceDesiredState> {
                 interfaces,
                 acls: BTreeMap::new(),
                 acl_bindings: BTreeMap::new(),
+                delete_vlan_ids: BTreeSet::new(),
+                delete_acl_ids: BTreeSet::new(),
+                delete_acl_bindings: BTreeMap::new(),
             }
         })
         .collect()

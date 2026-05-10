@@ -164,6 +164,7 @@ def test_h3c_parser_reads_real_comware_ipv4_advanced_acl_shape():
                   <RuleID>10</RuleID>
                   <Action>2</Action>
                   <ProtocolType>256</ProtocolType>
+                  <Description>allow test flow</Description>
                   <SrcAny>false</SrcAny>
                   <SrcIPv4>
                     <SrcIPv4Addr>192.0.2.1</SrcIPv4Addr>
@@ -208,7 +209,7 @@ def test_h3c_parser_reads_real_comware_ipv4_advanced_acl_shape():
                     "destination": {"address": "198.51.100.0", "wildcard": "0.0.0.255"},
                     "source_port_eq": None,
                     "destination_port_eq": None,
-                    "description": None,
+                    "description": "allow test flow",
                 },
                 {
                     "sequence": 20,

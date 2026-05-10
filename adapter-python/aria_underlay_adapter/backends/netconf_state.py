@@ -155,6 +155,9 @@ def desired_state_is_empty(desired_state) -> bool:
         and not list(getattr(desired_state, "interfaces", []))
         and not list(getattr(desired_state, "acls", []))
         and not list(getattr(desired_state, "acl_bindings", []))
+        and not list(getattr(desired_state, "delete_vlan_ids", []))
+        and not list(getattr(desired_state, "delete_acl_ids", []))
+        and not list(getattr(desired_state, "delete_acl_bindings", []))
     )
 
 
@@ -349,6 +352,18 @@ def verify_acl_bindings(desired_state, observed: dict, scope=None) -> None:
         _acl_binding_key(binding["interface_name"], binding["direction"]): binding
         for binding in observed["acl_bindings"]
     }
+    for delete_binding in getattr(desired_state, "delete_acl_bindings", []):
+        interface_name = _field(delete_binding, "interface_name")
+        direction = _acl_direction_text(_field(delete_binding, "direction"))
+        key = _acl_binding_key(interface_name, direction)
+        observed_binding = observed_by_key.get(key)
+        if observed_binding is not None and observed_binding.get("acl_id") == _field(
+            delete_binding,
+            "acl_id",
+        ):
+            raise _verify_mismatch(
+                f"ACL binding {interface_name} {direction} should be absent but exists"
+            )
     for desired_binding in _desired_acl_bindings_in_scope(desired_state, scope):
         interface_name = _field(desired_binding, "interface_name")
         direction = _acl_direction_text(_field(desired_binding, "direction"))

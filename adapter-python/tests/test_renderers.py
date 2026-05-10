@@ -34,12 +34,21 @@ class _DesiredState:
     interfaces: list
     acls: list | None = None
     acl_bindings: list | None = None
+    delete_vlan_ids: list | None = None
+    delete_acl_ids: list | None = None
+    delete_acl_bindings: list | None = None
 
     def __post_init__(self):
         if self.acls is None:
             self.acls = []
         if self.acl_bindings is None:
             self.acl_bindings = []
+        if self.delete_vlan_ids is None:
+            self.delete_vlan_ids = []
+        if self.delete_acl_ids is None:
+            self.delete_acl_ids = []
+        if self.delete_acl_bindings is None:
+            self.delete_acl_bindings = []
 
 
 @dataclass
@@ -384,6 +393,7 @@ def test_h3c_renderer_builds_ipv4_advanced_acl_edit_config_document():
                             protocol="ip",
                             source=_AclEndpoint("192.0.2.1", "0.0.0.0"),
                             destination=_AclEndpoint("198.51.100.0", "0.0.0.255"),
+                            description="allow test flow",
                         ),
                         _AclRule(
                             sequence=20,
@@ -410,6 +420,7 @@ def test_h3c_renderer_builds_ipv4_advanced_acl_edit_config_document():
     assert [rule.find(f"{{{ns}}}RuleID").text for rule in rules] == ["10", "20"]
     assert rules[0].find(f"{{{ns}}}Action").text == "2"
     assert rules[0].find(f"{{{ns}}}ProtocolType").text == "256"
+    assert rules[0].find(f"{{{ns}}}Description").text == "allow test flow"
     assert rules[0].find(f"{{{ns}}}SrcIPv4/{{{ns}}}SrcIPv4Addr").text == "192.0.2.1"
     assert rules[0].find(f"{{{ns}}}DstIPv4/{{{ns}}}DstIPv4Wildcard").text == "0.0.0.255"
     assert rules[1].find(f"{{{ns}}}Action").text == "1"
@@ -442,6 +453,45 @@ def test_h3c_renderer_builds_interface_acl_binding_document():
     assert binding.find(f"{{{ns}}}AppObjIndex").text == "13"
     assert binding.find(f"{{{ns}}}AppDirection").text == "1"
     assert binding.find(f"{{{ns}}}AppAclType").text == "1"
+    assert binding.find(f"{{{ns}}}AppAclGroup").text == "3999"
+
+
+def test_h3c_renderer_builds_explicit_delete_document():
+    xml = H3cRenderer().render_edit_config(
+        _DesiredState(
+            vlans=[],
+            interfaces=[],
+            acls=[],
+            acl_bindings=[],
+            delete_vlan_ids=[144],
+            delete_acl_ids=[3999],
+            delete_acl_bindings=[
+                _AclBinding(
+                    interface_name="GigabitEthernet1/0/13",
+                    direction="inbound",
+                    acl_id=3999,
+                )
+            ],
+        )
+    )
+    root = ElementTree.fromstring(xml)
+    ns = H3cRenderer().ACL_NAMESPACE
+    operation_attr = f"{{{NETCONF_BASE_NAMESPACE}}}operation"
+
+    vlan = root.find(f".//{{{ns}}}VLAN/{{{ns}}}VLANs/{{{ns}}}VLANID")
+    assert vlan is not None
+    assert vlan.attrib[operation_attr] == "delete"
+    assert vlan.find(f"{{{ns}}}ID").text == "144"
+
+    group = root.find(f".//{{{ns}}}ACL/{{{ns}}}Groups/{{{ns}}}Group")
+    assert group is not None
+    assert group.attrib[operation_attr] == "delete"
+    assert group.find(f"{{{ns}}}GroupID").text == "3999"
+
+    binding = root.find(f".//{{{ns}}}ACL/{{{ns}}}PfilterApply/{{{ns}}}Pfilter")
+    assert binding is not None
+    assert binding.attrib[operation_attr] == "delete"
+    assert binding.find(f"{{{ns}}}AppObjIndex").text == "13"
     assert binding.find(f"{{{ns}}}AppAclGroup").text == "3999"
 
 

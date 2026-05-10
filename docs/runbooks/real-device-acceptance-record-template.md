@@ -20,6 +20,7 @@ private keys, session tokens, or full secrets.
 | Test VLAN description |  |
 | Test ACL |  |
 | Test ACL description |  |
+| Test ACL rule description |  |
 | Test ACL binding interface |  |
 | Test ACL binding direction |  |
 
@@ -85,6 +86,7 @@ private keys, session tokens, or full secrets.
 | tx_id |  |
 | Readback ACL result |  |
 | Readback ACL rule result |  |
+| Readback ACL rule description result |  |
 | Readback binding check |  |
 | Cleanup command dry-run inspected |  |
 | Cleanup result |  |

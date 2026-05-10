@@ -315,7 +315,7 @@ def test_netconf_driver_dry_run_returns_no_change_for_empty_desired_without_rend
     assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_NO_CHANGE
     assert response.result.changed is False
     assert list(response.result.errors) == []
-    assert "desired state contains no VLAN or interface changes" in response.result.warnings
+    assert "desired state contains no supported config changes" in response.result.warnings
     assert session.calls == []
 
 

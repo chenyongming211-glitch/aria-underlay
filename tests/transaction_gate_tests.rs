@@ -601,6 +601,9 @@ fn domain_intent(vlan_id: u16) -> UnderlayDomainIntent {
         }],
         acls: vec![],
         acl_bindings: vec![],
+        delete_vlan_ids: vec![],
+        delete_acl_ids: vec![],
+        delete_acl_bindings: vec![],
     }
 }
 

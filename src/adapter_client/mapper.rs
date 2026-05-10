@@ -134,6 +134,21 @@ pub fn desired_state_to_proto(desired: &DeviceDesiredState) -> adapter::DesiredD
             .values()
             .map(acl_binding_to_proto)
             .collect(),
+        delete_vlan_ids: desired
+            .delete_vlan_ids
+            .iter()
+            .map(|vlan_id| u32::from(*vlan_id))
+            .collect(),
+        delete_acl_ids: desired
+            .delete_acl_ids
+            .iter()
+            .map(|acl_id| u32::from(*acl_id))
+            .collect(),
+        delete_acl_bindings: desired
+            .delete_acl_bindings
+            .values()
+            .map(acl_binding_to_proto)
+            .collect(),
     }
 }
 
@@ -148,6 +163,12 @@ pub fn state_scope_from_desired(desired: &DeviceDesiredState) -> adapter::StateS
                 .values()
                 .map(|binding| binding.interface_name.clone()),
         )
+        .chain(
+            desired
+                .delete_acl_bindings
+                .values()
+                .map(|binding| binding.interface_name.clone()),
+        )
         .collect::<std::collections::BTreeSet<_>>();
 
     adapter::StateScope {
@@ -156,6 +177,7 @@ pub fn state_scope_from_desired(desired: &DeviceDesiredState) -> adapter::StateS
             .vlans
             .keys()
             .map(|vlan_id| u32::from(*vlan_id))
+            .chain(desired.delete_vlan_ids.iter().map(|vlan_id| u32::from(*vlan_id)))
             .collect(),
         interface_names: interface_names.into_iter().collect(),
         acl_ids: desired
@@ -163,6 +185,13 @@ pub fn state_scope_from_desired(desired: &DeviceDesiredState) -> adapter::StateS
             .keys()
             .copied()
             .chain(desired.acl_bindings.values().map(|binding| binding.acl_id))
+            .chain(desired.delete_acl_ids.iter().copied())
+            .chain(
+                desired
+                    .delete_acl_bindings
+                    .values()
+                    .map(|binding| binding.acl_id),
+            )
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .map(u32::from)
@@ -219,8 +248,10 @@ pub fn state_scope_from_change_set(change_set: &ChangeSet) -> adapter::StateScop
             ChangeOp::DeleteAclBinding {
                 interface_name,
                 direction: _,
+                acl_id,
             } => {
                 interface_names.insert(interface_name.clone());
+                acl_ids.insert(u32::from(*acl_id));
             }
         }
     }

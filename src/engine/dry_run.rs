@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::engine::diff::{compute_diff, ChangeSet};
+use crate::api::request::ApplyReconcileMode;
+use crate::engine::diff::{compute_diff, compute_merge_upsert_diff, ChangeSet};
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::state::DeviceShadowState;
 use crate::{UnderlayError, UnderlayResult};
@@ -21,6 +22,7 @@ impl DryRunPlan {
 pub fn build_dry_run_plan(
     desired_states: &[DeviceDesiredState],
     current_states: &[DeviceShadowState],
+    reconcile_mode: ApplyReconcileMode,
 ) -> UnderlayResult<DryRunPlan> {
     let current_by_device = current_states
         .iter()
@@ -35,7 +37,11 @@ pub fn build_dry_run_plan(
                 "missing current state for device {}",
                 desired.device_id.0
             )))?;
-        change_sets.push(compute_diff(desired, current));
+        let change_set = match reconcile_mode {
+            ApplyReconcileMode::MergeUpsert => compute_merge_upsert_diff(desired, current),
+            ApplyReconcileMode::FullReplace => compute_diff(desired, current),
+        };
+        change_sets.push(change_set);
     }
 
     Ok(DryRunPlan { change_sets })

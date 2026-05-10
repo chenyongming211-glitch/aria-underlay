@@ -107,6 +107,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             interfaces,
             acls,
             acl_bindings,
+            delete_vlan_ids: vec![],
+            delete_acl_ids: vec![],
+            delete_acl_bindings: vec![],
         },
         options: ApplyOptions {
             dry_run: false,
@@ -187,7 +190,7 @@ fn desired_acls() -> Result<Vec<AclIntent>, Box<dyn std::error::Error>> {
         destination_port_eq: optional_env("ARIA_UNDERLAY_ACL_RULE_DESTINATION_PORT_EQ")
             .map(|value| value.parse::<u16>())
             .transpose()?,
-        description: None,
+        description: optional_env("ARIA_UNDERLAY_ACL_RULE_DESCRIPTION"),
     };
 
     Ok(vec![AclIntent {

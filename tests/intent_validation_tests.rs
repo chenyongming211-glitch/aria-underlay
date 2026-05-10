@@ -180,6 +180,38 @@ fn domain_accepts_acl_binding_to_declared_acl_and_existing_interface_reference()
     validate_underlay_domain_intent(&intent).expect("declared ACL binding should validate");
 }
 
+#[test]
+fn domain_rejects_upsert_and_delete_of_same_vlan() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    intent.delete_vlan_ids = vec![100];
+
+    let err = validate_underlay_domain_intent(&intent).unwrap_err();
+
+    assert!(format!("{err}").contains("cannot upsert and delete VLAN 100"));
+}
+
+#[test]
+fn domain_rejects_upsert_and_delete_of_same_acl_binding() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    intent.acls = vec![acl_intent(3999)];
+    intent.acl_bindings = vec![acl_binding_intent(3999)];
+    intent.delete_acl_bindings = vec![acl_binding_intent(3999)];
+
+    let err = validate_underlay_domain_intent(&intent).unwrap_err();
+
+    assert!(format!("{err}").contains("cannot upsert and delete ACL binding"));
+}
+
+#[test]
+fn domain_accepts_explicit_delete_intents_for_isolated_targets() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    intent.delete_vlan_ids = vec![200];
+    intent.delete_acl_ids = vec![3999];
+    intent.delete_acl_bindings = vec![acl_binding_intent(3999)];
+
+    validate_underlay_domain_intent(&intent).expect("delete intent should validate");
+}
+
 fn switch_pair_intent() -> SwitchPairIntent {
     SwitchPairIntent {
         pair_id: "pair-a".into(),
@@ -239,6 +271,9 @@ fn domain_intent(topology: UnderlayTopology) -> UnderlayDomainIntent {
         }],
         acls: vec![],
         acl_bindings: vec![],
+        delete_vlan_ids: vec![],
+        delete_acl_ids: vec![],
+        delete_acl_bindings: vec![],
     }
 }
 
