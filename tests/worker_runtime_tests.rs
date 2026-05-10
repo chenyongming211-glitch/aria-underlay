@@ -462,6 +462,50 @@ async fn drift_audit_skips_failed_device_observation_and_continues() {
     assert_eq!(summary.drifted_devices, vec![DeviceId("leaf-a".into())]);
 }
 
+#[tokio::test]
+async fn drift_audit_expected_store_listing_failure_is_reported_without_runtime_error() {
+    let sink = Arc::new(InMemoryEventSink::default());
+    let drift_worker = DriftAuditWorker::new(
+        DriftAuditor::from_source(
+            Arc::new(FailingExpectedShadowStateStore),
+            Arc::new(PartiallyFailingObservationSource),
+        ),
+        sink.clone(),
+    );
+
+    let report = UnderlayWorkerRuntime::new()
+        .with_drift_audit(
+            drift_worker,
+            DriftAuditSchedule {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+        )
+        .run_until_shutdown(async {})
+        .await
+        .expect("runtime should report expected-store listing failures without worker errors");
+
+    assert!(report.worker_errors.is_empty());
+    let summary = report
+        .drift_audit
+        .expect("drift worker should return scheduler report")
+        .last_summary
+        .expect("drift worker should retain the failed listing run summary");
+    assert_eq!(
+        summary.expected_store_listing_error.as_deref(),
+        Some("internal error: expected store list failed")
+    );
+
+    let events = sink.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, UnderlayEventKind::UnderlayDriftAuditCompleted);
+    assert_eq!(events[0].result.as_deref(), Some("partial_failure"));
+    assert_eq!(
+        events[0].error_code.as_deref(),
+        Some("DRIFT_EXPECTED_STORE_LIST_FAILED")
+    );
+}
+
 fn recovery_event(request_id: &str, in_doubt: usize) -> UnderlayEvent {
     UnderlayEvent::recovery_completed(
         request_id,
@@ -488,6 +532,27 @@ impl DriftObservationSource for PartiallyFailingObservationSource {
             ));
         }
         Ok(shadow_state(&device_id.0, vec![], vec![]))
+    }
+}
+
+#[derive(Debug)]
+struct FailingExpectedShadowStateStore;
+
+impl ShadowStateStore for FailingExpectedShadowStateStore {
+    fn get(&self, _device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
+        Ok(None)
+    }
+
+    fn put(&self, state: DeviceShadowState) -> UnderlayResult<DeviceShadowState> {
+        Ok(state)
+    }
+
+    fn remove(&self, _device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
+        Ok(None)
+    }
+
+    fn list(&self) -> UnderlayResult<Vec<DeviceShadowState>> {
+        Err(UnderlayError::Internal("expected store list failed".into()))
     }
 }
 

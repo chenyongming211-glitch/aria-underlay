@@ -67,7 +67,13 @@ impl Metrics {
             }
             UnderlayEventKind::UnderlayDriftAuditCompleted => {
                 self.increment(MetricName::OperationDriftAuditTotal);
-                if event.result.as_deref() == Some("drift_detected") {
+                if event
+                    .fields
+                    .get("drifted_device_count")
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or_default()
+                    > 0
+                {
                     self.increment(MetricName::OperationDriftDetectedTotal);
                 }
             }

@@ -387,6 +387,7 @@ fn attention_required(event: &UnderlayEvent) -> bool {
         UnderlayEventKind::UnderlayDriftDetected => true,
         UnderlayEventKind::UnderlayDriftAuditCompleted => {
             event.result.as_deref() == Some("drift_detected")
+                || event.result.as_deref() == Some("partial_failure")
         }
         UnderlayEventKind::UnderlayRecoveryCompleted => {
             field_value(event, "in_doubt") > 0 || field_value(event, "pending") > 0
