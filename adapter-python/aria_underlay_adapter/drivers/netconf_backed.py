@@ -735,17 +735,4 @@ def _persist_id_already_consumed(error: AdapterError) -> bool:
         "unknown persist-id",
     }:
         return True
-
-    text = " ".join(
-        part
-        for part in [
-            error.code,
-            error.message,
-            error.normalized_error,
-            error.raw_error_summary,
-        ]
-        if part
-    ).lower()
-    return "persist" in text and any(
-        marker in text for marker in ["unknown", "not found", "consumed"]
-    )
+    return False

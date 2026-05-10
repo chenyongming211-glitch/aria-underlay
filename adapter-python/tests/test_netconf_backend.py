@@ -882,7 +882,7 @@ def test_netconf_driver_adapter_recovery_confirms_pending_confirmed_commit():
     assert backend.rollback_calls == []
 
 
-def test_netconf_driver_adapter_recovery_treats_consumed_persist_id_as_committed():
+def test_netconf_driver_adapter_recovery_does_not_infer_consumed_persist_id_from_text():
     backend = _RecordingRecoveryBackend(
         final_confirm_error=AdapterError(
             code="NETCONF_FINAL_CONFIRM_FAILED",
@@ -901,9 +901,11 @@ def test_netconf_driver_adapter_recovery_treats_consumed_persist_id_as_committed
         action=pb2.RECOVERY_ACTION_ADAPTER_RECOVER,
     )
 
-    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_COMMITTED
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_ROLLED_BACK
     assert backend.final_confirm_calls == ["tx-1"]
-    assert backend.rollback_calls == []
+    assert backend.rollback_calls == [
+        (pb2.TRANSACTION_STRATEGY_CONFIRMED_COMMIT, "tx-1")
+    ]
 
 
 def test_netconf_driver_adapter_recovery_uses_structured_consumed_persist_id_code():
@@ -911,6 +913,30 @@ def test_netconf_driver_adapter_recovery_uses_structured_consumed_persist_id_cod
         final_confirm_error=AdapterError(
             code="NETCONF_PERSIST_ID_ALREADY_CONSUMED",
             message="confirmed commit persist-id is no longer pending",
+            retryable=False,
+        )
+    )
+    driver = NetconfBackedDriver(backend)
+
+    response = driver.recover(
+        tx_id="tx-1",
+        device=pb2.DeviceRef(device_id="leaf-a"),
+        strategy=pb2.TRANSACTION_STRATEGY_CONFIRMED_COMMIT,
+        action=pb2.RECOVERY_ACTION_ADAPTER_RECOVER,
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_COMMITTED
+    assert backend.final_confirm_calls == ["tx-1"]
+    assert backend.rollback_calls == []
+
+
+def test_netconf_driver_adapter_recovery_uses_structured_consumed_persist_id_normalized_error():
+    backend = _RecordingRecoveryBackend(
+        final_confirm_error=AdapterError(
+            code="NETCONF_FINAL_CONFIRM_FAILED",
+            message="NETCONF final confirm failed",
+            normalized_error="unknown persist-id",
+            raw_error_summary="vendor rpc error",
             retryable=False,
         )
     )
