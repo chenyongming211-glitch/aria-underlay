@@ -12,7 +12,7 @@ use aria_underlay::worker::drift_auditor::{
     DriftAuditSchedule, DriftAuditSnapshot, DriftAuditWorker, DriftAuditor,
     DriftObservationSource,
 };
-use aria_underlay::UnderlayResult;
+use aria_underlay::{UnderlayError, UnderlayResult};
 
 #[tokio::test]
 async fn drift_auditor_initially_reports_nothing() {
@@ -184,6 +184,30 @@ async fn drift_auditor_summary_counts_clean_and_drifted_devices() {
 }
 
 #[tokio::test]
+async fn drift_auditor_reports_expected_store_listing_failure_without_failing_run() {
+    let auditor = DriftAuditor::from_source(
+        Arc::new(FailingExpectedShadowStateStore),
+        Arc::new(StaticObservationSource {
+            states: BTreeMap::new(),
+        }),
+    );
+
+    let summary = auditor
+        .run_once_with_summary()
+        .await
+        .expect("expected-store listing failure should be reported without failing audit run");
+
+    assert_eq!(summary.audited_devices, 0);
+    assert!(summary.failed_devices.is_empty());
+    assert!(summary.drifted_devices.is_empty());
+    assert!(summary.reports.is_empty());
+    assert_eq!(
+        summary.expected_store_listing_error.as_deref(),
+        Some("internal error: expected store list failed")
+    );
+}
+
+#[tokio::test]
 async fn drift_audit_worker_emits_detected_and_completed_events() {
     let sink = Arc::new(InMemoryEventSink::default());
     let clean = DriftAuditSnapshot {
@@ -217,6 +241,49 @@ async fn drift_audit_worker_emits_detected_and_completed_events() {
     assert_eq!(
         events[1].fields.get("drifted_device_count").map(String::as_str),
         Some("1")
+    );
+}
+
+#[tokio::test]
+async fn drift_audit_worker_emits_completed_event_for_expected_store_listing_failure() {
+    let sink = Arc::new(InMemoryEventSink::default());
+    let auditor = DriftAuditor::from_source(
+        Arc::new(FailingExpectedShadowStateStore),
+        Arc::new(StaticObservationSource {
+            states: BTreeMap::new(),
+        }),
+    );
+    let worker = DriftAuditWorker::new(auditor, sink.clone())
+        .with_request_context("req-drift", "trace-drift");
+
+    let summary = worker
+        .run_once_and_emit()
+        .await
+        .expect("drift worker should emit a completion event for expected-store listing failure");
+
+    assert_eq!(
+        summary.expected_store_listing_error.as_deref(),
+        Some("internal error: expected store list failed")
+    );
+    let events = sink.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, UnderlayEventKind::UnderlayDriftAuditCompleted);
+    assert_eq!(events[0].request_id, "req-drift");
+    assert_eq!(events[0].result.as_deref(), Some("partial_failure"));
+    assert_eq!(
+        events[0].error_code.as_deref(),
+        Some("DRIFT_EXPECTED_STORE_LIST_FAILED")
+    );
+    assert_eq!(
+        events[0]
+            .fields
+            .get("expected_store_listing_failed")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        events[0].fields.get("audited_device_count").map(String::as_str),
+        Some("0")
     );
 }
 
@@ -286,6 +353,27 @@ impl DriftObservationSource for StaticObservationSource {
             .get(device_id)
             .cloned()
             .ok_or_else(|| aria_underlay::UnderlayError::DeviceNotFound(device_id.0.clone()))
+    }
+}
+
+#[derive(Debug)]
+struct FailingExpectedShadowStateStore;
+
+impl ShadowStateStore for FailingExpectedShadowStateStore {
+    fn get(&self, _device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
+        Ok(None)
+    }
+
+    fn put(&self, state: DeviceShadowState) -> UnderlayResult<DeviceShadowState> {
+        Ok(state)
+    }
+
+    fn remove(&self, _device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
+        Ok(None)
+    }
+
+    fn list(&self) -> UnderlayResult<Vec<DeviceShadowState>> {
+        Err(UnderlayError::Internal("expected store list failed".into()))
     }
 }
 
