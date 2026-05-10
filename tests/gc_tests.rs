@@ -1,6 +1,9 @@
 use std::fs;
 use std::sync::Arc;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use aria_underlay::model::DeviceId;
 use aria_underlay::telemetry::{InMemoryEventSink, UnderlayEvent, UnderlayEventKind};
 use aria_underlay::tx::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase};
@@ -180,6 +183,53 @@ async fn gc_prunes_terminal_artifacts_per_device_without_touching_unknown_tx() {
     fs::remove_dir_all(temp).ok();
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn gc_reports_delete_and_artifact_failures_without_failing_run() {
+    let temp = temp_test_dir("failure-reporting");
+    let journal_root = temp.join("journal");
+    let artifact_root = temp.join("artifacts");
+    let store = JsonFileTxJournalStore::new(&journal_root);
+    store
+        .put(&journal_record("tx-delete-blocked", TxPhase::Committed, 100))
+        .expect("write terminal journal");
+    write_artifact(&artifact_root, "leaf-protected", "tx-delete-blocked");
+
+    let _journal_permissions = PermissionGuard::set_mode(&journal_root, 0o500, 0o700);
+    let protected_device_dir = artifact_root.join("leaf-protected");
+    let _artifact_permissions = PermissionGuard::set_mode(&protected_device_dir, 0o500, 0o700);
+
+    let report = JournalGc::new(&journal_root)
+        .with_artifact_root(&artifact_root)
+        .with_now_unix_secs(100 + 31 * 24 * 60 * 60)
+        .run_once(RetentionPolicy {
+            committed_journal_retention_days: 30,
+            rolled_back_journal_retention_days: 30,
+            failed_journal_retention_days: 90,
+            rollback_artifact_retention_days: 30,
+            max_artifacts_per_device: 50,
+        })
+        .await
+        .expect("gc should report path failures instead of returning Err");
+
+    assert_eq!(report.journals_failed, 1);
+    assert_eq!(
+        report.failed_journal_refs,
+        vec!["tx-delete-blocked.json".to_string()]
+    );
+    assert_eq!(report.artifacts_failed, 1);
+    assert_eq!(
+        report.failed_artifact_refs,
+        vec!["leaf-protected/tx-delete-blocked".to_string()]
+    );
+    assert!(journal_root.join("tx-delete-blocked.json").exists());
+    assert!(protected_device_dir.join("tx-delete-blocked").exists());
+
+    drop(_artifact_permissions);
+    drop(_journal_permissions);
+    fs::remove_dir_all(temp).ok();
+}
+
 #[tokio::test]
 async fn gc_worker_emits_completion_event_after_successful_run() {
     let temp = temp_test_dir("worker-event");
@@ -322,4 +372,29 @@ fn write_artifact(root: &std::path::Path, device_id: &str, tx_id: &str) {
 
 fn temp_test_dir(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("aria-underlay-gc-{name}-{}", uuid::Uuid::new_v4()))
+}
+
+#[cfg(unix)]
+struct PermissionGuard {
+    path: std::path::PathBuf,
+    restore_mode: u32,
+}
+
+#[cfg(unix)]
+impl PermissionGuard {
+    fn set_mode(path: &std::path::Path, mode: u32, restore_mode: u32) -> Self {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))
+            .expect("test permissions should be set");
+        Self {
+            path: path.to_path_buf(),
+            restore_mode,
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for PermissionGuard {
+    fn drop(&mut self) {
+        let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(self.restore_mode));
+    }
 }
