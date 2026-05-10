@@ -651,6 +651,21 @@ class NcclientNetconfBackend:
             retryable=False,
         )
 
+    def force_unlock(self, lock_owner: str, reason: str | None = None) -> None:
+        session_id = _force_unlock_session_id(lock_owner)
+        try:
+            with self._connect() as session:
+                session.kill_session(session_id)
+        except AdapterError:
+            raise
+        except Exception as exc:
+            raise _adapter_operation_error(
+                code="NETCONF_FORCE_UNLOCK_FAILED",
+                message="NETCONF kill-session failed",
+                exc=exc,
+                retryable=True,
+            ) from exc
+
     def verify_running(self, desired_state, scope=None) -> None:
         if _scope_is_empty(scope):
             return
@@ -684,6 +699,19 @@ def _append_secondary_error(
     secondary_raw = secondary_error.raw_error_summary or secondary_error.message
     original_error.raw_error_summary = (
         f"{original_raw}; {operation} also failed: {secondary_raw}"
+    )
+
+
+def _force_unlock_session_id(lock_owner: str | None) -> str:
+    session_id = (lock_owner or "").strip()
+    if session_id.isdigit() and int(session_id) > 0:
+        return session_id
+    raise AdapterError(
+        code="NETCONF_FORCE_UNLOCK_SESSION_ID_INVALID",
+        message="NETCONF force unlock requires lock_owner to be a NETCONF session-id",
+        normalized_error="invalid force unlock session id",
+        raw_error_summary=f"lock_owner={lock_owner!r}",
+        retryable=False,
     )
 
 

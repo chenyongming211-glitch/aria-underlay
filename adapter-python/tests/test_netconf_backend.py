@@ -1088,6 +1088,52 @@ def test_final_confirm_commits_persist_id():
     assert session.calls == [("commit", {"persist_id": "tx-1"})]
 
 
+def test_netconf_driver_force_unlock_commits_when_kill_session_succeeds():
+    session = _RecordingSession()
+    driver = NetconfBackedDriver(_BackendWithSession(session))
+
+    response = driver.force_unlock(
+        device=pb2.DeviceRef(device_id="leaf-a"),
+        lock_owner="42",
+        reason="operator break-glass",
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_COMMITTED
+    assert response.result.changed is True
+    assert list(response.result.errors) == []
+
+
+def test_force_unlock_sends_kill_session_rpc():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    backend.force_unlock(lock_owner="42", reason="operator break-glass")
+
+    assert session.calls == [("kill_session", "42")]
+
+
+def test_force_unlock_rejects_missing_lock_owner_before_device_call():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    with pytest.raises(AdapterError) as exc_info:
+        backend.force_unlock(lock_owner="", reason="operator break-glass")
+
+    assert exc_info.value.code == "NETCONF_FORCE_UNLOCK_SESSION_ID_INVALID"
+    assert session.calls == []
+
+
+def test_force_unlock_maps_kill_session_rpc_failure():
+    session = _RecordingSession(fail_kill_session=True)
+    backend = _BackendWithSession(session)
+
+    with pytest.raises(AdapterError) as exc_info:
+        backend.force_unlock(lock_owner="42", reason="operator break-glass")
+
+    assert exc_info.value.code == "NETCONF_FORCE_UNLOCK_FAILED"
+    assert exc_info.value.retryable is True
+
+
 def test_rollback_candidate_discards_candidate_strategy():
     session = _RecordingSession()
     backend = _BackendWithSession(session)
@@ -1593,6 +1639,7 @@ class _RecordingSession:
         fail_commit=False,
         fail_discard=False,
         fail_unlock=False,
+        fail_kill_session=False,
         reply="<data/>",
         server_capabilities=None,
     ):
@@ -1601,6 +1648,7 @@ class _RecordingSession:
         self.fail_commit = fail_commit
         self.fail_discard = fail_discard
         self.fail_unlock = fail_unlock
+        self.fail_kill_session = fail_kill_session
         self.reply = reply
         self.server_capabilities = server_capabilities or [BASE_10, CANDIDATE]
 
@@ -1638,6 +1686,11 @@ class _RecordingSession:
 
     def cancel_commit(self, **kwargs):
         self.calls.append(("cancel_commit", kwargs))
+
+    def kill_session(self, session_id):
+        self.calls.append(("kill_session", session_id))
+        if self.fail_kill_session:
+            raise RuntimeError("kill-session failed")
 
     def get_config(self, **kwargs):
         self.calls.append(("get_config", kwargs))
