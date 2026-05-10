@@ -55,28 +55,38 @@ Python 负责厂商适配和设备脏活
 
 ## 当前状态
 
-当前仓库已经越过 Sprint 0 骨架阶段，重点在“无真实交换机条件下把事务可靠性、适配器边界和厂商 XML 工具链做稳”。
+当前 `main` 已经进入真实 H3C NETCONF / Comware 功能闭环和可靠性收口阶段，不再是 Sprint 0 骨架阶段。
 
 已经具备：
 
-- Rust Core：intent validation、planner、diff/normalize、事务 journal、endpoint lock、recovery、drift audit、GC worker、force-resolve、adapter client pool。
-- Python Adapter：fake/mock backend、NETCONF backend、fail-closed renderer/parser registry、TOFU known-host trust store、dry-run preflight、offline state parser validator、offline renderer snapshot validator。
-- gRPC / Protobuf：Rust Core 和 Python Adapter 的 10 个设备操作 RPC 契约。
-- CI：Rust、Python adapter、fake adapter integration matrix 已接入 GitHub Actions。
+- Rust Core：intent validation、planner、diff/normalize、事务 journal、endpoint lock、recovery、confirmed-commit timeout watcher、drift audit、GC worker、worker runtime 隔离、force-resolve、admin force-unlock、adapter client pool、Product API action-level RBAC。
+- Python Adapter：fake/mock backend、real NETCONF backend、TOFU known-host trust store、dry-run preflight、H3C production renderer/parser、offline state parser validator、offline renderer snapshot validator。
+- H3C 支持范围：VLAN、接口 access/trunk、接口 description、IPv4 advanced ACL、ACL rule description、ACL interface binding，以及显式 delete VLAN / delete ACL / unbind ACL intent。
+- 事务可靠性修复：candidate prepare/commit checksum 防外部 TOCTOU、confirmed-commit timeout recovery、worker panic 隔离、Journal GC 路径失败 report 化、Drift audit expected-store listing 失败 report 化、NETCONF force unlock、persist-id recovery 只接受结构化错误信号。
+- CI：Python adapter、Rust `cargo check` / `cargo test`、real-device apply probe build、fake-adapter integration matrix 已接入 GitHub Actions。
 
-仍然明确不是生产完成：
+已知 bug 状态：
 
-- Huawei/H3C renderer 仍是 skeleton，只能离线 snapshot，默认不能进入真实 `prepare` 下发路径。
-- Huawei/H3C running state parser 只是 fixture-verified，仍需要真实设备 XML 验证后才能 `production_ready=True`。
+- 当前有效清单见 [当前缺陷 / 技术债清单](docs/bug-inventory-current-2026-05-09.md)。
+- 在当前部署边界下，已确认的非条件 open bug 已清零。
+- 剩余条件项：Python Adapter gRPC 仍是 insecure transport。当前默认 Core/Adapter 同主机 loopback 通信；如果未来改成跨主机通信或网络不可信，必须补 TLS/mTLS 或强制外部 sidecar/tunnel 安全边界。
+
+仍然明确不是完整生产闭环：
+
+- 当前目标是单 active Core，可选 active-passive HA；不支持 active-active。
+- 多设备 apply 是逐 endpoint 编排，不提供跨设备全局 all-or-nothing。
+- Huawei 不具备 H3C 同等级生产就绪状态。
 - Cisco/Ruijie renderer/parser 未实现。
 - NAPALM / Netmiko / SSH CLI 后端未实现。
-- fingerprint-only host-key pinning、完整现场 audit/metrics、真实设备联调仍是后续工作。
+- 当前没有部署环境，部署验证仍需后续现场或实验环境闭环。
 
 ## 文档
 
 - [需求说明](docs/aria-underlay-requirements.md)
 - [开发方案](docs/aria-underlay-development-plan.md)
 - [详细开发计划](docs/implementation-plan.md)
+- [当前缺陷 / 技术债清单](docs/bug-inventory-current-2026-05-09.md)
+- [真实设备验收手册](docs/runbooks/real-device-acceptance.md)
 
 ## 开发入口
 
