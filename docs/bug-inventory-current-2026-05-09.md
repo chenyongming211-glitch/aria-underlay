@@ -30,6 +30,7 @@
 | Candidate datastore prepare/commit 外部 TOCTOU | Python NETCONF prepare 会在 candidate lock 内读取 candidate config 并生成 checksum；Rust coordinator 从 prepare outcome 保存该 checksum 并传入 commit；commit 重新 lock candidate、读取当前 candidate checksum，比对不一致时返回 `NETCONF_CANDIDATE_CHANGED`，不会执行 commit。 | `proto/aria_underlay_adapter.proto`, `adapter-python/aria_underlay_adapter/backends/netconf.py`, `adapter-python/aria_underlay_adapter/drivers/netconf_backed.py`, `src/adapter_client/client.rs`, `src/api/apply_coordinator.rs` | 已通过 GitHub Actions；Python adapter 本地 290 passed；新增 TOCTOU 拒绝测试和 Rust coordinator checksum 传递测试。 |
 | Confirmed-commit timeout watcher | `AriaUnderlayService::recover_timed_out_confirmed_commits` 会扫描超时 confirmed-commit journal，拿 endpoint lock 后按最新 journal 再确认仍超时，再走现有 final-confirm/verify/recover 恢复路径；`ConfirmedCommitTimeoutWatcher` 已接入 worker runtime。 | `src/api/recovery_coordinator.rs`, `src/api/service.rs`, `src/worker/confirmed_commit.rs`, `src/worker/runtime.rs`, `tests/recovery_tests.rs`, `tests/worker_runtime_tests.rs` | 已通过 GitHub Actions run `25604327766`；新增 stale-only recovery 测试和 runtime watcher 调度测试。 |
 | Worker panic/join error 终止 runtime | worker task `JoinError` 现在会记录为 `worker_runtime` 的 `worker_errors`，不会触发 runtime `Err`，也不会提前 shutdown 其他 worker；健康 worker 可继续跑到正常 shutdown。 | `src/worker/runtime.rs`, `tests/worker_runtime_tests.rs` | 已通过 GitHub Actions run `25615539760`；新增 panic 隔离回归测试覆盖 panic worker 与健康 worker 并行运行。 |
+| Journal GC 目录级/删除级失败终止 worker | journal root `read_dir`、单条 journal 删除失败、artifact root/device 遍历失败和 artifact 删除失败现在都会记录到 `JournalGcReport`，不再让 `run_once` 返回 `Err`；artifact 失败新增 `artifacts_failed` 和 `failed_artifact_refs`，runtime 仍能拿到 GC scheduler report。 | `src/worker/gc.rs`, `src/telemetry/events.rs`, `tests/gc_tests.rs`, `tests/worker_runtime_tests.rs`, `tests/telemetry_tests.rs` | 已通过 GitHub Actions run `25616940842`；新增只读目录/删除失败回归测试和 runtime report 预期测试。 |
 
 ## Confirmed-open
 
@@ -38,7 +39,6 @@
 | 优先级 | 项目 | 当前确认 | 主要证据 | 建议 |
 | --- | --- | --- | --- | --- |
 | P0/条件阻塞 | Python Adapter gRPC 无 TLS/mTLS | server 只调用 `add_insecure_port(config.listen)`，配置也没有证书/client-auth 字段。 | `adapter-python/aria_underlay_adapter/server.py:163-169`, `adapter-python/aria_underlay_adapter/config.py:7-31` | 若 Core/Adapter 跨主机或网络不可信，先修；loopback/sidecar 部署可后置。 |
-| P1 | Journal GC 目录级/删除级失败仍全局失败 | 单个坏 journal 文件已跳过；`read_dir`、`remove_file`、artifact dir 遍历/删除错误仍直接返回 Err。 | `src/worker/gc.rs:210-264`, `src/worker/gc.rs:267-356` | 继续把目录/删除错误降级为报告字段，避免停止 runtime。 |
 | P1 | Drift audit expected-store listing 失败仍全局失败 | 单设备 observed 失败已记录并继续；`expected_store.list()?` 失败仍中止整个审计。 | `src/worker/drift_auditor.rs:115-140` | 文件/存储层 listing 故障需要单独报告和事件化。 |
 | P2 | `_persist_id_already_consumed` 保留 vendor 字符串 fallback | 已优先识别结构化 code/normalized_error，但仍 fallback 到 `"persist" + marker` 字符串匹配。 | `adapter-python/aria_underlay_adapter/drivers/netconf_backed.py:694-719` | 等真实厂商错误码覆盖后逐步收窄或按 vendor profile 限定。 |
 | P2/功能缺口 | NETCONF force unlock 未实现 | Rust/API/RPC 已接线，Python real NETCONF driver 直接返回 `NOT_IMPLEMENTED`。 | `src/api/admin_ops.rs:75-105`, `adapter-python/aria_underlay_adapter/drivers/netconf_backed.py:305-312` | 只有需要 break-glass kill-session/force-unlock 时升优先级。 |
@@ -77,7 +77,7 @@
 | rollback cleanup 覆盖 primary error | 已修复 | rollback 失败会作为 secondary diagnostic 附加，primary error 保留。 |
 | 顶层缺 `PartialSuccess` | 已修复 | `src/api/apply.rs:62-69` 聚合 mixed outcome 为 `ApplyStatus::PartialSuccess`。 |
 | Worker 普通错误终止全部 worker | 已修复 | worker 返回 Err 会记录到 `worker_errors`，不再直接停止 runtime；panic/join error 也已记录到 `worker_errors` 并隔离。 |
-| Journal GC 单个坏文件终止整轮 | 已修复 | malformed/unreadable 单文件记录 `journals_failed` 并继续。 |
+| Journal GC 单个坏文件/目录级失败终止整轮 | 已修复 | malformed/unreadable 单文件、journal root 遍历失败、journal 删除失败、artifact 遍历/删除失败都会记录到 GC report 并继续；artifact 失败会进入 `artifacts_failed`/`failed_artifact_refs`。 |
 | Drift audit 单设备 observed 失败中止全部审计 | 已修复 | 单设备失败记录到 `failed_devices` 并继续。 |
 | H3C parser/renderer 不能标记 production-ready | 旧文档已过期 | H3C renderer/parser 已 `production_ready=True`，real-device runbook 记录 S5560/S6800 代表验证。Huawei 仍不是同等级生产就绪。 |
 
@@ -86,7 +86,7 @@
 默认先做最小可验证切片，不一次性铺开所有 open 项：
 
 1. 若 Core/Adapter 有跨主机部署：先修 adapter gRPC TLS/mTLS 或写入强制 sidecar/tunnel 配置边界。
-2. 然后集中修 GC 目录级失败、drift expected listing 失败。
+2. 然后集中修 drift expected-store listing 失败。
 3. 最后按真实厂商反馈收窄 persist-id 字符串 fallback，并补 NETCONF force unlock。
 
 当前不建议先做 active-active、跨设备全局事务、AutoReconcile 或非 H3C vendor 扩展。
