@@ -25,9 +25,11 @@ fn journal_gc_completed_event_includes_cleanup_counts() {
         journals_retained: 3,
         journals_failed: 1,
         artifacts_deleted: 4,
+        artifacts_failed: 1,
         journal_deleted_tx_ids: vec!["tx-old".into()],
         failed_journal_refs: vec!["bad.json".into()],
         artifact_deleted_refs: vec!["leaf-a/tx-old".into()],
+        failed_artifact_refs: vec!["leaf-b/tx-stuck".into()],
     };
 
     let event = UnderlayEvent::journal_gc_completed("req-gc", "trace-gc", &report);
@@ -52,6 +54,10 @@ fn journal_gc_completed_event_includes_cleanup_counts() {
         Some("4")
     );
     assert_eq!(
+        event.fields.get("artifacts_failed").map(String::as_str),
+        Some("1")
+    );
+    assert_eq!(
         event.fields.get("deleted_total").map(String::as_str),
         Some("6")
     );
@@ -72,6 +78,10 @@ fn journal_gc_completed_event_includes_cleanup_counts() {
     assert_eq!(
         event.fields.get("failed_journal_refs").map(String::as_str),
         Some("bad.json")
+    );
+    assert_eq!(
+        event.fields.get("failed_artifact_refs").map(String::as_str),
+        Some("leaf-b/tx-stuck")
     );
 }
 

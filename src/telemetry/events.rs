@@ -125,6 +125,10 @@ impl UnderlayEvent {
             "artifacts_deleted".into(),
             report.artifacts_deleted.to_string(),
         );
+        fields.insert(
+            "artifacts_failed".into(),
+            report.artifacts_failed.to_string(),
+        );
         fields.insert("deleted_total".into(), report.deleted_total().to_string());
         if !report.journal_deleted_tx_ids.is_empty() {
             fields.insert(
@@ -142,6 +146,12 @@ impl UnderlayEvent {
             fields.insert(
                 "failed_journal_refs".into(),
                 report.failed_journal_refs.join(","),
+            );
+        }
+        if !report.failed_artifact_refs.is_empty() {
+            fields.insert(
+                "failed_artifact_refs".into(),
+                report.failed_artifact_refs.join(","),
             );
         }
 

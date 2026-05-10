@@ -57,9 +57,13 @@ pub struct JournalGcReport {
     pub journals_retained: usize,
     pub journals_failed: usize,
     pub artifacts_deleted: usize,
+    #[serde(default)]
+    pub artifacts_failed: usize,
     pub journal_deleted_tx_ids: Vec<String>,
     pub failed_journal_refs: Vec<String>,
     pub artifact_deleted_refs: Vec<String>,
+    #[serde(default)]
+    pub failed_artifact_refs: Vec<String>,
 }
 
 impl JournalGcReport {
@@ -71,6 +75,7 @@ impl JournalGcReport {
         self.journal_deleted_tx_ids.sort();
         self.failed_journal_refs.sort();
         self.artifact_deleted_refs.sort();
+        self.failed_artifact_refs.sort();
     }
 }
 
@@ -207,8 +212,23 @@ impl JournalGc {
         let mut report = JournalGcReport::default();
         let mut terminal_records = Vec::new();
 
-        for entry in fs::read_dir(journal_root).map_err(gc_io_error)? {
-            let path = entry.map_err(gc_io_error)?.path();
+        let entries = match fs::read_dir(journal_root) {
+            Ok(entries) => entries,
+            Err(_) => {
+                record_journal_failure(&mut report, journal_root);
+                report.sort_details();
+                return Ok(report);
+            }
+        };
+
+        for entry in entries {
+            let path = match entry {
+                Ok(entry) => entry.path(),
+                Err(_) => {
+                    record_journal_failure(&mut report, journal_root);
+                    continue;
+                }
+            };
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
             }
@@ -216,8 +236,7 @@ impl JournalGc {
             let record = match read_journal_record(&path) {
                 Ok(record) => record,
                 Err(_) => {
-                    report.journals_failed += 1;
-                    report.failed_journal_refs.push(path_ref(&path));
+                    record_journal_failure(&mut report, &path);
                     continue;
                 }
             };
@@ -240,41 +259,55 @@ impl JournalGc {
 
             terminal_records.push(record.clone());
             if journal_due {
-                fs::remove_file(&path).map_err(gc_io_error)?;
-                report.journals_deleted += 1;
-                report.journal_deleted_tx_ids.push(record.tx_id.clone());
+                match fs::remove_file(&path) {
+                    Ok(()) => {
+                        report.journals_deleted += 1;
+                        report.journal_deleted_tx_ids.push(record.tx_id.clone());
+                    }
+                    Err(_) => record_journal_failure(&mut report, &path),
+                }
             } else {
                 report.journals_retained += 1;
             }
 
             if artifact_due {
-                let deleted_refs = self.delete_artifacts_for_tx(&record.tx_id)?;
-                report.artifacts_deleted += deleted_refs.len();
-                report.artifact_deleted_refs.extend(deleted_refs);
+                self.delete_artifacts_for_tx(&record.tx_id, &mut report);
             }
         }
 
-        let pruned_refs = self.prune_artifacts_per_device(
+        self.prune_artifacts_per_device(
             &terminal_records,
             policy.max_artifacts_per_device as usize,
-        )?;
-        report.artifacts_deleted += pruned_refs.len();
-        report.artifact_deleted_refs.extend(pruned_refs);
+            &mut report,
+        );
         report.sort_details();
         Ok(report)
     }
 
-    fn delete_artifacts_for_tx(&self, tx_id: &str) -> UnderlayResult<Vec<String>> {
+    fn delete_artifacts_for_tx(&self, tx_id: &str, report: &mut JournalGcReport) {
         let Some(artifact_root) = &self.artifact_root else {
-            return Ok(Vec::new());
+            return;
         };
         if !artifact_root.exists() {
-            return Ok(Vec::new());
+            return;
         }
 
-        let mut deleted = Vec::new();
-        for entry in fs::read_dir(artifact_root).map_err(gc_io_error)? {
-            let device_dir = entry.map_err(gc_io_error)?.path();
+        let entries = match fs::read_dir(artifact_root) {
+            Ok(entries) => entries,
+            Err(_) => {
+                record_artifact_failure(report, path_ref(artifact_root));
+                return;
+            }
+        };
+
+        for entry in entries {
+            let device_dir = match entry {
+                Ok(entry) => entry.path(),
+                Err(_) => {
+                    record_artifact_failure(report, path_ref(artifact_root));
+                    continue;
+                }
+            };
             if !device_dir.is_dir() {
                 continue;
             }
@@ -284,23 +317,29 @@ impl JournalGc {
 
             let tx_dir = device_dir.join(tx_id);
             if tx_dir.is_dir() {
-                fs::remove_dir_all(&tx_dir).map_err(gc_io_error)?;
-                deleted.push(format!("{device_id}/{tx_id}"));
+                let artifact_ref = format!("{device_id}/{tx_id}");
+                match fs::remove_dir_all(&tx_dir) {
+                    Ok(()) => {
+                        report.artifacts_deleted += 1;
+                        report.artifact_deleted_refs.push(artifact_ref);
+                    }
+                    Err(_) => record_artifact_failure(report, artifact_ref),
+                }
             }
         }
-        Ok(deleted)
     }
 
     fn prune_artifacts_per_device(
         &self,
         terminal_records: &[TxJournalRecord],
         max_artifacts_per_device: usize,
-    ) -> UnderlayResult<Vec<String>> {
+        report: &mut JournalGcReport,
+    ) {
         let Some(artifact_root) = &self.artifact_root else {
-            return Ok(Vec::new());
+            return;
         };
         if max_artifacts_per_device == 0 || !artifact_root.exists() {
-            return Ok(Vec::new());
+            return;
         }
 
         let terminal_by_tx = terminal_records
@@ -309,9 +348,22 @@ impl JournalGc {
             .map(|record| (record.tx_id.as_str(), record.updated_at_unix_secs))
             .collect::<BTreeMap<_, _>>();
 
-        let mut deleted = Vec::new();
-        for entry in fs::read_dir(artifact_root).map_err(gc_io_error)? {
-            let device_dir = entry.map_err(gc_io_error)?.path();
+        let entries = match fs::read_dir(artifact_root) {
+            Ok(entries) => entries,
+            Err(_) => {
+                record_artifact_failure(report, path_ref(artifact_root));
+                return;
+            }
+        };
+
+        for entry in entries {
+            let device_dir = match entry {
+                Ok(entry) => entry.path(),
+                Err(_) => {
+                    record_artifact_failure(report, path_ref(artifact_root));
+                    continue;
+                }
+            };
             if !device_dir.is_dir() {
                 continue;
             }
@@ -320,8 +372,21 @@ impl JournalGc {
             };
 
             let mut terminal_artifacts = Vec::new();
-            for tx_entry in fs::read_dir(&device_dir).map_err(gc_io_error)? {
-                let tx_dir = tx_entry.map_err(gc_io_error)?.path();
+            let tx_entries = match fs::read_dir(&device_dir) {
+                Ok(entries) => entries,
+                Err(_) => {
+                    record_artifact_failure(report, device_id.to_string());
+                    continue;
+                }
+            };
+            for tx_entry in tx_entries {
+                let tx_dir = match tx_entry {
+                    Ok(entry) => entry.path(),
+                    Err(_) => {
+                        record_artifact_failure(report, device_id.to_string());
+                        continue;
+                    }
+                };
                 if !tx_dir.is_dir() {
                     continue;
                 }
@@ -348,12 +413,17 @@ impl JournalGc {
                     continue;
                 }
                 if tx_dir.exists() {
-                    fs::remove_dir_all(&tx_dir).map_err(gc_io_error)?;
-                    deleted.push(format!("{device_id}/{tx_id}"));
+                    let artifact_ref = format!("{device_id}/{tx_id}");
+                    match fs::remove_dir_all(&tx_dir) {
+                        Ok(()) => {
+                            report.artifacts_deleted += 1;
+                            report.artifact_deleted_refs.push(artifact_ref);
+                        }
+                        Err(_) => record_artifact_failure(report, artifact_ref),
+                    }
                 }
             }
         }
-        Ok(deleted)
     }
 }
 
@@ -368,6 +438,21 @@ fn path_ref(path: &Path) -> String {
         .and_then(|name| name.to_str())
         .map(str::to_string)
         .unwrap_or_else(|| path.display().to_string())
+}
+
+fn record_journal_failure(report: &mut JournalGcReport, path: &Path) {
+    let reference = path_ref(path);
+    if !report.failed_journal_refs.contains(&reference) {
+        report.journals_failed += 1;
+        report.failed_journal_refs.push(reference);
+    }
+}
+
+fn record_artifact_failure(report: &mut JournalGcReport, reference: String) {
+    if !report.failed_artifact_refs.contains(&reference) {
+        report.artifacts_failed += 1;
+        report.failed_artifact_refs.push(reference);
+    }
 }
 
 fn is_terminal_phase(phase: &TxPhase) -> bool {
