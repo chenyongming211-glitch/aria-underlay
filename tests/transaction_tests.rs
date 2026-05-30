@@ -56,6 +56,63 @@ fn file_journal_round_trips_record() {
 }
 
 #[test]
+fn journal_record_transition_phase_updates_phase_and_timestamp() {
+    let context = TxContext {
+        tx_id: "tx-transition".into(),
+        request_id: "req-transition".into(),
+        trace_id: "trace-transition".into(),
+    };
+    let mut record = TxJournalRecord::started(&context, vec![DeviceId("leaf-a".into())]);
+    let original_updated_at = record.updated_at_unix_secs;
+
+    record
+        .transition_phase(TxPhase::Preparing)
+        .expect("Started -> Preparing should be valid");
+
+    assert_eq!(record.phase, TxPhase::Preparing);
+    assert!(record.updated_at_unix_secs >= original_updated_at);
+}
+
+#[test]
+fn journal_record_transition_phase_rejects_invalid_skip() {
+    let context = TxContext {
+        tx_id: "tx-invalid-transition".into(),
+        request_id: "req-invalid-transition".into(),
+        trace_id: "trace-invalid-transition".into(),
+    };
+    let mut record = TxJournalRecord::started(&context, vec![DeviceId("leaf-a".into())]);
+
+    let err = record
+        .transition_phase(TxPhase::Committed)
+        .expect_err("Started -> Committed should be invalid");
+
+    assert_eq!(record.phase, TxPhase::Started);
+    assert!(err.to_string().contains("Started -> Committed"));
+}
+
+#[test]
+fn journal_record_transition_phase_preserves_committed_to_in_doubt_recovery_semantics() {
+    let context = TxContext {
+        tx_id: "tx-committed-shadow-failure".into(),
+        request_id: "req-committed-shadow-failure".into(),
+        trace_id: "trace-committed-shadow-failure".into(),
+    };
+    let mut record = TxJournalRecord::started(&context, vec![DeviceId("leaf-a".into())]);
+
+    record.transition_phase(TxPhase::Preparing).unwrap();
+    record.transition_phase(TxPhase::Prepared).unwrap();
+    record.transition_phase(TxPhase::Committing).unwrap();
+    record.transition_phase(TxPhase::Verifying).unwrap();
+    record.transition_phase(TxPhase::FinalConfirming).unwrap();
+    record.transition_phase(TxPhase::Committed).unwrap();
+    record
+        .transition_phase(TxPhase::InDoubt)
+        .expect("Committed -> InDoubt is required for post-commit shadow failure");
+
+    assert_eq!(record.phase, TxPhase::InDoubt);
+}
+
+#[test]
 fn journal_record_preserves_error_history() {
     let context = TxContext {
         tx_id: "tx-errors".into(),

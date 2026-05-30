@@ -95,8 +95,9 @@ Python 负责厂商适配和设备脏活
 推荐开发顺序：
 
 ```text
-1. 保持事务正确性优先：新增功能必须补 crash/recovery、journal/shadow、drift/verify 相关测试。
-2. 在没有真实交换机时，继续强化 parser fixture、renderer snapshot、dry-run、audit/metrics 和代码边界。
-3. 真实交换机到位后，先采集 running XML 并验证 parser，再验证 renderer 下发。
-4. 只有真实样本和测试闭环通过后，才允许厂商 renderer/parser 提升到 production_ready=True。
+1. 保持事务正确性优先：当前先完成 Phase 1 状态机重构，新增或迁移 phase 写入必须补 recovery/journal/shadow 回归测试。
+2. 在没有真实交换机时，下一步优先建设 offline H3C acceptance runner，用 fake/mock backend 覆盖 H3C 已支持命令面的端到端验收。
+3. Product HTTP TLS/mTLS 只在 Product API 需要跨主机或非 loopback 暴露时推进；Python Adapter gRPC TLS/mTLS 已完成。
+4. 真实交换机到位后，先采集 running XML 并验证 parser，再验证 renderer 下发。
+5. 只有真实样本和测试闭环通过后，才允许非 H3C 厂商 renderer/parser 提升到 production_ready=True。
 ```

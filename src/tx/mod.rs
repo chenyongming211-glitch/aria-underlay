@@ -5,6 +5,7 @@ pub mod coordinator;
 pub mod endpoint_lock;
 pub mod journal;
 pub mod lock_strategy;
+pub mod phase_transition;
 pub mod recovery;
 pub mod strategy;
 
@@ -14,5 +15,6 @@ pub use journal::{
     InMemoryTxJournalStore, JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase,
 };
 pub use lock_strategy::LockAcquisitionPolicy;
+pub use phase_transition::validate_transition;
 pub use recovery::RecoveryAction;
 pub use strategy::{choose_strategy, CapabilityFlags, TransactionMode, TransactionStrategy};

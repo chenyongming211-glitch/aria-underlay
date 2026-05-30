@@ -162,15 +162,13 @@ impl AdminOps {
             .map_err(product_audit_error)?;
 
         let previous_phase = record.phase.clone();
-        let resolved = record
-            .clone()
-            .with_manual_resolution(
-                request.operator.clone(),
-                request.reason.clone(),
-                request.request_id.clone(),
-                trace_id.clone(),
-            )
-            .with_phase(TxPhase::ForceResolved);
+        let mut resolved = record.clone().with_manual_resolution(
+            request.operator.clone(),
+            request.reason.clone(),
+            request.request_id.clone(),
+            trace_id.clone(),
+        );
+        resolved.transition_phase(TxPhase::ForceResolved)?;
         self.journal.put(&resolved)?;
         self.event_sink.emit(UnderlayEvent::transaction_force_resolved(
             request.request_id,

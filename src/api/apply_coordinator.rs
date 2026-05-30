@@ -255,7 +255,15 @@ impl ApplyCoordinator {
         if let Err(err) = self.journal.put(&journal_record) {
             return device_error_result(&desired.device_id, true, None, None, err);
         }
-        journal_record = journal_record.with_phase(TxPhase::Preparing);
+        if let Err(err) = journal_record.transition_phase(TxPhase::Preparing) {
+            return device_error_result(
+                &desired.device_id,
+                true,
+                Some(tx_context.tx_id),
+                None,
+                err,
+            );
+        }
         if let Err(err) = self.journal.put(&journal_record) {
             return device_error_result(
                 &desired.device_id,
@@ -296,9 +304,20 @@ impl ApplyCoordinator {
         strategy: TransactionStrategy,
     ) -> DeviceApplyResult {
         let mut warnings = degraded_strategy_warnings(strategy);
-        journal_record = journal_record
-            .with_strategy(strategy)
-            .with_phase(TxPhase::Committed);
+        journal_record = journal_record.with_strategy(strategy);
+        if let Err(err) = journal_record.transition_phase(TxPhase::Committed) {
+            let (code, message) = journal_error_fields(&err);
+            return DeviceApplyResult {
+                device_id: desired.device_id.clone(),
+                changed: true,
+                status: ApplyStatus::InDoubt,
+                tx_id: Some(tx_context.tx_id),
+                strategy: Some(strategy),
+                error_code: Some(code),
+                error_message: Some(message),
+                warnings,
+            };
+        }
         if let Err(err) = self.journal.put(&journal_record) {
             let (code, message) = journal_error_fields(&err);
             return DeviceApplyResult {
@@ -325,9 +344,22 @@ impl ApplyCoordinator {
                 "missing change set after successful apply for device {}",
                 desired.device_id.0
             );
-            journal_record = journal_record
-                .with_phase(TxPhase::InDoubt)
-                .with_error(code.clone(), error_message.clone());
+            if let Err(transition_err) = journal_record.transition_phase(TxPhase::InDoubt) {
+                let (_, transition_message) = journal_error_fields(&transition_err);
+                return DeviceApplyResult {
+                    device_id: desired.device_id.clone(),
+                    changed: true,
+                    status: ApplyStatus::InDoubt,
+                    tx_id: Some(tx_context.tx_id),
+                    strategy: Some(strategy),
+                    error_code: Some(code),
+                    error_message: Some(format!(
+                        "{error_message}; phase transition also failed: {transition_message}"
+                    )),
+                    warnings,
+                };
+            }
+            journal_record = journal_record.with_error(code.clone(), error_message.clone());
             let _ = self.journal.put(&journal_record);
             return DeviceApplyResult {
                 device_id: desired.device_id.clone(),
@@ -346,9 +378,22 @@ impl ApplyCoordinator {
                 let (code, message) = journal_error_fields(&err);
                 let error_message =
                     format!("shadow state unavailable after successful apply: {message}");
-                journal_record = journal_record
-                    .with_phase(TxPhase::InDoubt)
-                    .with_error(code.clone(), error_message.clone());
+                if let Err(transition_err) = journal_record.transition_phase(TxPhase::InDoubt) {
+                    let (_, transition_message) = journal_error_fields(&transition_err);
+                    return DeviceApplyResult {
+                        device_id: desired.device_id.clone(),
+                        changed: true,
+                        status: ApplyStatus::InDoubt,
+                        tx_id: Some(tx_context.tx_id),
+                        strategy: Some(strategy),
+                        error_code: Some(code),
+                        error_message: Some(format!(
+                            "{error_message}; phase transition also failed: {transition_message}"
+                        )),
+                        warnings,
+                    };
+                }
+                journal_record = journal_record.with_error(code.clone(), error_message.clone());
                 if let Err(journal_err) = self.journal.put(&journal_record) {
                     let (_, journal_msg) = journal_error_fields(&journal_err);
                     return DeviceApplyResult {
@@ -381,9 +426,22 @@ impl ApplyCoordinator {
         if let Err(err) = self.shadow_store.put(shadow_state) {
             let (code, message) = journal_error_fields(&err);
             let error_message = format!("shadow state stale after successful apply: {message}");
-            journal_record = journal_record
-                .with_phase(TxPhase::InDoubt)
-                .with_error(code.clone(), error_message.clone());
+            if let Err(transition_err) = journal_record.transition_phase(TxPhase::InDoubt) {
+                let (_, transition_message) = journal_error_fields(&transition_err);
+                return DeviceApplyResult {
+                    device_id: desired.device_id.clone(),
+                    changed: true,
+                    status: ApplyStatus::InDoubt,
+                    tx_id: Some(tx_context.tx_id),
+                    strategy: Some(strategy),
+                    error_code: Some(code),
+                    error_message: Some(format!(
+                        "{error_message}; phase transition also failed: {transition_message}"
+                    )),
+                    warnings,
+                };
+            }
+            journal_record = journal_record.with_error(code.clone(), error_message.clone());
             if let Err(journal_err) = self.journal.put(&journal_record) {
                 let (_, journal_msg) = journal_error_fields(&journal_err);
                 return DeviceApplyResult {
@@ -436,9 +494,22 @@ impl ApplyCoordinator {
     ) -> DeviceApplyResult {
         let (code, message) = journal_error_fields(&err);
         let phase = failed_apply_phase(&journal_record.phase);
-        journal_record = journal_record
-            .with_phase(phase.clone())
-            .with_error(code.clone(), message.clone());
+        if let Err(transition_err) = journal_record.transition_phase(phase.clone()) {
+            let (_, transition_message) = journal_error_fields(&transition_err);
+            return DeviceApplyResult {
+                device_id: desired.device_id.clone(),
+                changed: true,
+                status: ApplyStatus::InDoubt,
+                tx_id: Some(tx_context.tx_id),
+                strategy: journal_record.strategy,
+                error_code: Some(code),
+                error_message: Some(format!(
+                    "{message}; phase transition also failed: {transition_message}"
+                )),
+                warnings: Vec::new(),
+            };
+        }
+        journal_record = journal_record.with_error(code.clone(), message.clone());
         if let Err(journal_err) = self.journal.put(&journal_record) {
             let (_, journal_msg) = journal_error_fields(&journal_err);
             return DeviceApplyResult {
@@ -597,7 +668,7 @@ impl ApplyCoordinator {
             .await?;
             return Ok(None);
         }
-        *journal_record = journal_record.clone().with_phase(TxPhase::Prepared);
+        journal_record.transition_phase(TxPhase::Prepared)?;
         self.journal.put(journal_record)?;
         Ok(prepare.prepared_candidate_checksum)
     }
@@ -611,7 +682,7 @@ impl ApplyCoordinator {
         prepared_candidate_checksum: Option<&str>,
         journal_record: &mut TxJournalRecord,
     ) -> UnderlayResult<()> {
-        *journal_record = journal_record.clone().with_phase(TxPhase::Committing);
+        journal_record.transition_phase(TxPhase::Committing)?;
         self.journal.put(journal_record)?;
         match client
             .commit_with_context(
@@ -662,7 +733,7 @@ impl ApplyCoordinator {
         change_set: &crate::engine::diff::ChangeSet,
         journal_record: &mut TxJournalRecord,
     ) -> UnderlayResult<()> {
-        *journal_record = journal_record.clone().with_phase(TxPhase::Verifying);
+        journal_record.transition_phase(TxPhase::Verifying)?;
         self.journal.put(journal_record)?;
         match client
             .verify_with_context_for_change_set(device, context, desired, change_set)
@@ -712,7 +783,7 @@ impl ApplyCoordinator {
         context: &RequestContext,
         journal_record: &mut TxJournalRecord,
     ) -> UnderlayResult<()> {
-        *journal_record = journal_record.clone().with_phase(TxPhase::FinalConfirming);
+        journal_record.transition_phase(TxPhase::FinalConfirming)?;
         self.journal.put(journal_record)?;
         match client.final_confirm_with_context(device, context).await {
             Ok(confirm) if confirm.status == AdapterOperationStatus::Committed => Ok(()),
@@ -776,7 +847,7 @@ impl ApplyCoordinator {
             .rollback_with_context(device, context, journal_record.strategy)
             .await;
 
-        *journal_record = journal_record.clone().with_phase(TxPhase::RollingBack);
+        journal_record.transition_phase(TxPhase::RollingBack)?;
         self.journal.put(journal_record)?;
 
         match rollback_result {
@@ -786,7 +857,7 @@ impl ApplyCoordinator {
                     AdapterOperationStatus::RolledBack | AdapterOperationStatus::NoChange
                 ) =>
             {
-                *journal_record = journal_record.clone().with_phase(TxPhase::RolledBack);
+                journal_record.transition_phase(TxPhase::RolledBack)?;
                 self.journal.put(journal_record)?;
             }
             Ok(outcome) => {
@@ -796,22 +867,18 @@ impl ApplyCoordinator {
                     retryable: true,
                     errors: Vec::new(),
                 };
-                *journal_record = journal_record
-                    .clone()
-                    .with_phase(TxPhase::InDoubt)
-                    .with_error(
-                        "UNEXPECTED_ROLLBACK_STATUS",
-                        format!("adapter returned rollback status {:?}", outcome.status),
-                    );
+                journal_record.transition_phase(TxPhase::InDoubt)?;
+                *journal_record = journal_record.clone().with_error(
+                    "UNEXPECTED_ROLLBACK_STATUS",
+                    format!("adapter returned rollback status {:?}", outcome.status),
+                );
                 self.journal.put(journal_record)?;
                 return Err(error);
             }
             Err(err) => {
                 let (code, message) = journal_error_fields(&err);
-                *journal_record = journal_record
-                    .clone()
-                    .with_phase(TxPhase::InDoubt)
-                    .with_error(code, message);
+                journal_record.transition_phase(TxPhase::InDoubt)?;
+                *journal_record = journal_record.clone().with_error(code, message);
                 self.journal.put(journal_record)?;
                 return Err(err);
             }

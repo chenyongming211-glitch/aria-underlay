@@ -10,6 +10,7 @@ use crate::engine::diff::ChangeSet;
 use crate::model::DeviceId;
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::tx::context::TxContext;
+use crate::tx::phase_transition::validate_transition;
 use crate::tx::strategy::TransactionStrategy;
 use crate::utils::atomic_file::atomic_write;
 use crate::utils::time::now_unix_secs;
@@ -105,6 +106,13 @@ impl TxJournalRecord {
         self.phase = phase;
         self.updated_at_unix_secs = now_unix_secs();
         self
+    }
+
+    pub fn transition_phase(&mut self, phase: TxPhase) -> UnderlayResult<()> {
+        validate_transition(&self.phase, &phase)?;
+        self.phase = phase;
+        self.updated_at_unix_secs = now_unix_secs();
+        Ok(())
     }
 
     pub fn with_strategy(mut self, strategy: TransactionStrategy) -> Self {

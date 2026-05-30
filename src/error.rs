@@ -38,6 +38,9 @@ pub enum UnderlayError {
     #[error("product audit write failed: {0}")]
     ProductAuditWriteFailed(String),
 
+    #[error("invalid phase transition: {from} -> {to}")]
+    InvalidPhaseTransition { from: String, to: String },
+
     #[error("unsupported transaction strategy")]
     UnsupportedTransactionStrategy,
 

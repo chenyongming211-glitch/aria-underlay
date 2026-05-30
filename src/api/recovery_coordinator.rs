@@ -133,13 +133,15 @@ impl RecoveryCoordinator {
                 RecoveryAction::Noop => {}
                 RecoveryAction::ManualIntervention => {
                     if record.phase != TxPhase::InDoubt {
-                        self.journal
-                            .put(&record.clone().with_phase(TxPhase::InDoubt))?;
+                        let mut updated = record.clone();
+                        updated.transition_phase(TxPhase::InDoubt)?;
+                        self.journal.put(&updated)?;
                     }
                 }
                 RecoveryAction::DiscardPreparedChanges | RecoveryAction::AdapterRecover => {
-                    self.journal
-                        .put(&record.clone().with_phase(TxPhase::Recovering))?;
+                    let mut recovering = record.clone();
+                    recovering.transition_phase(TxPhase::Recovering)?;
+                    self.journal.put(&recovering)?;
 
                     match self.recover_record(&record, decision.action).await {
                         Ok(phase) => {
@@ -148,28 +150,26 @@ impl RecoveryCoordinator {
                             if phase == TxPhase::Committed {
                                 if let Err(err) = self.persist_recovered_shadow(&record) {
                                     let (code, message) = journal_error_fields(&err);
-                                    self.journal.put(
-                                        &record
-                                            .clone()
-                                            .with_phase(TxPhase::InDoubt)
-                                            .with_error(code, message),
-                                    )?;
+                                    let mut updated = recovering.clone();
+                                    updated.transition_phase(TxPhase::InDoubt)?;
+                                    updated = updated.with_error(code, message);
+                                    self.journal.put(&updated)?;
                                     continue;
                                 }
                             }
-                            self.journal.put(&record.clone().with_phase(phase))?;
+                            let mut recovered_record = recovering.clone();
+                            recovered_record.transition_phase(phase)?;
+                            self.journal.put(&recovered_record)?;
                             if terminal {
                                 recovered += 1;
                             }
                         }
                         Err(err) => {
                             let (code, message) = journal_error_fields(&err);
-                            self.journal.put(
-                                &record
-                                    .clone()
-                                    .with_phase(TxPhase::InDoubt)
-                                    .with_error(code, message),
-                            )?;
+                            let mut updated = recovering.clone();
+                            updated.transition_phase(TxPhase::InDoubt)?;
+                            updated = updated.with_error(code, message);
+                            self.journal.put(&updated)?;
                         }
                     }
                 }
