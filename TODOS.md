@@ -2,11 +2,13 @@
 
 延期工作跟踪，用于后续 sprint。每个项目包含足够的上下文，便于数月后接手的人理解。
 
-## P1: 当前进行中 — Phase 1 状态机重构
+## P1: 已完成 — Phase 1 状态机重构
+
+**状态**：已完成并通过 GitHub Actions（run `26683402767`）。生产事务路径通过 `TxJournalRecord::transition_phase()` 进行 phase 变更；`with_phase()` 仍保留给测试 fixture 和后续 public-field 封装迁移。
 
 **前置条件**：当前 bug 清单已经更新到 `docs/bug-inventory-current-2026-05-30.md`，无已知非条件 open bug；Python Adapter gRPC TLS/mTLS 已修复。Rust 本地无 `cargo`，Rust 编译/测试必须通过 GitHub Actions 验证。
 
-**做什么**：先只做显式状态机验证，不和 Product HTTP TLS 或 worker event bus 打包。详细方案见 `~/.gstack/projects/chenyongming211-glitch-aria-underlay/ceo-plans/structural-refactor-20260530.md`，但以本节修正后的边界为准。
+**已完成内容**：本阶段只做显式状态机验证，没有和 Product HTTP TLS 或 worker event bus 打包。详细方案见 `~/.gstack/projects/chenyongming211-glitch-aria-underlay/ceo-plans/structural-refactor-20260530.md`，但以本节修正后的边界为准。
 
 - 新增/保留 `src/tx/phase_transition.rs` 的集中转换矩阵。
 - 在 `TxJournalRecord` 上实现 `transition_phase(target)`；不要把状态更新方法放在 `TxPhase` 上，因为真正需要更新的是 journal record 的 `phase` 和 `updated_at_unix_secs`。
@@ -25,12 +27,12 @@
 - `with_phase pub(crate)` 不是完整强制边界，除非同时收紧 `TxJournalRecord.phase` 字段可见性
 
 **工作量**：M
-**优先级**：P1（当前已开始，先完成这个单独切片）
-**依赖**：当前未提交 Phase 1 WIP 需要继续补齐；Rust 以 GitHub Actions 为门禁
+**优先级**：P1（已完成）
+**依赖**：Rust 以 GitHub Actions 为门禁；本阶段已在 run `26683402767` 通过
 
 ---
 
-## P1: 没有真实交换机时的下一步 — Offline H3C Acceptance Runner
+## P1: 下一步 — Offline H3C Acceptance Runner
 
 **做什么**：建立离线 H3C 验收闭环，把 fake/mock adapter、H3C renderer/parser、Product API/Core apply 流程串起来，输出机器可读 JSON 和人可读摘要。
 
@@ -43,8 +45,8 @@
 - 不替代真实设备验收；真实设备到位后复用同一报告格式。
 
 **工作量**：M
-**优先级**：P1（Phase 1 状态机重构完成并 CI 通过后）
-**依赖**：当前 Phase 1 WIP 完成，避免验收 runner 建在仍在迁移的事务路径上
+**优先级**：P1（当前最适合推进）
+**依赖**：Phase 1 状态机重构已完成并通过 CI，验收 runner 可以建在稳定事务路径上
 
 ---
 

@@ -649,7 +649,7 @@ git commit -m "test: guard validated transaction phase changes"
 - Modify: `README.md`
 - Optional Modify: `docs/bug-inventory-current-2026-05-30.md`
 
-- [ ] **Step 1: Update `TODOS.md` Phase 1 status**
+- [x] **Step 1: Update `TODOS.md` Phase 1 status**
 
 After implementation and CI pass, update the Phase 1 section to say:
 
@@ -657,7 +657,7 @@ After implementation and CI pass, update the Phase 1 section to say:
 **状态**：已完成并通过 GitHub Actions。生产事务路径通过 `TxJournalRecord::transition_phase()` 进行 phase 变更；`with_phase()` 仍保留给测试 fixture 和后续 public-field 封装迁移。
 ```
 
-- [ ] **Step 2: Update README development order only if Phase 1 is complete**
+- [x] **Step 2: Update README development order only if Phase 1 is complete**
 
 Replace README line in the development order:
 
@@ -671,7 +671,7 @@ with:
 1. 保持事务正确性优先：状态机重构已完成；后续新增 phase 写入必须走 transition_phase 并补 recovery/journal/shadow 回归测试。
 ```
 
-- [ ] **Step 3: Run formatting and tests**
+- [x] **Step 3: Run formatting and tests**
 
 Run locally if available:
 
@@ -693,10 +693,10 @@ gh run watch
 
 Expected: GitHub Actions passes Rust `cargo check`, Rust `cargo test`, Python adapter, real-device probe build, and fake-adapter integration matrix.
 
-- [ ] **Step 4: Commit docs**
+- [x] **Step 4: Commit docs**
 
 ```bash
-git add README.md TODOS.md docs/bug-inventory-current-2026-05-30.md
+git add README.md TODOS.md docs/superpowers/plans/2026-05-30-transaction-phase-state-machine.md
 git commit -m "docs: mark transaction phase state machine complete"
 ```
 
