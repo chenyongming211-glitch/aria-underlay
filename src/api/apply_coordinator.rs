@@ -847,8 +847,10 @@ impl ApplyCoordinator {
             .rollback_with_context(device, context, journal_record.strategy)
             .await;
 
-        journal_record.transition_phase(TxPhase::RollingBack)?;
-        self.journal.put(journal_record)?;
+        let mut rolling_back_record = journal_record.clone();
+        rolling_back_record.transition_phase(TxPhase::RollingBack)?;
+        self.journal.put(&rolling_back_record)?;
+        *journal_record = rolling_back_record;
 
         match rollback_result {
             Ok(outcome)
