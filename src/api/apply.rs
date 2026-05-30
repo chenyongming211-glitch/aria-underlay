@@ -155,6 +155,10 @@ pub(super) fn journal_error_fields(error: &UnderlayError) -> (String, String) {
         UnderlayError::InvalidDeviceState(message) => {
             ("INVALID_DEVICE_STATE".into(), message.clone())
         }
+        UnderlayError::InvalidPhaseTransition { from, to } => (
+            "INVALID_PHASE_TRANSITION".into(),
+            format!("invalid phase transition: {from} -> {to}"),
+        ),
         UnderlayError::UnsupportedTransactionStrategy => (
             "UNSUPPORTED_TRANSACTION_STRATEGY".into(),
             "unsupported transaction strategy".into(),
@@ -283,5 +287,18 @@ mod tests {
         assert!(message.contains("first error"));
         assert!(message.contains("SECOND: second error"));
         assert!(message.contains("THIRD: third error"));
+    }
+
+    #[test]
+    fn journal_error_fields_maps_invalid_phase_transition() {
+        let error = UnderlayError::InvalidPhaseTransition {
+            from: "Started".into(),
+            to: "Committed".into(),
+        };
+
+        let (code, message) = journal_error_fields(&error);
+
+        assert_eq!(code, "INVALID_PHASE_TRANSITION");
+        assert_eq!(message, "invalid phase transition: Started -> Committed");
     }
 }
