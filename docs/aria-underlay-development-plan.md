@@ -152,6 +152,61 @@ Python 适配器 中的厂商 驱动 负责把结构化模型渲染成厂商 NET
 - post-commit verification。
 - 多厂商适配。
 
+### 3.4.1 标准模型优先，厂商适配收窄
+
+后续 PBR、BGP、QoS、NQA 等复杂功能不能继续沿用“先写某个厂商 renderer，
+再逐步补其他厂商”的扩张方式。复杂功能必须先判断设备模型能力，再决定是否进入
+写路径。
+
+设备写路径优先级：
+
+```text
+1. OpenConfig / gNMI 或 OpenConfig-over-NETCONF，且路径级读写验证通过
+2. 厂商 native YANG，且型号/固件 profile 路径级读写验证通过
+3. 厂商私有 NETCONF XML renderer，仅限已经收窄的功能面
+4. NAPALM / Netmiko / SSH CLI，仅作为只读采集、低风险 fallback 或人工 gated cleanup
+```
+
+禁止仅根据厂商宣传、型号名称或 NETCONF hello capabilities 判断可写支持。复杂功能
+必须记录 `DeviceModelProfile`：
+
+```text
+vendor
+model
+os_version
+protocol: NETCONF / gNMI / CLI
+YANG modules and revisions
+OpenConfig supported paths
+vendor native YANG supported paths
+path-level read result
+path-level candidate write + validate result
+transaction strategy
+write decision: standard-model / vendor-native / read-only / rejected
+```
+
+如果设备只支持直接写 running，PBR/BGP 等影响转发或控制面的写操作默认拒绝。
+只有经过单独高风险例外审批、真机验收和回滚验证后，才能进入人工 gated 路径。
+
+### 3.4.2 Source of Truth 边界
+
+Aria Underlay 不直接绑定 NetBox、Nautobot 或某个外部 CMDB 的内部数据结构。
+核心只接收归一化后的 SoT snapshot：
+
+```text
+device inventory
+interface inventory
+VLAN / ACL / policy intent
+ownership metadata
+model profile reference
+```
+
+外部 SoT connector 只负责把 NetBox、Nautobot、文件或上层 Aria API 转换成该 snapshot。
+核心事务路径不得直接依赖某个外部 SoT 产品的 SDK、数据库 schema 或 API 分页语义。
+
+这样做的目的不是马上接入完整 SoT，而是先把边界固定：设备、接口、策略和 ownership
+从哪里来可以替换；事务正确性、diff、ChangePlan、下发和 verify 不随外部 SoT 产品
+变化。
+
 ### 3.5 幂等
 
 同一个 intent 连续 apply 多次，只有第一次真正改设备。
@@ -955,6 +1010,69 @@ PrepareRequest
 
 Renderer 最终应接收 `ChangeSet`，不是只接收完整 `DeviceDesiredState`。原因是 delete / update / replace 需要明确 operation 语义，desired state 只能表达最终状态。
 
+### 10.3.5 ChangePlan：依赖顺序、blast radius 和回滚顺序
+
+`ChangeSet` 表达“要改什么”，但不能单独表达复杂功能的安全下发顺序。PBR、BGP、
+QoS、NQA 等功能进入写路径前，必须在 `ChangeSet` 和 renderer 之间增加
+`ChangePlan`：
+
+```text
+DeviceDesiredState
+  -> refresh current state
+  -> diff -> ChangeSet
+  -> dependency planner -> ChangePlan
+  -> renderer / staged candidate edit-config
+  -> validate
+  -> commit / confirmed-commit
+  -> readback parser
+  -> verify desired subset
+```
+
+`ChangePlan` 至少包含：
+
+- `stages`：依赖有序阶段，例如 create base objects、create references、bind service。
+- `dependency_edges`：对象之间的引用关系，例如 PBR policy 依赖 ACL / prefix-list。
+- `rollback_order`：反向恢复顺序，必须在下发前生成。
+- `touched_scope`：readback verify 的最小范围。
+- `blast_radius`：local interface/VLAN、policy reference、routing control plane 等分级。
+- `write_gate`：是否允许自动写入，或仅允许 read-only / dry-run / 人工 gated。
+
+创建顺序默认遵循：
+
+```text
+base objects
+  -> reference objects
+  -> service objects
+  -> bindings
+```
+
+删除顺序必须反向：
+
+```text
+unbind
+  -> remove references
+  -> delete service objects
+  -> delete base objects
+```
+
+如果设备要求引用对象必须先独立写入 candidate，允许一个事务内多次
+`edit-config(target="candidate")`，但仍必须只执行一次 `validate + commit`。禁止
+按阶段多次 commit。
+
+### 10.3.6 高风险功能写入门禁
+
+PBR/BGP 写配置前必须满足：
+
+1. `DeviceModelProfile` 已记录目标型号/固件的模型和路径级结果。
+2. 首选 OpenConfig/gNMI 或 OpenConfig-over-NETCONF，且目标路径读写验证通过。
+3. OpenConfig 不可用时，vendor native YANG 必须有稳定 path-level read/write 证据。
+4. 设备至少支持 `candidate + validate`；更高风险写入优先要求 confirmed-commit。
+5. dry-run 输出 `ChangePlan`、blast-radius summary、rollback order 和 unsupported-path report。
+6. readback parser 能把 touched scope 转回标准 observed state。
+7. offline acceptance 覆盖 renderer/parser/ChangePlan 报告；真实设备到位后再做真机验收。
+
+未满足上述条件时，系统必须返回结构化拒绝，不允许退化成“尽量拼命令下发”。
+
 ### 10.4 Lock Acquisition Strategy
 
 Rust Tx Coordinator 负责锁获取策略。
@@ -1057,6 +1175,18 @@ Rust 主控不直接处理 SSH、NETCONF framing、厂商 XML 或 CLI。
 `confirmed-commit:1.0` 和 `confirmed-commit:1.1` 不应简单视为完全等价。
 
 如果依赖 `persist` / `persist-id` 做跨 session 恢复，必须按真实 能力 精确判断。
+
+复杂功能还必须补充模型能力探测：
+
+- NETCONF YANG Library：module name、revision、feature、deviation。
+- gNMI Capabilities：supported models、encodings。
+- OpenConfig path-level read：目标路径是否能读到稳定结构。
+- OpenConfig path-level write：无害对象是否能写入 candidate 并 validate。
+- Vendor native YANG path-level read/write：OpenConfig 不可用时才作为写路径候选。
+
+capability probe 只能给出候选能力；只有 path-level 读写验证通过，才允许把某功能
+标记为 writable。对于 BGP/PBR，module 存在但路径未验证时只能进入 read-only 或
+rejected 状态。
 
 ### 11.4 RPC
 

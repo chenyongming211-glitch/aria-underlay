@@ -53,11 +53,45 @@
 
 ---
 
-## P1: 下一步 — H3C Batch 2 Basic IPv4 ACL
+## P1: 下一步 — 标准模型 / SoT / ChangePlan 基础
+
+**做什么**：把 OpenConfig/gNMI 评估、Source of Truth 输入边界和 ChangePlan dry-run 落地到核心开发计划和代码骨架中。详细执行计划见 `docs/superpowers/plans/2026-05-30-standard-model-sot-changeplan.md`。
+
+**为什么**：PBR、BGP、QoS、NQA 这类功能不是简单的“多渲染几条 H3C 命令”。它们有跨对象依赖、引用顺序、删除顺序和业务 blast radius。如果继续按“厂商命令 renderer 先行”的方式扩展，会把型号/固件差异、命令依赖和回滚风险都压到 adapter 里，后续很难稳定。当前没有真实交换机环境，最应该先补的是可在 CI 和离线报告中验证的变更前决策层。
+
+**范围**：
+- 新增 `DeviceModelProfile` 合约，记录 vendor、model、os_version、YANG modules/revisions、OpenConfig/gNMI 支持、厂商 native YANG 支持、path 级 read/write 验证结果和最终 write readiness。
+- Python Adapter 增加 NETCONF YANG Library / capability 探测入口；如果后续接 gNMI，则通过同一 profile 输出，不让 Rust Core 直接依赖具体探测实现。
+- 定义 `SotSnapshot` 输入边界，让 NetBox、Nautobot、文件或外部 API 都先转换成项目内部稳定结构；Core 不直接绑定外部 SoT 的 SDK、分页或 schema。
+- 在 Rust Core 的 diff 和 renderer 之间加入 `ChangePlan`：包含 stage 顺序、dependency_edges、rollback_order、touched_scope、blast_radius 和 write_gate。
+- Dry-run 和 offline H3C acceptance report 输出 ChangePlan 摘要；没有真实设备时先证明 renderer/parser 没退化，同时证明复杂变更会给出顺序、依赖和拒绝原因。
+- PBR/BGP 写入必须先通过 profile 和 ChangePlan 门禁；没有 path 级读写证据时只能做 read-only parser/audit 或结构化拒绝。
+
+**验收标准**：
+- `DeviceModelProfile` 在 proto/Rust/Python 之间可序列化并进入 capability report。
+- OpenConfig/gNMI 或 native YANG 只在 path 级 read/write 验证通过后才允许标记为 writable；模块存在不等于可写。
+- `SotSnapshot` 能表达 device/interface/VLAN/ACL/policy/BGP neighbor 的归属和来源，并能被后续 planner 消费。
+- `ChangePlan` 对 create/update/delete 都能输出稳定顺序；删除引用类对象时必须先解绑再删除。
+- Dry-run JSON 中能看到 dependency graph、blast radius、rollback order、unsupported paths 和最终 write decision。
+- GitHub Actions 通过 Rust `cargo check` / `cargo test` 和 Python pytest；本地无 `cargo` 时以 CI 为准。
+
+**不做**：
+- 不直接实现 PBR/BGP 写入。
+- 不把 Ansible/Nornir/NAPALM 塞进核心事务路径。
+- 不要求马上接入 NetBox 或 Nautobot。
+- 不声称 OpenConfig 一定可用；本阶段目标是探测、分类和门禁。
+
+**工作量**：L
+**优先级**：P1（复杂网络功能写入前的基础层）
+**依赖**：Offline H3C Acceptance Runner 已完成；Rust 编译/测试继续以 GitHub Actions 为门禁
+
+---
+
+## P1/P2: 后续 — H3C Batch 2 Basic IPv4 ACL
 
 **做什么**：按 H3C 命令适配路线图推进 Basic IPv4 ACL。一次只扩一个 ACL family，先做 Basic IPv4 ACL，不同时做 named ACL、IPv6 ACL、QoS、PBR、NQA 或 BGP。
 
-**为什么**：当前 bug 清单中无已知非条件 open bug；真实设备部署验证和 Huawei production-ready 都依赖现场或实验交换机；Product HTTP TLS/mTLS 只有跨主机暴露 Product API 时才是高优先级。Basic IPv4 ACL 是 H3C Batch 2 中风险最低、复用现有 ACL renderer/parser/verify/offline acceptance 基础最多的一步。
+**顺序修正**：Basic IPv4 ACL 仍然是 H3C Batch 2 中风险最低、复用现有 ACL renderer/parser/verify/offline acceptance 基础最多的一步，但它不是 PBR/BGP 方案的替代品。当前优先级低于 `DeviceModelProfile + SoT Snapshot + ChangePlan` 基础层；基础层落地后再推进 Basic ACL，可以让后续 ACL 被 PBR/QoS/BGP 引用时有统一依赖图和删除顺序。
 
 **范围**：
 - 明确 Basic IPv4 ACL 的 domain/proto 表达方式，避免和已有 numeric IPv4 advanced ACL 混淆。
@@ -67,8 +101,8 @@
 - 不做 named ACL、IPv6 ACL、ACL 引用到 QoS/PBR/NQA/BGP。
 
 **工作量**：M/L
-**优先级**：P1（当前最适合推进的代码开发项）
-**依赖**：Offline H3C Acceptance Runner 已完成；Rust 编译/测试继续以 GitHub Actions 为门禁
+**优先级**：P1/P2（基础层之后的低风险命令扩展）
+**依赖**：Offline H3C Acceptance Runner 已完成；ChangePlan 基础层至少完成 dry-run/report 形态
 
 ---
 

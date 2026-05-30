@@ -1016,6 +1016,127 @@ confirmed-commit 能力按恢复能力分层：
 
 当前代码如果暂时只有统一 `ConfirmedCommit`，实现时必须至少保留 能力 字段，后续拆分策略枚举时不得破坏 journal 和 recovery 语义。
 
+### 12.3 标准模型、SoT 和 ChangePlan 基础
+
+PBR/BGP 写配置前，先补三层基础能力：
+
+```text
+DeviceModelProfile
+  -> Source of Truth snapshot boundary
+  -> ChangePlan / dependency graph / blast-radius dry-run
+```
+
+目标不是马上引入 NetBox、Nautobot、Batfish、Ansible 或 NSO，而是把它们对应的思想
+落到当前控制器边界里：
+
+| 方向 | 当前落地方式 | 当前不做 |
+| --- | --- | --- |
+| OpenConfig / gNMI / 标准模型 | 增加 device model capability probe，记录 NETCONF YANG Library、gNMI Capabilities、OpenConfig path-level read/write 结果 | 不在没有路径级验证时直接写 PBR/BGP |
+| Source of Truth | 定义归一化 SoT snapshot 输入边界，包含 device/interface/policy/ownership/model profile reference | 不直接绑定 NetBox/Nautobot SDK 或数据库结构 |
+| 成熟执行框架 | 保留 ncclient NETCONF 主路径；NAPALM/Netmiko 仅作为后置 fallback 或只读采集候选 | 不把 Ansible/Nornir 放进核心事务路径 |
+| NSO 式服务编排 | 借鉴 service model、device profile、plan/apply/verify/recover 生命周期 | 不自研完整 NSO 或通用 device package 生态 |
+| 离线验证 / Batfish 类验证 | 扩展 dry-run 和 offline acceptance，输出 ChangePlan、blast radius、rollback order | 不把 offline 验证当作真实设备验收替代品 |
+
+#### 12.3.1 DeviceModelProfile
+
+`DeviceModelProfile` 是每个 vendor/model/firmware 的模型能力快照，至少包含：
+
+```text
+vendor
+model
+os_version
+netconf_capabilities
+yang_modules: name + revision + deviations
+gnmi_supported_models
+openconfig_paths
+vendor_native_yang_paths
+transaction_capability
+pbr_write_readiness
+bgp_write_readiness
+rejection_reasons
+```
+
+读写分级：
+
+| 级别 | 含义 | 允许动作 |
+| --- | --- | --- |
+| `standard_model_write_safe` | OpenConfig/gNMI 或 OpenConfig-over-NETCONF 路径级读写验证通过，且事务能力满足要求 | 可进入自动写路径 |
+| `vendor_native_write_safe` | OpenConfig 不可用，native YANG 路径级读写验证通过，且 profile 绑定型号/固件 | 可进入收窄 vendor 写路径 |
+| `read_only` | 可读但写入不完整或未验证 | 只允许 audit/drift/parser/readback |
+| `rejected` | 缺路径、缺 candidate/validate、running-only 或行为不稳定 | 禁止自动写入 |
+
+#### 12.3.2 Source of Truth snapshot
+
+先定义 SoT 边界，不急着接入具体产品。核心输入应是归一化 snapshot：
+
+```text
+SotSnapshot {
+  devices
+  interfaces
+  vlans
+  acls
+  policies
+  bgp_neighbors
+  ownership
+  model_profile_refs
+}
+```
+
+NetBox、Nautobot、上层 Aria API 或文件导入都只能作为 connector。connector 输出
+snapshot，核心事务路径只依赖 snapshot，不依赖外部 SoT 的分页、字段命名或 API
+故障模型。
+
+#### 12.3.3 ChangePlan
+
+`ChangePlan` 是 `ChangeSet` 到 renderer 之间的安全计划层：
+
+```text
+ChangeSet
+  -> dependency graph
+  -> ordered stages
+  -> rollback order
+  -> touched scope
+  -> blast-radius summary
+  -> write gate
+```
+
+创建顺序：
+
+```text
+base objects -> reference objects -> service objects -> bindings
+```
+
+删除顺序：
+
+```text
+unbind -> remove references -> delete service objects -> delete base objects
+```
+
+PBR/BGP 的 dry-run 必须输出：
+
+- dependency graph。
+- ordered stage list。
+- unsupported paths。
+- affected interfaces / VRFs / peers。
+- blast-radius summary。
+- rollback order。
+- final decision：auto-write、read-only、manual-gated 或 rejected。
+
+#### 12.3.4 开发顺序
+
+| 顺序 | 任务 | 交付物 | 验收 |
+| --- | --- | --- | --- |
+| 1 | 文档和计划落地 | `docs/superpowers/plans/2026-05-30-standard-model-sot-changeplan.md`、开发方案更新、TODO 更新 | `git diff --check` 通过 |
+| 2 | DeviceModelProfile contract | Protobuf additive fields、Rust profile 类型、Python profile helper | Rust/Python 单测通过；旧 proto 字段不破坏 |
+| 3 | NETCONF/YANG/gNMI probe | NETCONF YANG Library 提取、gNMI Capabilities 预留、path-level 结果结构 | fixture 测试覆盖 module/revision/path 分类 |
+| 4 | SoT snapshot boundary | Rust `sot` 模块、connector-independent snapshot validation | duplicate device/interface/ownership 测试通过 |
+| 5 | ChangePlan | Rust `change_plan` 模块，ChangeSet -> ordered stages | ACL bind/delete 顺序、rollback order、blast radius 测试通过 |
+| 6 | Dry-run report | dry-run response 增加 ChangePlan 和 write decision | CLI/API 测试确认报告稳定 |
+| 7 | Offline acceptance 扩展 | H3C offline report 加 ChangePlan fields | parser-in-the-loop acceptance 继续通过 |
+| 8 | PBR/BGP read-only first | parser/audit only，不进写路径 | 未满足 profile 时写入被结构化拒绝 |
+
+该阶段完成后，再决定是否继续 H3C Basic IPv4 ACL 或进入 PBR/BGP read-only parser。
+
 ## 13. Sprint 6 详细任务
 
 Sprint 6 目标：
@@ -1253,27 +1374,26 @@ AuditEvent
 - Protobuf command/event 状态机已经文档化。
 - stream 断开、重复 command、乱序 command、超时和重连都有测试。
 
-## 17. 立即开工顺序
+## 17. 当前下一步开工顺序
 
-按这个顺序开始开发：
+早期初始化、fake adapter、事务骨架、H3C renderer/parser、可靠性 bugfix 和 offline
+H3C acceptance runner 已经完成。当前不要再按 Sprint 0 初始化顺序推进。
 
-```text
-1. 初始化 Rust crate
-2. 初始化 adapter-python
-3. 写 proto/aria_underlay_adapter.proto
-4. 配置 Rust tonic-build
-5. 配置 Python grpcio-tools
-6. 实现 Python fake GetCapabilities
-7. 实现 Rust 适配器客户端.get_capabilities
-8. 实现 DeviceRegistration
-9. 实现 DeviceOnboarding
-10. 跑通 examples/capability_probe.rs
-```
-
-不要先写事务层。
-
-第一天的目标只有一个：
+按这个顺序开始下一阶段：
 
 ```text
-Rust 注册设备 -> 调 Python Adapter -> 拿 capability -> 更新 inventory 状态
+1. 落地标准模型 / SoT / ChangePlan 计划文档
+2. 实现 DeviceModelProfile contract
+3. 实现 NETCONF YANG Library / gNMI Capabilities 探测报告
+4. 定义 SoT snapshot 边界，不绑定具体外部 SoT 产品
+5. 实现 ChangePlan dependency graph、stages、rollback order、blast-radius
+6. 将 ChangePlan 接入 dry-run 和 offline H3C acceptance report
+7. 对 PBR/BGP 先做 read-only parser / audit 设计，不直接写配置
+8. 真实设备到位后做 model profile 路径级读写验收
+9. 满足 profile 后再决定 OpenConfig 写、vendor native YANG 写，或拒绝自动写
 ```
+
+H3C Batch 2 Basic IPv4 ACL 仍是低风险命令面扩展，但它不应抢在
+DeviceModelProfile 和 ChangePlan 基础之前推进到复杂策略功能。PBR/BGP 写配置必须等
+标准模型评估、依赖顺序、blast-radius、readback verify 和 rollback order 全部有报告
+和测试闭环后再进入实现。

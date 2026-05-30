@@ -22,6 +22,31 @@ It is intentionally scoped; do not use it as proof for admin-down, trunk native
 VLAN, deletes through normal apply, PBR/QoS/NQA/BGP ACL consumers, or
 cross-device atomic behavior.
 
+## High-Risk Model Profile Requirement
+
+Before adding real-device write acceptance for PBR, QoS policy binding, NQA
+coupling, or BGP, capture a model profile for the exact device model and
+firmware under test. The profile is required even when the final write path uses
+H3C NETCONF instead of gNMI.
+
+Required evidence:
+
+- NETCONF server capabilities and YANG Library module/revision inventory.
+- gNMI Capabilities output when gNMI is enabled or being evaluated.
+- OpenConfig path read/write result for each target feature path, if present.
+- Vendor native YANG path read/write result when OpenConfig is unavailable or
+  incomplete.
+- Whether the device supports candidate, validate, confirmed-commit, or only
+  writable-running with rollback-on-error.
+- A dry-run ChangePlan containing dependency edges, ordered stages, rollback
+  order, touched scope, blast radius, unsupported paths, and final write
+  decision.
+
+Do not treat module presence as write support. If only module-level evidence is
+available, record the feature as read-only or rejected for writes. For PBR/BGP,
+running-only write support remains rejected unless a separate high-risk
+exception is approved and recorded with the acceptance result.
+
 ## Preconditions
 
 - The Python adapter is running and healthy on the control node.

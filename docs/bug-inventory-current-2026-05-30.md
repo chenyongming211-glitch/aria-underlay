@@ -85,12 +85,13 @@
 
 ## 下一步建议
 
-当前 bug 清单中无已知 open bug。gRPC TLS/mTLS 已修复，跨主机部署的安全传输边界已就位。
+当前 bug 清单中无已知 open bug。gRPC TLS/mTLS 已修复，跨主机部署的安全传输边界已就位。下一阶段不是继续直接扩 PBR/BGP 私有命令，而是先补复杂网络功能写入前的模型能力、来源边界和变更计划。
 
 后续优先级建议：
 
-1. 真实设备部署验证：Sprint 7 剩余闭环和 H3C 真实验收仍需现场或实验环境。
-2. Huawei 生产就绪：renderer/parser 提升到 H3C 同等级 `production_ready=True`。
-3. H3C Batch 2 — Basic IPv4 ACL：按命令适配路线图逐步推进。
+1. 标准模型 / SoT / ChangePlan 基础：实现 `DeviceModelProfile`、`SotSnapshot` 和 dependency-aware `ChangePlan` dry-run/report，为 PBR/BGP/QoS 等高风险写入建立 OpenConfig/gNMI 或稳定 YANG path 级门禁。
+2. 真实设备部署验证：Sprint 7 剩余闭环和 H3C 真实验收仍需现场或实验环境；有设备后先采集 running XML、capabilities、YANG/gNMI profile，再验证写入。
+3. H3C Batch 2 — Basic IPv4 ACL：基础层之后按命令适配路线图逐步推进，作为低风险 ACL family 扩展。
+4. Huawei 生产就绪：renderer/parser 提升到 H3C 同等级 `production_ready=True`，前提仍是真实样本和测试闭环。
 
 当前不建议先做 active-active、跨设备全局事务、AutoReconcile 或非 H3C vendor 扩展。

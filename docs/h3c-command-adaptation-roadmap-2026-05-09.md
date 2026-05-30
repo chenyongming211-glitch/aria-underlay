@@ -26,6 +26,33 @@ The following are intentionally out of scope for the current production surface:
 - IPv6 ACL, basic ACL, and named ACL.
 - Cross-device ACID semantics.
 
+## Standard Model Gate Before High-Risk Writes
+
+PBR, QoS, NQA coupling, and BGP must not be implemented as direct H3C private
+command rendering first. Before any write support for these surfaces, the
+controller must produce a device model profile and a dependency-aware
+ChangePlan.
+
+Required gate:
+
+- Probe NETCONF YANG Library and NETCONF capabilities for supported modules and
+  revisions.
+- Probe gNMI Capabilities when gNMI is enabled for a device profile.
+- Prefer OpenConfig/gNMI or OpenConfig-over-NETCONF when the exact target paths
+  have read/write evidence.
+- If OpenConfig is unavailable, allow vendor native YANG only when the exact
+  target paths have read/write evidence for the target model and firmware.
+- Treat module-level support as read-only or inconclusive until path-level
+  evidence exists.
+- Reject writes on running-only devices for PBR/BGP unless a separate
+  high-risk exception and real-device acceptance record exists.
+- Dry-run must emit ordered stages, dependency edges, rollback order,
+  unsupported paths, touched scope, blast radius, and final write decision.
+
+For this roadmap, ACL family expansion may continue as a low-risk H3C command
+surface, but PBR/BGP/QoS/NQA write support starts only after the standard model
+gate and ChangePlan report path are implemented.
+
 ## Batch 1: Low-Risk Completion
 
 ### ACL Rule Description Closure
@@ -112,6 +139,9 @@ Safety:
 - Require readback proof that no unrelated classifier/policy is changed.
 - Cleanup must detach policy first, then delete policy/classifier/behavior, then
   delete the isolated ACL.
+- Require a `DeviceModelProfile` write decision before any write attempt. If the
+  device exposes only private XML shapes without path-level evidence, keep this
+  batch at dry-run/report-only.
 
 ## Batch 4: PBR MVP
 
@@ -128,6 +158,9 @@ Safety:
   acknowledgement distinct from generic apply acknowledgement.
 - Use dry-run gates to reject update/delete of existing production policies.
 - Cleanup must detach PBR before deleting policy nodes or ACLs.
+- Start with read-only parser/audit and ChangePlan output. Write support requires
+  OpenConfig/gNMI or vendor native YANG path-level evidence for the exact PBR
+  paths, plus candidate/validate or an approved high-risk running-only exception.
 
 ## Batch 5: NQA MVP
 
@@ -147,6 +180,16 @@ Start with read-only BGP parser support:
 Write support should come only after read-only parsing has been validated on
 representative devices. BGP writes require separate design review because the
 blast radius is larger than VLAN, ACL, or NQA.
+
+BGP write design must consume `DeviceModelProfile` and `ChangePlan`:
+
+- Prefer OpenConfig network-instance/BGP paths if read/write is verified for the
+  target model and firmware.
+- Fall back to vendor native YANG only with path-level read/write evidence.
+- Keep CLI/NAPALM/Netmiko paths out of the primary transaction path; they may be
+  considered later for read-only collection or explicitly gated fallback.
+- Dry-run must identify affected VRFs, neighbors, policy references, rollback
+  order, and unsupported paths before any write is allowed.
 
 ## Cross-Device Atomicity
 
