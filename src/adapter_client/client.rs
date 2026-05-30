@@ -448,9 +448,13 @@ impl AdapterClientPool {
             Entry::Vacant(entry) => {
                 let mut builder = Channel::from_shared(endpoint.to_string())
                     .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?;
-                if let Some(tls) = &self.tls_config {
-                    let mut client_tls = ClientTlsConfig::new()
-                        .with_enabled_roots();
+                if endpoint.starts_with("https://") {
+                    let tls = self.tls_config.as_ref().ok_or_else(|| {
+                        UnderlayError::AdapterTransport(
+                            "TLS config is required for https adapter endpoint".into(),
+                        )
+                    })?;
+                    let mut client_tls = ClientTlsConfig::new().with_enabled_roots();
                     if let Some(ca_pem) = &tls.ca_cert_pem {
                         client_tls = client_tls
                             .ca_certificate(Certificate::from_pem(ca_pem));
