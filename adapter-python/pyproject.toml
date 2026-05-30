@@ -24,6 +24,7 @@ test = [
 [project.scripts]
 aria-underlay-render-snapshot = "aria_underlay_adapter.renderers.snapshot:main"
 aria-underlay-state-parse = "aria_underlay_adapter.state_parsers.validator:main"
+aria-underlay-h3c-offline-acceptance = "aria_underlay_adapter.acceptance.offline_h3c:main"
 
 [build-system]
 requires = ["setuptools>=68"]

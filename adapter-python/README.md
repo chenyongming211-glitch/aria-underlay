@@ -25,13 +25,17 @@ Implemented and CI-covered:
 - dry-run candidate rendering preflight without opening a device session
 - offline `aria-underlay-state-parse`
 - offline `aria-underlay-render-snapshot`
+- offline `aria-underlay-h3c-offline-acceptance`
 
 Not production-ready yet:
 
-- Huawei/H3C renderers are still skeleton renderers and are rejected by real
-  NETCONF prepare unless explicitly marked `production_ready=True` after review.
-- Huawei/H3C state parsers are fixture-verified only. They need real-device
-  running XML samples before production use.
+- Huawei renderers are still skeleton renderers and are rejected by real
+  NETCONF prepare.
+- Huawei state parsers are fixture-verified only. They need real-device running
+  XML samples before production use.
+- H3C renderer/parser support is production-ready only for the documented
+  VLAN, interface, description, IPv4 ACL, ACL binding, and explicit cleanup
+  command surface.
 - Cisco/Ruijie renderers and state parsers are not implemented.
 - NAPALM and Netmiko backends are not implemented, and this package no longer
   ships empty placeholder modules for them.
@@ -122,8 +126,7 @@ the same as `production_ready=True`.
 
 ## Offline renderer snapshot validation
 
-Desired-state JSON can be rendered through skeleton Huawei/H3C renderers without
-connecting to a device:
+Desired-state JSON can be rendered without connecting to a device:
 
 ```json
 {
@@ -149,7 +152,20 @@ aria-underlay-render-snapshot \
 ```
 
 The command prints a JSON report with renderer profile metadata, resource
-counts, and the rendered edit-config XML. It intentionally uses skeleton
-renderers for offline snapshot qualification only. Production NETCONF prepare
-still rejects skeleton renderers unless they are separately reviewed and marked
+counts, and the rendered edit-config XML. Production NETCONF prepare still
+rejects skeleton renderers unless they are separately reviewed and marked
 `production_ready=True`.
+
+## Offline H3C acceptance
+
+The H3C acceptance runner exercises the supported H3C command surface against
+the mock NETCONF backend without requiring a switch:
+
+```bash
+aria-underlay-h3c-offline-acceptance --pretty
+```
+
+The command prints JSON to stdout and a human-readable summary to stderr. It
+passes only when VLAN/access/trunk/description/ACL/binding/delete scenarios
+render valid H3C Comware XML and complete mock dry-run, prepare, commit,
+final-confirm, and verify.

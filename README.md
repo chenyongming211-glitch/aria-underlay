@@ -60,10 +60,10 @@ Python 负责厂商适配和设备脏活
 已经具备：
 
 - Rust Core：intent validation、planner、diff/normalize、事务 journal、endpoint lock、recovery、confirmed-commit timeout watcher、drift audit、GC worker、worker runtime 隔离、force-resolve、admin force-unlock、adapter client pool、Product API action-level RBAC。
-- Python Adapter：fake/mock backend、real NETCONF backend、TOFU known-host trust store、dry-run preflight、H3C production renderer/parser、offline state parser validator、offline renderer snapshot validator。
+- Python Adapter：fake/mock backend、real NETCONF backend、TOFU known-host trust store、dry-run preflight、H3C production renderer/parser、offline state parser validator、offline renderer snapshot validator、offline H3C acceptance runner。
 - H3C 支持范围：VLAN、接口 access/trunk、接口 description、IPv4 advanced ACL、ACL rule description、ACL interface binding，以及显式 delete VLAN / delete ACL / unbind ACL intent。
 - 事务可靠性修复：candidate prepare/commit checksum 防外部 TOCTOU、confirmed-commit timeout recovery、worker panic 隔离、Journal GC 路径失败 report 化、Drift audit expected-store listing 失败 report 化、NETCONF force unlock、persist-id recovery 只接受结构化错误信号。
-- CI：Python adapter、Rust `cargo check` / `cargo test`、real-device apply probe build、fake-adapter integration matrix 已接入 GitHub Actions。
+- CI：Python adapter、offline H3C acceptance、Rust `cargo check` / `cargo test`、real-device apply probe build、fake-adapter integration matrix 已接入 GitHub Actions。
 
 已知 bug 状态：
 
@@ -87,6 +87,7 @@ Python 负责厂商适配和设备脏活
 - [详细开发计划](docs/implementation-plan.md)
 - [当前缺陷 / 技术债清单](docs/bug-inventory-current-2026-05-30.md)
 - [真实设备验收手册](docs/runbooks/real-device-acceptance.md)
+- [离线 H3C 验收 runner](docs/runbooks/offline-h3c-acceptance.md)
 
 ## 开发入口
 
@@ -96,7 +97,7 @@ Python 负责厂商适配和设备脏活
 
 ```text
 1. 保持事务正确性优先：状态机重构已完成；后续新增 phase 写入必须走 `transition_phase()` 并补 recovery/journal/shadow 回归测试。
-2. 在没有真实交换机时，下一步优先建设 offline H3C acceptance runner，用 fake/mock backend 覆盖 H3C 已支持命令面的端到端验收。
+2. 在没有真实交换机时，使用 offline H3C acceptance runner 作为 H3C 命令面回归基线；它覆盖 renderer + mock NETCONF dry-run/prepare/commit/final-confirm/verify，但不替代真实设备验收。
 3. Product HTTP TLS/mTLS 只在 Product API 需要跨主机或非 loopback 暴露时推进；Python Adapter gRPC TLS/mTLS 已完成。
 4. 真实交换机到位后，先采集 running XML 并验证 parser，再验证 renderer 下发。
 5. 只有真实样本和测试闭环通过后，才允许非 H3C 厂商 renderer/parser 提升到 production_ready=True。
