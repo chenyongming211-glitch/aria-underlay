@@ -67,10 +67,23 @@ def test_offline_h3c_acceptance_includes_rendered_xml_and_state_counts():
     assert report["status"] == "passed"
     for scenario in report["scenarios"]:
         assert scenario["xml_bytes"] > 0
+        assert scenario["readback_xml_bytes"] > 0
         assert scenario["changed"] is True
+        assert scenario["parser_profile_name"] == "comware7-state-real"
+        assert scenario["stages"] == ["render", "apply", "parse", "verify"]
         assert scenario["observed_counts"].keys() == {
             "vlans",
             "interfaces",
             "acls",
             "acl_bindings",
         }
+        assert scenario["parsed_counts"] == scenario["observed_counts"]
+
+
+def test_offline_h3c_acceptance_summary_marks_parser_loop(capsys):
+    result = offline_h3c.main([])
+
+    captured = capsys.readouterr()
+
+    assert result == 0
+    assert "parser_loop=true" in captured.err

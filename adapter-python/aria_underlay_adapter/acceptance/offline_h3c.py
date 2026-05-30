@@ -11,7 +11,12 @@ from xml.etree import ElementTree
 
 from aria_underlay_adapter.backends.mock_netconf import MockNetconfBackend
 from aria_underlay_adapter.errors import AdapterError
+from aria_underlay_adapter.renderers.h3c import H3C_COMWARE_CONFIG_NAMESPACE
 from aria_underlay_adapter.renderers.h3c import H3cRenderer
+from aria_underlay_adapter.renderers.xml import NETCONF_BASE_NAMESPACE
+from aria_underlay_adapter.renderers.xml import XmlElement
+from aria_underlay_adapter.renderers.xml import render_xml
+from aria_underlay_adapter.state_parsers.h3c import H3cStateParser
 
 
 RUNNER_NAME = "offline-h3c-acceptance"
@@ -29,6 +34,7 @@ class Scenario:
 
 def run_acceptance(*, backend_profile: str = "confirmed") -> dict[str, Any]:
     renderer = H3cRenderer()
+    parser = H3cStateParser(model_hint="S5560-54C-EI")
     scenario_reports = []
     for scenario in _scenarios():
         try:
@@ -36,6 +42,7 @@ def run_acceptance(*, backend_profile: str = "confirmed") -> dict[str, Any]:
                 _run_scenario(
                     scenario,
                     renderer=renderer,
+                    parser=parser,
                     backend=MockNetconfBackend(backend_profile),
                 )
             )
@@ -71,11 +78,13 @@ def format_summary(report: dict[str, Any]) -> str:
         surface = ", ".join(scenario["surface"])
         if scenario["status"] == "passed":
             lines.append(
-                "- {}: passed [{}], changed={}, xml_bytes={}".format(
+                "- {}: passed [{}], changed={}, xml_bytes={}, "
+                "readback_xml_bytes={}, parser_loop=true".format(
                     scenario["name"],
                     surface,
                     str(scenario["changed"]).lower(),
                     scenario["xml_bytes"],
+                    scenario["readback_xml_bytes"],
                 )
             )
         else:
@@ -112,6 +121,7 @@ def _run_scenario(
     scenario: Scenario,
     *,
     renderer: H3cRenderer,
+    parser: H3cStateParser,
     backend: MockNetconfBackend,
 ) -> dict[str, Any]:
     for seed_desired in scenario.seed:
@@ -119,6 +129,7 @@ def _run_scenario(
             seed_desired,
             scope=scenario.scope,
             renderer=renderer,
+            parser=parser,
             backend=backend,
             tx_id=f"{scenario.name}-seed",
         )
@@ -127,6 +138,7 @@ def _run_scenario(
         scenario.desired,
         scope=scenario.scope,
         renderer=renderer,
+        parser=parser,
         backend=backend,
         tx_id=scenario.name,
     )
@@ -143,6 +155,7 @@ def _apply_desired(
     *,
     scope: dict[str, Any],
     renderer: H3cRenderer,
+    parser: H3cStateParser,
     backend: MockNetconfBackend,
     tx_id: str,
 ) -> dict[str, Any]:
@@ -161,18 +174,33 @@ def _apply_desired(
     backend.final_confirm(tx_id=tx_id)
     backend.verify_running(desired_state, scope=scope_state)
     observed = backend.get_current_state(scope=scope_state)
+    expected_parsed_state = _h3c_comparable_state(observed)
+    readback_xml = _h3c_running_xml(expected_parsed_state)
+    ElementTree.fromstring(readback_xml)
+    parsed_state = _h3c_comparable_state(
+        parser.parse_running(readback_xml, scope=scope_state)
+    )
+    if parsed_state != expected_parsed_state:
+        raise AdapterError(
+            code="H3C_PARSER_LOOP_MISMATCH",
+            message="offline H3C parser-in-the-loop verification failed",
+            normalized_error="h3c parser loop mismatch",
+            raw_error_summary=(
+                f"expected={expected_parsed_state!r}, parsed={parsed_state!r}"
+            ),
+            retryable=False,
+        )
 
     return {
+        "stages": ["render", "apply", "parse", "verify"],
         "changed": dry_run.changed,
         "warnings": list(dry_run.warnings),
         "candidate_checksum": prepared.candidate_checksum,
         "xml_bytes": len(xml.encode("utf-8")),
-        "observed_counts": {
-            "vlans": len(observed.get("vlans", [])),
-            "interfaces": len(observed.get("interfaces", [])),
-            "acls": len(observed.get("acls", [])),
-            "acl_bindings": len(observed.get("acl_bindings", [])),
-        },
+        "readback_xml_bytes": len(readback_xml.encode("utf-8")),
+        "parser_profile_name": parser.profile.profile_name,
+        "observed_counts": _state_counts(expected_parsed_state),
+        "parsed_counts": _state_counts(parsed_state),
     }
 
 
@@ -185,7 +213,16 @@ def _failed_scenario_report(scenario: Scenario, exc: Exception) -> dict[str, Any
         "warnings": [],
         "candidate_checksum": "",
         "xml_bytes": 0,
+        "readback_xml_bytes": 0,
+        "parser_profile_name": "comware7-state-real",
+        "stages": ["render", "apply", "parse", "verify"],
         "observed_counts": {
+            "vlans": 0,
+            "interfaces": 0,
+            "acls": 0,
+            "acl_bindings": 0,
+        },
+        "parsed_counts": {
             "vlans": 0,
             "interfaces": 0,
             "acls": 0,
@@ -434,6 +471,462 @@ def _namespace(value: Any) -> Any:
     if isinstance(value, list):
         return [_namespace(inner) for inner in value]
     return value
+
+
+def _h3c_running_xml(state: dict[str, Any]) -> str:
+    top_children = []
+    ifmgr = _ifmgr_node(state.get("interfaces", []))
+    if ifmgr is not None:
+        top_children.append(ifmgr)
+    top_children.append(_vlan_node(state))
+    top_children.append(_acl_node(state))
+    return render_xml(
+        XmlElement(
+            "data",
+            namespace=NETCONF_BASE_NAMESPACE,
+            children=[
+                XmlElement(
+                    "top",
+                    namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                    children=top_children,
+                )
+            ],
+        )
+    )
+
+
+def _ifmgr_node(interfaces: list[dict[str, Any]]) -> XmlElement | None:
+    interface_nodes = []
+    for interface in interfaces:
+        description = interface.get("description")
+        if not description:
+            continue
+        interface_nodes.append(
+            XmlElement(
+                "Interface",
+                namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                children=[
+                    XmlElement(
+                        "IfIndex",
+                        namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                        children=[str(_interface_ifindex(interface["name"]))],
+                    ),
+                    XmlElement(
+                        "Description",
+                        namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                        children=[description],
+                    ),
+                ],
+            )
+        )
+    if not interface_nodes:
+        return None
+    return XmlElement(
+        "Ifmgr",
+        namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+        children=[
+            XmlElement(
+                "Interfaces",
+                namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                children=interface_nodes,
+            )
+        ],
+    )
+
+
+def _vlan_node(state: dict[str, Any]) -> XmlElement:
+    vlan_children = []
+    vlan_nodes = [
+        XmlElement(
+            "VLANID",
+            namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+            children=[
+                XmlElement(
+                    "ID",
+                    namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                    children=[str(vlan["vlan_id"])],
+                ),
+                *_optional_xml_text("Name", vlan.get("name")),
+                *_optional_xml_text("Description", vlan.get("description")),
+            ],
+        )
+        for vlan in state.get("vlans", [])
+    ]
+    if vlan_nodes:
+        vlan_children.append(
+            XmlElement(
+                "VLANs",
+                namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                children=vlan_nodes,
+            )
+        )
+
+    access_nodes = []
+    trunk_nodes = []
+    for interface in state.get("interfaces", []):
+        mode = interface["mode"]
+        if mode["kind"] == "access":
+            access_nodes.append(
+                XmlElement(
+                    "Interface",
+                    namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                    children=[
+                        XmlElement(
+                            "IfIndex",
+                            namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                            children=[str(_interface_ifindex(interface["name"]))],
+                        ),
+                        XmlElement(
+                            "PVID",
+                            namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                            children=[str(mode["access_vlan"])],
+                        ),
+                    ],
+                )
+            )
+        elif mode["kind"] == "trunk":
+            trunk_nodes.append(
+                XmlElement(
+                    "Interface",
+                    namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                    children=[
+                        XmlElement(
+                            "IfIndex",
+                            namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                            children=[str(_interface_ifindex(interface["name"]))],
+                        ),
+                        XmlElement(
+                            "PermitVlanList",
+                            namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                            children=[_format_vlan_ranges(mode.get("allowed_vlans", []))],
+                        ),
+                    ],
+                )
+            )
+    if access_nodes:
+        vlan_children.append(
+            XmlElement(
+                "AccessInterfaces",
+                namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                children=access_nodes,
+            )
+        )
+    if trunk_nodes:
+        vlan_children.append(
+            XmlElement(
+                "TrunkInterfaces",
+                namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                children=trunk_nodes,
+            )
+        )
+    return XmlElement("VLAN", namespace=H3C_COMWARE_CONFIG_NAMESPACE, children=vlan_children)
+
+
+def _acl_node(state: dict[str, Any]) -> XmlElement:
+    acl_children = []
+    group_nodes = []
+    rule_nodes = []
+    for acl in state.get("acls", []):
+        group_nodes.append(
+            XmlElement(
+                "Group",
+                namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                children=[
+                    XmlElement(
+                        "GroupType",
+                        namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                        children=["1"],
+                    ),
+                    XmlElement(
+                        "GroupID",
+                        namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                        children=[str(acl["acl_id"])],
+                    ),
+                    *_optional_xml_text("Description", acl.get("description")),
+                ],
+            )
+        )
+        for rule in acl.get("rules", []):
+            rule_nodes.append(_acl_rule_node(acl["acl_id"], rule))
+    if group_nodes:
+        acl_children.append(
+            XmlElement(
+                "Groups",
+                namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                children=group_nodes,
+            )
+        )
+    if rule_nodes:
+        acl_children.append(
+            XmlElement(
+                "IPv4AdvanceRules",
+                namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                children=rule_nodes,
+            )
+        )
+
+    binding_nodes = [
+        XmlElement(
+            "Pfilter",
+            namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+            children=[
+                XmlElement(
+                    "AppObjType",
+                    namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                    children=["1"],
+                ),
+                XmlElement(
+                    "AppObjIndex",
+                    namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                    children=[str(_interface_ifindex(binding["interface_name"]))],
+                ),
+                XmlElement(
+                    "AppDirection",
+                    namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                    children=[str(_acl_direction_code(binding["direction"]))],
+                ),
+                XmlElement(
+                    "AppAclType",
+                    namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                    children=["1"],
+                ),
+                XmlElement(
+                    "AppAclGroup",
+                    namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                    children=[str(binding["acl_id"])],
+                ),
+            ],
+        )
+        for binding in state.get("acl_bindings", [])
+    ]
+    if binding_nodes:
+        acl_children.append(
+            XmlElement(
+                "PfilterApply",
+                namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                children=binding_nodes,
+            )
+        )
+    return XmlElement("ACL", namespace=H3C_COMWARE_CONFIG_NAMESPACE, children=acl_children)
+
+
+def _acl_rule_node(acl_id: int, rule: dict[str, Any]) -> XmlElement:
+    children = [
+        XmlElement("GroupID", namespace=H3C_COMWARE_CONFIG_NAMESPACE, children=[str(acl_id)]),
+        XmlElement(
+            "RuleID",
+            namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+            children=[str(rule["sequence"])],
+        ),
+        XmlElement(
+            "Action",
+            namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+            children=[str(_acl_action_code(rule["action"]))],
+        ),
+        XmlElement(
+            "ProtocolType",
+            namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+            children=[str(_acl_protocol_code(rule["protocol"]))],
+        ),
+        *_optional_xml_text("Description", rule.get("description")),
+    ]
+    if rule.get("source") is not None:
+        children.extend(_acl_endpoint_nodes("Src", rule["source"]))
+    if rule.get("destination") is not None:
+        children.extend(_acl_endpoint_nodes("Dst", rule["destination"]))
+    if rule.get("source_port_eq") is not None:
+        children.append(_acl_port_node("Src", rule["source_port_eq"]))
+    if rule.get("destination_port_eq") is not None:
+        children.append(_acl_port_node("Dst", rule["destination_port_eq"]))
+    return XmlElement("Rule", namespace=H3C_COMWARE_CONFIG_NAMESPACE, children=children)
+
+
+def _acl_endpoint_nodes(prefix: str, endpoint: dict[str, str]) -> list[XmlElement]:
+    return [
+        XmlElement(f"{prefix}Any", namespace=H3C_COMWARE_CONFIG_NAMESPACE, children=["false"]),
+        XmlElement(
+            f"{prefix}IPv4",
+            namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+            children=[
+                XmlElement(
+                    f"{prefix}IPv4Addr",
+                    namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                    children=[endpoint["address"]],
+                ),
+                XmlElement(
+                    f"{prefix}IPv4Wildcard",
+                    namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                    children=[endpoint["wildcard"]],
+                ),
+            ],
+        ),
+    ]
+
+
+def _acl_port_node(prefix: str, value: int) -> XmlElement:
+    return XmlElement(
+        f"{prefix}Port",
+        namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+        children=[
+            XmlElement(f"{prefix}PortOp", namespace=H3C_COMWARE_CONFIG_NAMESPACE, children=["2"]),
+            XmlElement(
+                f"{prefix}PortValue1",
+                namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                children=[str(value)],
+            ),
+            XmlElement(
+                f"{prefix}PortValue2",
+                namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                children=["65536"],
+            ),
+        ],
+    )
+
+
+def _optional_xml_text(name: str, value: Any) -> list[XmlElement]:
+    if value is None or value == "":
+        return []
+    return [
+        XmlElement(
+            name,
+            namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+            children=[str(value)],
+        )
+    ]
+
+
+def _h3c_comparable_state(state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "vlans": sorted(
+            [
+                {
+                    "vlan_id": int(vlan["vlan_id"]),
+                    "name": vlan.get("name"),
+                    "description": vlan.get("description"),
+                }
+                for vlan in state.get("vlans", [])
+            ],
+            key=lambda vlan: vlan["vlan_id"],
+        ),
+        "interfaces": sorted(
+            [
+                {
+                    "name": interface["name"],
+                    "admin_state": None,
+                    "description": interface.get("description"),
+                    "mode": _comparable_mode(interface["mode"]),
+                }
+                for interface in state.get("interfaces", [])
+            ],
+            key=lambda interface: interface["name"],
+        ),
+        "acls": sorted(
+            [
+                {
+                    "acl_id": int(acl["acl_id"]),
+                    "name": acl.get("name"),
+                    "description": acl.get("description"),
+                    "rules": sorted(
+                        [_comparable_acl_rule(rule) for rule in acl.get("rules", [])],
+                        key=lambda rule: rule["sequence"],
+                    ),
+                }
+                for acl in state.get("acls", [])
+            ],
+            key=lambda acl: acl["acl_id"],
+        ),
+        "acl_bindings": sorted(
+            [
+                {
+                    "interface_name": binding["interface_name"],
+                    "direction": binding["direction"],
+                    "acl_id": int(binding["acl_id"]),
+                }
+                for binding in state.get("acl_bindings", [])
+            ],
+            key=lambda binding: (binding["interface_name"], binding["direction"]),
+        ),
+    }
+
+
+def _comparable_mode(mode: dict[str, Any]) -> dict[str, Any]:
+    if mode["kind"] == "access":
+        return {
+            "kind": "access",
+            "access_vlan": int(mode["access_vlan"]),
+            "native_vlan": None,
+            "allowed_vlans": [],
+        }
+    return {
+        "kind": "trunk",
+        "access_vlan": None,
+        "native_vlan": None,
+        "allowed_vlans": sorted(int(vlan_id) for vlan_id in mode.get("allowed_vlans", [])),
+    }
+
+
+def _comparable_acl_rule(rule: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "sequence": int(rule["sequence"]),
+        "action": rule["action"],
+        "protocol": rule["protocol"],
+        "source": rule.get("source"),
+        "destination": rule.get("destination"),
+        "source_port_eq": rule.get("source_port_eq"),
+        "destination_port_eq": rule.get("destination_port_eq"),
+        "description": rule.get("description"),
+    }
+
+
+def _state_counts(state: dict[str, Any]) -> dict[str, int]:
+    return {
+        "vlans": len(state.get("vlans", [])),
+        "interfaces": len(state.get("interfaces", [])),
+        "acls": len(state.get("acls", [])),
+        "acl_bindings": len(state.get("acl_bindings", [])),
+    }
+
+
+def _interface_ifindex(name: str) -> int:
+    text = str(name).strip()
+    try:
+        return int(text.rsplit("/", 1)[1].split(".", 1)[0])
+    except (IndexError, ValueError) as exc:
+        raise ValueError(f"unsupported H3C interface name: {name}") from exc
+
+
+def _format_vlan_ranges(vlan_ids: list[int]) -> str:
+    values = sorted(int(vlan_id) for vlan_id in vlan_ids)
+    if not values:
+        return ""
+    ranges = []
+    start = values[0]
+    previous = values[0]
+    for vlan_id in values[1:]:
+        if vlan_id == previous + 1:
+            previous = vlan_id
+            continue
+        ranges.append(_format_vlan_range(start, previous))
+        start = vlan_id
+        previous = vlan_id
+    ranges.append(_format_vlan_range(start, previous))
+    return ",".join(ranges)
+
+
+def _format_vlan_range(start: int, end: int) -> str:
+    return str(start) if start == end else f"{start}-{end}"
+
+
+def _acl_action_code(action: str) -> int:
+    return {"deny": 1, "permit": 2}[action]
+
+
+def _acl_protocol_code(protocol: str) -> int:
+    return {"icmp": 1, "tcp": 6, "udp": 17, "ip": 256}[protocol]
+
+
+def _acl_direction_code(direction: str) -> int:
+    return {"inbound": 1, "outbound": 2}[direction]
 
 
 def _to_json(payload: dict[str, Any], *, pretty: bool = False) -> str:

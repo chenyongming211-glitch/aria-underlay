@@ -1,7 +1,12 @@
 # Offline H3C Acceptance Runner
 
 This runner gives CI a repeatable H3C command-surface acceptance signal when no
-real switch is available.
+real switch is available. Each scenario now runs parser-in-the-loop:
+
+```text
+desired state -> H3C renderer XML -> mock NETCONF apply -> H3C readback XML
+  -> H3C state parser -> verify parsed state
+```
 
 It does not replace the real-device acceptance runbook. It verifies that the
 current H3C renderer and mock NETCONF backend can exercise the supported command
@@ -23,7 +28,9 @@ aria-underlay-h3c-offline-acceptance --pretty
 ```
 
 The command prints a machine-readable JSON report to stdout and a human-readable
-summary to stderr. CI also writes both forms to an artifact:
+summary to stderr. Each scenario includes rendered XML size, generated readback
+XML size, parser profile, and parsed-vs-observed resource counts. CI also writes
+both forms to an artifact:
 
 ```bash
 aria-underlay-h3c-offline-acceptance \
@@ -32,5 +39,7 @@ aria-underlay-h3c-offline-acceptance \
   --summary summary.txt
 ```
 
-Acceptance passes only when every scenario renders valid H3C Comware XML and
-then completes mock NETCONF dry-run, prepare, commit, final-confirm, and verify.
+Acceptance passes only when every scenario renders valid H3C Comware XML,
+completes mock NETCONF dry-run, prepare, commit, and final-confirm, emits H3C
+Comware-like running XML, parses it with `H3cStateParser`, and verifies parsed
+state against the post-apply scoped state.

@@ -167,5 +167,6 @@ aria-underlay-h3c-offline-acceptance --pretty
 
 The command prints JSON to stdout and a human-readable summary to stderr. It
 passes only when VLAN/access/trunk/description/ACL/binding/delete scenarios
-render valid H3C Comware XML and complete mock dry-run, prepare, commit,
-final-confirm, and verify.
+render valid H3C Comware XML, complete mock dry-run, prepare, commit, and
+final-confirm, emit H3C Comware-like readback XML, parse that XML through
+`H3cStateParser`, and verify parsed state.

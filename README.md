@@ -97,7 +97,7 @@ Python 负责厂商适配和设备脏活
 
 ```text
 1. 保持事务正确性优先：状态机重构已完成；后续新增 phase 写入必须走 `transition_phase()` 并补 recovery/journal/shadow 回归测试。
-2. 在没有真实交换机时，使用 offline H3C acceptance runner 作为 H3C 命令面回归基线；它覆盖 renderer + mock NETCONF dry-run/prepare/commit/final-confirm/verify，但不替代真实设备验收。
+2. 在没有真实交换机时，使用 offline H3C acceptance runner 作为 H3C 命令面回归基线；它覆盖 renderer + mock NETCONF dry-run/prepare/commit/final-confirm + H3C readback parser verify，但不替代真实设备验收。
 3. Product HTTP TLS/mTLS 只在 Product API 需要跨主机或非 loopback 暴露时推进；Python Adapter gRPC TLS/mTLS 已完成。
 4. 真实交换机到位后，先采集 running XML 并验证 parser，再验证 renderer 下发。
 5. 只有真实样本和测试闭环通过后，才允许非 H3C 厂商 renderer/parser 提升到 production_ready=True。
