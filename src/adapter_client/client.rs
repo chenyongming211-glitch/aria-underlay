@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
-use tonic::transport::Channel;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
 use crate::adapter_client::mapper::{
     adapter_result_to_outcome, capability_from_proto, desired_state_to_proto, device_ref_from_info,
@@ -421,23 +421,51 @@ impl AdapterClient {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct TlsConfig {
+    pub client_cert_pem: String,
+    pub client_key_pem: String,
+    pub ca_cert_pem: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct AdapterClientPool {
     channels: Arc<DashMap<String, Channel>>,
+    tls_config: Option<TlsConfig>,
 }
 
 impl AdapterClientPool {
+    pub fn with_tls(tls_config: TlsConfig) -> Self {
+        Self {
+            channels: Arc::new(DashMap::new()),
+            tls_config: Some(tls_config),
+        }
+    }
+
     pub fn client(&self, endpoint: &str) -> UnderlayResult<AdapterClient> {
         match self.channels.entry(endpoint.to_string()) {
             Entry::Occupied(entry) => Ok(AdapterClient::from_channel(entry.get().clone())),
             Entry::Vacant(entry) => {
-                Channel::from_shared(endpoint.to_string())
-                    .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))
-                    .map(|endpoint| endpoint.connect_lazy())
-                    .map(|channel| {
-                        entry.insert(channel.clone());
-                        AdapterClient::from_channel(channel)
-                    })
+                let mut builder = Channel::from_shared(endpoint.to_string())
+                    .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?;
+                if let Some(tls) = &self.tls_config {
+                    let mut client_tls = ClientTlsConfig::new()
+                        .with_enabled_roots();
+                    if let Some(ca_pem) = &tls.ca_cert_pem {
+                        client_tls = client_tls
+                            .ca_certificate(Certificate::from_pem(ca_pem));
+                    }
+                    client_tls = client_tls.identity(Identity::from_pem(
+                        &tls.client_cert_pem,
+                        &tls.client_key_pem,
+                    ));
+                    builder = builder
+                        .tls_config(client_tls)
+                        .map_err(|err| UnderlayError::AdapterTransport(err.to_string()))?;
+                }
+                let channel = builder.connect_lazy();
+                entry.insert(channel.clone());
+                Ok(AdapterClient::from_channel(channel))
             }
         }
     }
@@ -452,6 +480,10 @@ impl AdapterClientPool {
 
     pub fn contains_endpoint(&self, endpoint: &str) -> bool {
         self.channels.contains_key(endpoint)
+    }
+
+    pub fn has_tls(&self) -> bool {
+        self.tls_config.is_some()
     }
 }
 

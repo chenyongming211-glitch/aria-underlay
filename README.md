@@ -67,9 +67,9 @@ Python 负责厂商适配和设备脏活
 
 已知 bug 状态：
 
-- 当前有效清单见 [当前缺陷 / 技术债清单](docs/bug-inventory-current-2026-05-09.md)。
+- 当前有效清单见 [当前缺陷 / 技术债清单](docs/bug-inventory-current-2026-05-30.md)。
 - 在当前部署边界下，已确认的非条件 open bug 已清零。
-- 剩余条件项：Python Adapter gRPC 仍是 insecure transport。当前默认 Core/Adapter 同主机 loopback 通信；如果未来改成跨主机通信或网络不可信，必须补 TLS/mTLS 或强制外部 sidecar/tunnel 安全边界。
+- Python Adapter gRPC TLS/mTLS 已支持：通过 `ARIA_UNDERLAY_ADAPTER_TLS_CERT_FILE`、`ARIA_UNDERLAY_ADAPTER_TLS_KEY_FILE` 启用 TLS；可选 `ARIA_UNDERLAY_ADAPTER_TLS_CA_CERT_FILE` 启用 mTLS 客户端证书验证。Rust `AdapterClientPool` 支持 `TlsConfig` 用于 `https://` endpoint。默认仍为 insecure loopback 以保持向后兼容。
 
 仍然明确不是完整生产闭环：
 
@@ -85,7 +85,7 @@ Python 负责厂商适配和设备脏活
 - [需求说明](docs/aria-underlay-requirements.md)
 - [开发方案](docs/aria-underlay-development-plan.md)
 - [详细开发计划](docs/implementation-plan.md)
-- [当前缺陷 / 技术债清单](docs/bug-inventory-current-2026-05-09.md)
+- [当前缺陷 / 技术债清单](docs/bug-inventory-current-2026-05-30.md)
 - [真实设备验收手册](docs/runbooks/real-device-acceptance.md)
 
 ## 开发入口

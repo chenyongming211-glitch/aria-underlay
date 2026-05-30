@@ -2,5 +2,6 @@ pub mod client;
 pub mod mapper;
 
 pub use client::{
-    tx_request_context, AdapterClient, AdapterClientPool, DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
+    tx_request_context, AdapterClient, AdapterClientPool, TlsConfig,
+    DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
 };

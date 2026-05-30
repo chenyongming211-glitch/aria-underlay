@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent import futures
 from pathlib import Path
+import ssl
 import sys
 
 import grpc
@@ -148,6 +149,42 @@ class UnderlayAdapterService(pb2_grpc.UnderlayAdapterServicer):
         )
 
 
+def build_server_credentials(
+    config: AdapterConfig,
+) -> grpc.ServerCredentials | None:
+    if not config.tls_enabled:
+        return None
+    cert_chain = Path(config.tls_cert_file).read_bytes()  # type: ignore[arg-type]
+    private_key = Path(config.tls_key_file).read_bytes()  # type: ignore[arg-type]
+    root_certificates: bytes | None = None
+    require_client_auth = False
+    if config.tls_ca_cert_file:
+        root_certificates = Path(config.tls_ca_cert_file).read_bytes()
+        require_client_auth = True
+    return grpc.ssl_server_credentials(
+        private_key_certificate_chain_pairs=[(private_key, cert_chain)],
+        root_certificates=root_certificates,
+        require_client_auth=require_client_auth,
+    )
+
+
+def build_server(
+    config: AdapterConfig,
+    registry: DriverRegistry,
+) -> grpc.Server:
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=8))
+    pb2_grpc.add_UnderlayAdapterServicer_to_server(
+        UnderlayAdapterService(registry),
+        server,
+    )
+    credentials = build_server_credentials(config)
+    if credentials is not None:
+        server.add_secure_port(config.listen, credentials)
+    else:
+        server.add_insecure_port(config.listen)
+    return server
+
+
 def serve() -> None:
     config = AdapterConfig.from_env()
     if config.fake_mode:
@@ -161,14 +198,16 @@ def serve() -> None:
                 tofu_known_hosts_path=config.tofu_known_hosts_file,
             )
         )
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=8))
-    pb2_grpc.add_UnderlayAdapterServicer_to_server(
-        UnderlayAdapterService(registry),
-        server,
-    )
-    server.add_insecure_port(config.listen)
+    server = build_server(config, registry)
+    transport = "tls" if config.tls_enabled else "insecure"
+    mtls = config.mtls_enabled
     server.start()
-    log.info("aria_underlay_adapter_started", listen=config.listen)
+    log.info(
+        "aria_underlay_adapter_started",
+        listen=config.listen,
+        transport=transport,
+        mtls=mtls,
+    )
     server.wait_for_termination()
 
 
