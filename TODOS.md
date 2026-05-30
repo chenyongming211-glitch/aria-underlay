@@ -32,9 +32,11 @@
 
 ---
 
-## P1: 下一步 — Offline H3C Acceptance Runner
+## P1: 已完成 — Offline H3C Acceptance Runner
 
-**做什么**：建立离线 H3C 验收闭环，把 fake/mock adapter、H3C renderer/parser、Product API/Core apply 流程串起来，输出机器可读 JSON 和人可读摘要。
+**状态**：已完成并合入 `main`。基础 runner 通过 GitHub Actions run `26684186596`；parser-in-the-loop 升级通过分支 run `26684551948`，并在 `main` run `26684655861` 通过完整 CI。当前 `main` 对应 commit `2cc59f1`。
+
+**已完成内容**：建立离线 H3C 验收闭环，输出机器可读 JSON 和人可读摘要。当前 runner 覆盖 Python adapter 侧 fake/mock backend、H3C renderer、mock NETCONF dry-run/prepare/commit/final-confirm、H3C readback XML 生成、`H3cStateParser` 解析和 parsed-vs-observed verify。Rust Core / Product API apply 流程继续由现有 fake-adapter integration matrix 覆盖，不在该 runner 内重复编排。
 
 **为什么**：当前没有真实交换机环境，继续扩厂商或做 HA/性能重构都不能直接提高可信度。离线验收可以在 CI 中证明 H3C VLAN、access/trunk、description、IPv4 ACL、ACL rule description、ACL bind/unbind、delete VLAN、delete ACL、unbind ACL 等能力没有退化。
 
@@ -43,10 +45,30 @@
 - 不扩 Huawei/Cisco/Ruijie。
 - 不做 Product UI。
 - 不替代真实设备验收；真实设备到位后复用同一报告格式。
+- 不声称真实交换机通过；真实设备到位后仍必须按 runbook 做 running XML 采集、parser 验证和 renderer 下发验收。
 
 **工作量**：M
-**优先级**：P1（当前最适合推进）
-**依赖**：Phase 1 状态机重构已完成并通过 CI，验收 runner 可以建在稳定事务路径上
+**优先级**：P1（已完成）
+**依赖**：Phase 1 状态机重构已完成并通过 CI，验收 runner 已建在稳定事务路径之后
+
+---
+
+## P1: 下一步 — H3C Batch 2 Basic IPv4 ACL
+
+**做什么**：按 H3C 命令适配路线图推进 Basic IPv4 ACL。一次只扩一个 ACL family，先做 Basic IPv4 ACL，不同时做 named ACL、IPv6 ACL、QoS、PBR、NQA 或 BGP。
+
+**为什么**：当前 bug 清单中无已知非条件 open bug；真实设备部署验证和 Huawei production-ready 都依赖现场或实验交换机；Product HTTP TLS/mTLS 只有跨主机暴露 Product API 时才是高优先级。Basic IPv4 ACL 是 H3C Batch 2 中风险最低、复用现有 ACL renderer/parser/verify/offline acceptance 基础最多的一步。
+
+**范围**：
+- 明确 Basic IPv4 ACL 的 domain/proto 表达方式，避免和已有 numeric IPv4 advanced ACL 混淆。
+- 增加 H3C renderer tests、parser tests、verify tests。
+- 扩展 offline H3C acceptance runner，把 Basic IPv4 ACL 纳入 parser-in-the-loop 验收。
+- 更新 real-device acceptance checklist，但没有真实交换机前只记录待验收，不标记真机通过。
+- 不做 named ACL、IPv6 ACL、ACL 引用到 QoS/PBR/NQA/BGP。
+
+**工作量**：M/L
+**优先级**：P1（当前最适合推进的代码开发项）
+**依赖**：Offline H3C Acceptance Runner 已完成；Rust 编译/测试继续以 GitHub Actions 为门禁
 
 ---
 
