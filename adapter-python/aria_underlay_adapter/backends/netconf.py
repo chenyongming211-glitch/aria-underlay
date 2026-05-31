@@ -56,6 +56,10 @@ from aria_underlay_adapter.backends.netconf_state import verify_acls as _verify_
 from aria_underlay_adapter.backends.netconf_state import verify_interfaces as _verify_interfaces
 from aria_underlay_adapter.backends.netconf_state import verify_vlans as _verify_vlans
 from aria_underlay_adapter.errors import AdapterError
+from aria_underlay_adapter.model_profile import (
+    classify_model_profile,
+    extract_yang_modules_from_capabilities,
+)
 from aria_underlay_adapter.normalization import admin_state_to_text as _admin_state_to_text
 
 
@@ -729,6 +733,7 @@ def capability_from_raw(raw_capabilities: Iterable[str]) -> BackendCapability:
     )
     supports_rollback_on_error = ROLLBACK_ON_ERROR in raw_set
     supports_writable_running = WRITABLE_RUNNING in raw_set
+    yang_modules = extract_yang_modules_from_capabilities(raw)
 
     return BackendCapability(
         model="",
@@ -742,4 +747,13 @@ def capability_from_raw(raw_capabilities: Iterable[str]) -> BackendCapability:
         supports_rollback_on_error=supports_rollback_on_error,
         supports_writable_running=supports_writable_running,
         supported_backends=["netconf"] if supports_netconf else [],
+        model_profile=classify_model_profile(
+            vendor="unknown",
+            model="unknown",
+            os_version="unknown",
+            supports_candidate=supports_candidate,
+            supports_validate=supports_validate,
+            supported_modules=yang_modules,
+            verified_paths={},
+        ),
     )

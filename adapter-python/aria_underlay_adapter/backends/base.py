@@ -17,6 +17,7 @@ class BackendCapability:
     supports_rollback_on_error: bool
     supports_writable_running: bool
     supported_backends: list[str]
+    model_profile: dict | None = None
 
 
 @dataclass(frozen=True)

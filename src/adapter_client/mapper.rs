@@ -1,4 +1,7 @@
-use crate::device::{capability::BackendKind, DeviceCapabilityProfile, DeviceInfo, HostKeyPolicy};
+use crate::device::{
+    capability::BackendKind, DeviceCapabilityProfile, DeviceInfo, DeviceModelProfile,
+    HostKeyPolicy,
+};
 use crate::engine::diff::{ChangeOp, ChangeSet};
 use crate::model::{
     AclAction, AclBinding, AclConfig, AclDirection, AclEndpoint, AclProtocol, AclRule, AdminState,
@@ -106,6 +109,7 @@ pub fn capability_from_proto(proto: adapter::DeviceCapability, warnings: Vec<Str
         supports_rollback_on_error: proto.supports_rollback_on_error,
         supports_writable_running: proto.supports_writable_running,
         supported_backends,
+        model_profile: proto.model_profile.map(DeviceModelProfile::from_proto),
         recommended_strategy,
         warnings,
     }

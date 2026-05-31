@@ -120,6 +120,7 @@ pub fn confirmed_commit_capability() -> adapter::DeviceCapability {
         supports_rollback_on_error: false,
         supports_writable_running: false,
         supported_backends: vec![adapter::BackendKind::Netconf as i32],
+        model_profile: None,
     }
 }
 

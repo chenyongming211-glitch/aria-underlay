@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::device::model_profile::DeviceModelProfile;
 use crate::model::Vendor;
 use crate::tx::TransactionStrategy;
 
@@ -25,7 +26,7 @@ pub struct DeviceCapabilityProfile {
     pub supports_rollback_on_error: bool,
     pub supports_writable_running: bool,
     pub supported_backends: Vec<BackendKind>,
+    pub model_profile: Option<DeviceModelProfile>,
     pub recommended_strategy: TransactionStrategy,
     pub warnings: Vec<String>,
 }
-
