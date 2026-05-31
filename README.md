@@ -64,7 +64,7 @@ Python 负责厂商适配和设备脏活
 - H3C 支持范围：VLAN、接口 access/trunk、接口 description、IPv4 advanced ACL、IPv4 basic ACL、ACL rule description、ACL interface binding，以及显式 delete VLAN / delete ACL / unbind ACL intent。
 - 事务可靠性修复：candidate prepare/commit checksum 防外部 TOCTOU、confirmed-commit timeout recovery、worker panic 隔离、Journal GC 路径失败 report 化、Drift audit expected-store listing 失败 report 化、NETCONF force unlock、persist-id recovery 只接受结构化错误信号。
 - 标准模型基础：DeviceModelProfile / WriteReadiness、SoT Snapshot 边界、ChangePlan / DryRunWriteDecision、可选 gNMI capabilities probe，以及只读 NETCONF YANG schema collection / YANG library 归档。
-- PBR/BGP 功能线初版：H3C state parser 可输出 PBR/BGP read-only high-risk audit，offline H3C acceptance report 输出 `read_only_audits`、结构化 `touched_scope`、`write_decision=read_only`、blast radius 和 unsupported paths；并可加载脱敏真实 running XML 样本做 `real_sample_audits` 校准。仍不支持 PBR/BGP 写配置。
+- PBR/BGP 功能线初版：H3C state parser 可输出 PBR/BGP read-only high-risk audit，offline H3C acceptance report 输出 `read_only_audits`、结构化 `touched_scope`、`write_decision=read_only`、blast radius 和 unsupported paths；BGP 审计已细化到 local AS、neighbor address、remote AS、session state、import/export policy 和 per-neighbor raw path，并可加载脱敏真实 running XML 样本做 `real_sample_audits` 校准。仍不支持 PBR/BGP 写配置。
 - CI：Python adapter、offline H3C acceptance、Rust `cargo check` / `cargo test`、real-device apply probe build、fake-adapter integration matrix 已接入 GitHub Actions。
 
 已知 bug 状态：
@@ -100,7 +100,7 @@ Python 负责厂商适配和设备脏活
 ```text
 1. 保持事务正确性优先：状态机重构已完成；后续新增 phase 写入必须走 `transition_phase()` 并补 recovery/journal/shadow 回归测试。
 2. 在没有真实交换机时，使用 offline H3C acceptance runner 作为 H3C 命令面回归基线；它覆盖 renderer + mock NETCONF dry-run/prepare/commit/final-confirm + H3C readback parser verify，但不替代真实设备验收。
-3. DeviceModelProfile、SoT Snapshot、ChangePlan dry-run 和 YANG schema collection 已落地；PBR/BGP read-only audit、结构化 touched_scope 和真实样本 calibration harness 已接入 H3C parser/offline report。没有真实样本时 CI 保持通过；有脱敏样本时先校准 parser，再推进 path-level profile 验证，不直接写配置。
+3. DeviceModelProfile、SoT Snapshot、ChangePlan dry-run 和 YANG schema collection 已落地；PBR/BGP read-only audit、结构化 touched_scope、BGP per-neighbor details 和真实样本 calibration harness 已接入 H3C parser/offline report。没有真实样本时 CI 保持通过；有脱敏样本时先校准 parser，再推进 path-level profile 验证，不直接写配置。
 4. H3C Batch 2 Basic IPv4 ACL 已进入离线初版：domain/proto 显式区分 basic/advanced，renderer/parser/mock/offline acceptance 已覆盖；真实交换机到位后仍需按 runbook 做写入/readback/cleanup 验收。
 5. Product HTTP TLS/mTLS 只在 Product API 需要跨主机或非 loopback 暴露时推进；Python Adapter gRPC TLS/mTLS 已完成。
 6. 真实交换机到位后，先采集 running XML、NETCONF/gNMI capabilities、YANG schema library 和 model profile，再验证 parser 与 renderer 下发。

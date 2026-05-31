@@ -389,7 +389,10 @@ def test_h3c_parser_audits_pbr_and_bgp_as_read_only_high_risk_features():
                   <Peers>
                     <Peer>
                       <PeerAddress>192.0.2.1</PeerAddress>
+                      <PeerAS>65002</PeerAS>
+                      <SessionState>Established</SessionState>
                       <ImportPolicy>rp-in</ImportPolicy>
+                      <ExportPolicy>rp-out</ExportPolicy>
                     </Peer>
                   </Peers>
                 </Instance>
@@ -408,7 +411,7 @@ def test_h3c_parser_audits_pbr_and_bgp_as_read_only_high_risk_features():
         "affected_vrfs": ["tenant-a"],
         "bgp_as_numbers": [65001],
         "bgp_neighbors": ["192.0.2.1"],
-        "route_policy_refs": ["rp-in"],
+        "route_policy_refs": ["rp-in", "rp-out"],
         "pbr_policy_refs": ["pbr-tenant-a"],
         "acl_refs": [3999],
         "interfaces": ["GigabitEthernet1/0/13"],
@@ -426,9 +429,22 @@ def test_h3c_parser_audits_pbr_and_bgp_as_read_only_high_risk_features():
         "present": True,
         "blast_radius": "routing_control_plane",
         "as_numbers": [65001],
+        "local_as": 65001,
         "vrfs": ["tenant-a"],
         "neighbors": ["192.0.2.1"],
-        "policy_references": ["rp-in"],
+        "neighbor_details": [
+            {
+                "address": "192.0.2.1",
+                "remote_as": 65002,
+                "session_state": "established",
+                "import_policy": "rp-in",
+                "export_policy": "rp-out",
+                "vrf": "tenant-a",
+                "raw_path": "/data/top/BGP/Instances/Instance/Peers/Peer",
+            }
+        ],
+        "session_states": ["established"],
+        "policy_references": ["rp-in", "rp-out"],
         "raw_paths": ["/data/top/BGP"],
     }
     assert audit["warnings"] == [

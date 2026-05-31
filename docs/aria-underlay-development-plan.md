@@ -1100,10 +1100,11 @@ PBR/BGP 写配置前必须满足：
 当前 PBR/BGP 只允许先进入 read-only audit：H3C parser 可以识别 running XML 中的
 PBR/BGP 高风险配置，offline acceptance report 输出 read-only decision、blast radius
 和 unsupported paths，并通过 `touched_scope` 结构化列出 affected VRFs、BGP AS、
-neighbors、route-policy refs、PBR policy refs、ACL refs、interfaces 和 raw paths，
-同时支持从脱敏真实 H3C running XML 样本目录输出 `real_sample_audits` 做 parser
-校准；没有样本时 CI 不失败。该阶段仍不会生成 PBR/BGP intent、renderer 或 shadow
-写入。
+neighbors、route-policy refs、PBR policy refs、ACL refs、interfaces 和 raw paths。
+BGP 审计还会输出 `neighbor_details`，覆盖 local AS、remote AS、session state、
+import/export route-policy、VRF 和 per-neighbor raw path。同时支持从脱敏真实 H3C
+running XML 样本目录输出 `real_sample_audits` 做 parser 校准；没有样本时 CI 不失败。
+该阶段仍不会生成 PBR/BGP intent、renderer 或 shadow 写入。
 
 ### 10.4 Lock Acquisition Strategy
 
