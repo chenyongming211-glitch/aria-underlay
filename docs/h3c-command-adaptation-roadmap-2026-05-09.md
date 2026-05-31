@@ -47,7 +47,9 @@ Required gate:
 - Reject writes on running-only devices for PBR/BGP unless a separate
   high-risk exception and real-device acceptance record exists.
 - Dry-run must emit ordered stages, dependency edges, rollback order,
-  unsupported paths, touched scope, blast radius, and final write decision.
+  unsupported paths, touched scope, blast radius, and final write decision
+  (`DryRunWriteDecision`: `allowed_standard_model`, `allowed_vendor_native`,
+  `allowed_vendor_private`, `read_only`, or `rejected`).
 
 For this roadmap, ACL family expansion may continue as a low-risk H3C command
 surface, but PBR/BGP/QoS/NQA write support starts only after the standard model

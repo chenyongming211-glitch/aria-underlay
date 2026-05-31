@@ -2,6 +2,7 @@ pub mod bootstrap;
 pub mod capability;
 pub mod info;
 pub mod inventory;
+pub mod model_profile;
 pub mod onboarding;
 pub mod registration;
 pub mod secret;
@@ -13,6 +14,7 @@ pub use bootstrap::{
 pub use capability::DeviceCapabilityProfile;
 pub use info::{DeviceInfo, DeviceLifecycleState, HostKeyPolicy};
 pub use inventory::DeviceInventory;
+pub use model_profile::DeviceModelProfile;
 pub use onboarding::DeviceOnboardingService;
 pub use registration::{DeviceRegistrationService, RegisterDeviceRequest, RegisterDeviceResponse};
 pub use secret::{

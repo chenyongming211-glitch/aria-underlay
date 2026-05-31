@@ -53,7 +53,9 @@
 
 ---
 
-## P1: 下一步 — 标准模型 / SoT / ChangePlan 基础
+## P1: 进行中 — 标准模型 / SoT / ChangePlan 基础
+
+**状态**：核心合约已在 `codex/device-model-profile-contract` 分支实现，待 CI 通过后合入 `main`。已落地：`DeviceModelProfile`（含 `WriteReadiness`）、`SotSnapshot` 输入边界、`ChangePlan`（含 stage 顺序/dependency_edges/rollback_order/blast_radius/unsupported_paths/`DryRunWriteDecision`）、NETCONF YANG Library 探测、可选 gNMI capability 探测。
 
 **做什么**：把 OpenConfig/gNMI 评估、Source of Truth 输入边界和 ChangePlan dry-run 落地到核心开发计划和代码骨架中。详细执行计划见 `docs/superpowers/plans/2026-05-30-standard-model-sot-changeplan.md`。
 
@@ -63,7 +65,7 @@
 - 新增 `DeviceModelProfile` 合约，记录 vendor、model、os_version、YANG modules/revisions、OpenConfig/gNMI 支持、厂商 native YANG 支持、path 级 read/write 验证结果和最终 write readiness。
 - Python Adapter 增加 NETCONF YANG Library / capability 探测入口；如果后续接 gNMI，则通过同一 profile 输出，不让 Rust Core 直接依赖具体探测实现。
 - 定义 `SotSnapshot` 输入边界，让 NetBox、Nautobot、文件或外部 API 都先转换成项目内部稳定结构；Core 不直接绑定外部 SoT 的 SDK、分页或 schema。
-- 在 Rust Core 的 diff 和 renderer 之间加入 `ChangePlan`：包含 stage 顺序、dependency_edges、rollback_order、touched_scope、blast_radius 和 write_gate。
+- 在 Rust Core 的 diff 和 renderer 之间加入 `ChangePlan`：包含 stage 顺序、dependency_edges、rollback_order、touched_scope、blast_radius、unsupported_paths 和 `DryRunWriteDecision`。
 - Dry-run 和 offline H3C acceptance report 输出 ChangePlan 摘要；没有真实设备时先证明 renderer/parser 没退化，同时证明复杂变更会给出顺序、依赖和拒绝原因。
 - PBR/BGP 写入必须先通过 profile 和 ChangePlan 门禁；没有 path 级读写证据时只能做 read-only parser/audit 或结构化拒绝。
 
@@ -166,7 +168,7 @@ renderers/
 - 生成代码头部标注 `AUTO-GENERATED` + `UNVERIFIED` / `VERIFIED` 状态
 - Renderer 来源进入 journal 和审计日志
 - 不让 LLM 生成事务/恢复/审计相关代码
-- 不让 LLM 决定写路径准入（仍由 `DeviceModelProfile` + `WriteDecision` 决定）
+- 不让 LLM 决定写路径准入（仍由 `DeviceModelProfile` + `DryRunWriteDecision` 决定）
 
 **ROI**：新厂商接入时间从 ~4 周降至 ~1.5 周（~60% 节省）。后续每新增一个厂商边际成本更低。
 
@@ -199,6 +201,30 @@ renderers/
 **工作量**：S（2-3 天）
 **优先级**：P2/P3（零风险，可与 LLM 辅助适配并行启动）
 **依赖**：无
+
+---
+
+## P3: Active-Passive HA Journal 复制
+
+**做什么**：设计并实现 active/passive 节点之间的 journal 复制，使 HA 故障转移时保留进行中的事务。
+
+**为什么**：当前 journal 是本地 JSON 文件。如果 active 节点在事务执行中崩溃，passive 节点没有 journal 状态。进行中的事务会丢失，需要人工恢复。这是设计文档中的 Open Question #6。
+
+**优势**：
+- HA 故障转移变为透明 — 进行中的事务无需人工干预
+- Passive 节点可以在故障转移后立即恢复 recovery
+- 符合 active-passive HA 可靠性的产品目标
+
+**劣势**：
+- 增加分布式状态同步复杂度
+- 共享存储（NFS/iSCSI）vs 网络复制（rsync/NATS） — 两者都有运维成本
+- 可能需要 journal 格式变更（当前 atomic rename 假设单写者）
+
+**上下文**：从决定存储模型开始：共享文件系统（更简单，需要基础设施）vs journal 事件复制（更复杂，无需共享基础设施）。当前 `JsonFileTxJournalStore` 使用 atomic rename 保证单写者安全 — 任何复制方案必须保留这个不变量。Recovery coordinator（`src/api/recovery_coordinator.rs`）已经能处理从 journal 状态的 recovery — 只需要 journal 在 passive 节点上可用。
+
+**工作量**：XL（人类团队 ~2 周）→ 含 CC+gstack: L
+**优先级**：P3
+**依赖**：HA 部署需求确认后；Phase 1 状态机重构完成
 
 ---
 
@@ -288,30 +314,6 @@ renderers/
 **工作量**：L（1-2 月）
 **优先级**：P4/条件项
 **依赖**：YANG Schema Diff 完成；有足够的 schema-conformant paths
-
----
-
-## P3: Active-Passive HA Journal 复制
-
-**做什么**：设计并实现 active/passive 节点之间的 journal 复制，使 HA 故障转移时保留进行中的事务。
-
-**为什么**：当前 journal 是本地 JSON 文件。如果 active 节点在事务执行中崩溃，passive 节点没有 journal 状态。进行中的事务会丢失，需要人工恢复。这是设计文档中的 Open Question #6。
-
-**优势**：
-- HA 故障转移变为透明 — 进行中的事务无需人工干预
-- Passive 节点可以在故障转移后立即恢复 recovery
-- 符合 active-passive HA 可靠性的产品目标
-
-**劣势**：
-- 增加分布式状态同步复杂度
-- 共享存储（NFS/iSCSI）vs 网络复制（rsync/NATS） — 两者都有运维成本
-- 可能需要 journal 格式变更（当前 atomic rename 假设单写者）
-
-**上下文**：从决定存储模型开始：共享文件系统（更简单，需要基础设施）vs journal 事件复制（更复杂，无需共享基础设施）。当前 `JsonFileTxJournalStore` 使用 atomic rename 保证单写者安全 — 任何复制方案必须保留这个不变量。Recovery coordinator（`src/api/recovery_coordinator.rs`）已经能处理从 journal 状态的 recovery — 只需要 journal 在 passive 节点上可用。
-
-**工作量**：XL（人类团队 ~2 周）→ 含 CC+gstack: L
-**优先级**：P3
-**依赖**：HA 部署需求确认后；Phase 1 状态机重构完成
 
 ---
 

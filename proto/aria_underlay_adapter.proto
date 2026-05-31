@@ -130,6 +130,45 @@ message DeviceCapability {
   bool supports_rollback_on_error = 10;
   bool supports_writable_running = 11;
   repeated BackendKind supported_backends = 12;
+  DeviceModelProfile model_profile = 13;
+}
+
+enum ModelProtocol {
+  MODEL_PROTOCOL_UNSPECIFIED = 0;
+  MODEL_PROTOCOL_OPENCONFIG_GNMI = 1;
+  MODEL_PROTOCOL_OPENCONFIG_NETCONF = 2;
+  MODEL_PROTOCOL_VENDOR_NATIVE_YANG = 3;
+  MODEL_PROTOCOL_VENDOR_CLI = 4;
+}
+
+enum WriteReadiness {
+  WRITE_READINESS_UNSPECIFIED = 0;
+  WRITE_READINESS_READ_ONLY = 1;
+  WRITE_READINESS_WRITE_SAFE = 2;
+  WRITE_READINESS_WRITE_REJECTED = 3;
+}
+
+message ModelPathSupport {
+  ModelProtocol protocol = 1;
+  string model = 2;
+  string revision = 3;
+  string path = 4;
+  bool readable = 5;
+  bool writable = 6;
+  bool verified_on_device = 7;
+  repeated string deviations = 8;
+  repeated string notes = 9;
+}
+
+message DeviceModelProfile {
+  string profile_id = 1;
+  Vendor vendor = 2;
+  string model = 3;
+  string os_version = 4;
+  repeated ModelPathSupport paths = 5;
+  WriteReadiness pbr_write_readiness = 6;
+  WriteReadiness bgp_write_readiness = 7;
+  repeated string rejection_reasons = 8;
 }
 
 message VlanConfig {

@@ -5,6 +5,7 @@ import pytest
 
 from aria_underlay_adapter.backends import netconf as netconf_module
 from aria_underlay_adapter.backends import netconf_hostkey
+from aria_underlay_adapter.backends.gnmi_capabilities import GnmiCapabilityResult
 from aria_underlay_adapter.backends.netconf import (
     BASE_10,
     CANDIDATE,
@@ -59,6 +60,157 @@ def test_capability_from_raw_detects_running_rollback_profile():
     assert capability.supports_candidate is False
     assert capability.supports_writable_running is True
     assert capability.supports_rollback_on_error is True
+
+
+def test_get_capabilities_probes_openconfig_paths_with_netconf_read_and_test_only_write():
+    session = _RecordingSession(
+        reply=_Reply("<data/>"),
+        server_capabilities=[
+            BASE_10,
+            CANDIDATE,
+            VALIDATE_11,
+            "http://openconfig.net/yang/network-instance?module=openconfig-network-instance&revision=2024-10-30",
+            "http://openconfig.net/yang/bgp?module=openconfig-bgp&revision=2024-10-30",
+            "http://openconfig.net/yang/routing-policy?module=openconfig-routing-policy&revision=2024-10-30",
+        ],
+    )
+    backend = _BackendWithSession(session)
+
+    capability = backend.get_capabilities()
+
+    paths = {path["path"]: path for path in capability.model_profile["paths"]}
+    assert paths["/network-instances/network-instance/protocols/protocol/bgp"] == {
+        "protocol": "openconfig_netconf",
+        "model": "openconfig-bgp",
+        "revision": "2024-10-30",
+        "path": "/network-instances/network-instance/protocols/protocol/bgp",
+        "readable": True,
+        "writable": True,
+        "verified_on_device": True,
+        "deviations": [],
+        "notes": [
+            "netconf get-config read probe succeeded",
+            "netconf test-only write probe succeeded",
+        ],
+    }
+    assert paths["/routing-policy"]["readable"] is True
+    assert paths["/routing-policy"]["writable"] is True
+    assert capability.model_profile["bgp_write_readiness"] == "write_safe"
+    assert [
+        call[0]
+        for call in session.calls
+        if call[0] in {"get_config", "edit_config"}
+    ] == ["get_config", "edit_config", "get_config", "edit_config"]
+    assert session.calls[0][1]["source"] == "running"
+    assert session.calls[0][1]["filter"][0] == "subtree"
+    assert "openconfig.net/yang/network-instance" in session.calls[0][1]["filter"][1]
+    assert session.calls[1][1]["target"] == "candidate"
+    assert session.calls[1][1]["test_option"] == "test-only"
+    assert session.calls[1][1]["error_option"] == "rollback-on-error"
+
+
+def test_get_capabilities_does_not_claim_writable_without_validate_11_test_only():
+    session = _RecordingSession(
+        reply=_Reply("<data/>"),
+        server_capabilities=[
+            BASE_10,
+            CANDIDATE,
+            VALIDATE_10,
+            "http://openconfig.net/yang/network-instance?module=openconfig-network-instance&revision=2024-10-30",
+            "http://openconfig.net/yang/bgp?module=openconfig-bgp&revision=2024-10-30",
+            "http://openconfig.net/yang/routing-policy?module=openconfig-routing-policy&revision=2024-10-30",
+        ],
+    )
+    backend = _BackendWithSession(session)
+
+    capability = backend.get_capabilities()
+
+    paths = {path["path"]: path for path in capability.model_profile["paths"]}
+    bgp_path = paths["/network-instances/network-instance/protocols/protocol/bgp"]
+    assert bgp_path["readable"] is True
+    assert bgp_path["writable"] is False
+    assert capability.model_profile["bgp_write_readiness"] == "read_only"
+    assert "missing safe NETCONF test-only support" in bgp_path["notes"]
+    assert [call[0] for call in session.calls] == ["get_config", "get_config"]
+
+
+def test_get_capabilities_merges_gnmi_models_as_non_writable_candidates():
+    session = _RecordingSession(
+        reply=_Reply("<data/>"),
+        server_capabilities=[BASE_10],
+    )
+    backend = _BackendWithSession(
+        session,
+        gnmi_capability_probe=_StaticGnmiProbe(
+            [
+                {
+                    "name": "openconfig-network-instance",
+                    "organization": "OpenConfig",
+                    "version": "2024-10-30",
+                },
+                {
+                    "name": "openconfig-bgp",
+                    "organization": "OpenConfig",
+                    "version": "2024-10-30",
+                },
+                {
+                    "name": "openconfig-routing-policy",
+                    "organization": "OpenConfig",
+                    "version": "2024-10-30",
+                },
+            ]
+        ),
+    )
+
+    capability = backend.get_capabilities()
+
+    paths = {
+        (path["protocol"], path["path"]): path
+        for path in capability.model_profile["paths"]
+    }
+    bgp_path = paths[
+        (
+            "openconfig_gnmi",
+            "/network-instances/network-instance/protocols/protocol/bgp",
+        )
+    ]
+    assert capability.warnings == []
+    assert capability.model_profile["gnmi_supported_models"][0]["name"] == (
+        "openconfig-network-instance"
+    )
+    assert bgp_path["readable"] is False
+    assert bgp_path["writable"] is False
+    assert bgp_path["verified_on_device"] is False
+    assert capability.model_profile["bgp_write_readiness"] == "write_rejected"
+
+
+def test_get_capabilities_keeps_netconf_when_gnmi_probe_fails():
+    session = _RecordingSession(reply=_Reply("<data/>"), server_capabilities=[BASE_10])
+    backend = _BackendWithSession(
+        session,
+        gnmi_capability_probe=_FailingGnmiProbe(RuntimeError("gnmi refused")),
+    )
+
+    capability = backend.get_capabilities()
+
+    assert capability.supports_netconf is True
+    assert capability.warnings == ["gNMI capabilities probe failed: gnmi refused"]
+    assert capability.model_profile["gnmi_supported_models"] == []
+
+
+def test_netconf_driver_get_capabilities_returns_gnmi_probe_warnings():
+    session = _RecordingSession(reply=_Reply("<data/>"), server_capabilities=[BASE_10])
+    driver = NetconfBackedDriver(
+        _BackendWithSession(
+            session,
+            gnmi_capability_probe=_FailingGnmiProbe(RuntimeError("gnmi refused")),
+        )
+    )
+
+    response = driver.get_capabilities(pb2.GetCapabilitiesRequest())
+
+    assert response.errors == []
+    assert list(response.warnings) == ["gNMI capabilities probe failed: gnmi refused"]
 
 
 def test_legacy_netconf_backend_name_points_to_ncclient_backend():
@@ -1604,11 +1756,18 @@ def test_verify_running_fails_with_parsed_acl_mismatch():
 
 
 class _BackendWithSession(NcclientNetconfBackend):
-    def __init__(self, session, config_renderer=None, state_parser=None):
+    def __init__(
+        self,
+        session,
+        config_renderer=None,
+        state_parser=None,
+        gnmi_capability_probe=None,
+    ):
         super().__init__(
             host="127.0.0.1",
             config_renderer=config_renderer,
             state_parser=state_parser,
+            gnmi_capability_probe=gnmi_capability_probe,
         )
         object.__setattr__(self, "_session", session)
 
@@ -1749,6 +1908,29 @@ class _StaticStateParser:
     def parse_running(self, xml, scope=None):
         self.calls.append((xml, scope))
         return self.state
+
+
+class _StaticGnmiProbe:
+    def __init__(self, supported_models):
+        self.supported_models = supported_models
+
+    def get_capabilities(self):
+        return GnmiCapabilityResult(
+            supported_models=self.supported_models,
+            encodings=["json_ietf"],
+            raw_capabilities={
+                "supported_models": self.supported_models,
+                "supported_encodings": ["json_ietf"],
+            },
+        )
+
+
+class _FailingGnmiProbe:
+    def __init__(self, exc):
+        self.exc = exc
+
+    def get_capabilities(self):
+        raise self.exc
 
 
 class _ParsedStateBackend:

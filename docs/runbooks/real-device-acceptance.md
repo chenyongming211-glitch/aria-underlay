@@ -40,7 +40,9 @@ Required evidence:
   writable-running with rollback-on-error.
 - A dry-run ChangePlan containing dependency edges, ordered stages, rollback
   order, touched scope, blast radius, unsupported paths, and final write
-  decision.
+  decision (`DryRunWriteDecision`: `allowed_standard_model`,
+  `allowed_vendor_native`, `allowed_vendor_private`, `read_only`, or
+  `rejected`).
 
 Do not treat module presence as write support. If only module-level evidence is
 available, record the feature as read-only or rejected for writes. For PBR/BGP,

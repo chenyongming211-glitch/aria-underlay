@@ -88,6 +88,29 @@ def test_real_server_driver_selection_does_not_block_capability_probe_for_render
     assert isinstance(driver, NetconfBackedDriver)
 
 
+def test_real_server_driver_selection_wires_enabled_gnmi_probe():
+    driver = _netconf_driver_from_device(
+        _device(pb2.VENDOR_H3C),
+        _SecretProvider(),
+        gnmi_probe_enabled=True,
+        gnmi_port=57401,
+        gnmi_tls_enabled=False,
+        gnmi_tls_ca_cert_file="/etc/aria/gnmi-ca.pem",
+        gnmi_tls_cert_file="/etc/aria/gnmi-client.pem",
+        gnmi_tls_key_file="/etc/aria/gnmi-client.key",
+    )
+
+    assert isinstance(driver, NetconfBackedDriver)
+    assert driver._backend.gnmi_capability_probe.host == "192.0.2.10"
+    assert driver._backend.gnmi_capability_probe.port == 57401
+    assert driver._backend.gnmi_capability_probe.username == "netconf"
+    assert driver._backend.gnmi_capability_probe.password == "secret"
+    assert driver._backend.gnmi_capability_probe.tls_enabled is False
+    assert driver._backend.gnmi_capability_probe.tls_ca_cert_file == (
+        "/etc/aria/gnmi-ca.pem"
+    )
+
+
 def test_real_server_driver_selection_applies_tofu_policy(tmp_path):
     trust_store = tmp_path / "tofu_known_hosts"
     driver = _netconf_driver_from_device(

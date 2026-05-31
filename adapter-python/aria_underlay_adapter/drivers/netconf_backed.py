@@ -32,24 +32,31 @@ class NetconfBackedDriver:
         except Exception as exc:
             return pb2.GetCapabilitiesResponse(errors=[_unexpected_error(exc).to_proto(pb2)])
 
-        return pb2.GetCapabilitiesResponse(
-            capability=pb2.DeviceCapability(
-                vendor=pb2.VENDOR_UNKNOWN,
-                model=capability.model,
-                os_version=capability.os_version,
-                raw_capabilities=capability.raw_capabilities,
-                supports_netconf=capability.supports_netconf,
-                supports_candidate=capability.supports_candidate,
-                supports_validate=capability.supports_validate,
-                supports_confirmed_commit=capability.supports_confirmed_commit,
-                supports_persist_id=capability.supports_persist_id,
-                supports_rollback_on_error=capability.supports_rollback_on_error,
-                supports_writable_running=capability.supports_writable_running,
-                supported_backends=[
-                    self._backend_kind_to_proto(backend)
-                    for backend in capability.supported_backends
-                ],
+        capability_fields = {
+            "vendor": pb2.VENDOR_UNKNOWN,
+            "model": capability.model,
+            "os_version": capability.os_version,
+            "raw_capabilities": capability.raw_capabilities,
+            "supports_netconf": capability.supports_netconf,
+            "supports_candidate": capability.supports_candidate,
+            "supports_validate": capability.supports_validate,
+            "supports_confirmed_commit": capability.supports_confirmed_commit,
+            "supports_persist_id": capability.supports_persist_id,
+            "supports_rollback_on_error": capability.supports_rollback_on_error,
+            "supports_writable_running": capability.supports_writable_running,
+            "supported_backends": [
+                self._backend_kind_to_proto(backend)
+                for backend in capability.supported_backends
+            ],
+        }
+        if capability.model_profile is not None:
+            capability_fields["model_profile"] = _model_profile_to_proto(
+                capability.model_profile
             )
+
+        return pb2.GetCapabilitiesResponse(
+            capability=pb2.DeviceCapability(**capability_fields),
+            warnings=list(capability.warnings),
         )
 
     def get_current_state(self, request):
@@ -724,6 +731,64 @@ def _unexpected_error(exc: Exception) -> AdapterError:
         raw_error_summary=f"{type(exc).__name__}: {exc}",
         retryable=False,
     )
+
+
+def _model_profile_to_proto(profile: dict):
+    return pb2.DeviceModelProfile(
+        profile_id=profile.get("profile_id", ""),
+        vendor=_vendor_to_proto(profile.get("vendor", "unknown")),
+        model=profile.get("model", ""),
+        os_version=profile.get("os_version", ""),
+        paths=[_model_path_to_proto(path) for path in profile.get("paths", [])],
+        pbr_write_readiness=_write_readiness_to_proto(
+            profile.get("pbr_write_readiness", "write_rejected")
+        ),
+        bgp_write_readiness=_write_readiness_to_proto(
+            profile.get("bgp_write_readiness", "write_rejected")
+        ),
+        rejection_reasons=profile.get("rejection_reasons", []),
+    )
+
+
+def _model_path_to_proto(path: dict):
+    return pb2.ModelPathSupport(
+        protocol=_model_protocol_to_proto(path.get("protocol", "")),
+        model=path.get("model", ""),
+        revision=path.get("revision", ""),
+        path=path.get("path", ""),
+        readable=path.get("readable", False),
+        writable=path.get("writable", False),
+        verified_on_device=path.get("verified_on_device", False),
+        deviations=path.get("deviations", []),
+        notes=path.get("notes", []),
+    )
+
+
+def _model_protocol_to_proto(value: str):
+    return {
+        "openconfig_gnmi": pb2.MODEL_PROTOCOL_OPENCONFIG_GNMI,
+        "openconfig_netconf": pb2.MODEL_PROTOCOL_OPENCONFIG_NETCONF,
+        "vendor_native_yang": pb2.MODEL_PROTOCOL_VENDOR_NATIVE_YANG,
+        "vendor_cli": pb2.MODEL_PROTOCOL_VENDOR_CLI,
+    }.get(value, pb2.MODEL_PROTOCOL_UNSPECIFIED)
+
+
+def _write_readiness_to_proto(value: str):
+    return {
+        "read_only": pb2.WRITE_READINESS_READ_ONLY,
+        "write_safe": pb2.WRITE_READINESS_WRITE_SAFE,
+        "write_rejected": pb2.WRITE_READINESS_WRITE_REJECTED,
+    }.get(value, pb2.WRITE_READINESS_UNSPECIFIED)
+
+
+def _vendor_to_proto(value: str):
+    return {
+        "huawei": pb2.VENDOR_HUAWEI,
+        "h3c": pb2.VENDOR_H3C,
+        "cisco": pb2.VENDOR_CISCO,
+        "ruijie": pb2.VENDOR_RUIJIE,
+        "unknown": pb2.VENDOR_UNKNOWN,
+    }.get(value, pb2.VENDOR_UNKNOWN)
 
 
 def _persist_id_already_consumed(error: AdapterError) -> bool:

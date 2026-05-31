@@ -76,11 +76,56 @@ fn maps_capability_warnings() {
             supports_rollback_on_error: false,
             supports_writable_running: false,
             supported_backends: vec![adapter::BackendKind::Netconf as i32],
+            model_profile: None,
         },
         vec!["capability warning".into()],
     );
 
     assert_eq!(capability.warnings, vec!["capability warning"]);
+}
+
+#[test]
+fn maps_capability_model_profile() {
+    let capability = capability_from_proto(
+        adapter::DeviceCapability {
+            vendor: adapter::Vendor::H3c as i32,
+            model: "S5560".into(),
+            os_version: "Comware7".into(),
+            raw_capabilities: vec![],
+            supports_netconf: true,
+            supports_candidate: true,
+            supports_validate: true,
+            supports_confirmed_commit: false,
+            supports_persist_id: false,
+            supports_rollback_on_error: false,
+            supports_writable_running: false,
+            supported_backends: vec![adapter::BackendKind::Netconf as i32],
+            model_profile: Some(adapter::DeviceModelProfile {
+                profile_id: "h3c:S5560:Comware7".into(),
+                vendor: adapter::Vendor::H3c as i32,
+                model: "S5560".into(),
+                os_version: "Comware7".into(),
+                paths: vec![],
+                pbr_write_readiness: adapter::WriteReadiness::WriteRejected as i32,
+                bgp_write_readiness: adapter::WriteReadiness::ReadOnly as i32,
+                rejection_reasons: vec!["bgp path is read-only".into()],
+            }),
+        },
+        vec![],
+    );
+
+    let model_profile = capability
+        .model_profile
+        .expect("capability model profile should map");
+    assert_eq!(model_profile.profile_id, "h3c:S5560:Comware7");
+    assert_eq!(
+        model_profile.bgp_write_readiness,
+        aria_underlay::device::model_profile::WriteReadiness::ReadOnly
+    );
+    assert_eq!(
+        model_profile.rejection_reasons,
+        vec!["bgp path is read-only".to_string()]
+    );
 }
 
 #[test]

@@ -17,6 +17,9 @@ fallback = [
   "napalm",
   "netmiko",
 ]
+gnmi = [
+  "pygnmi",
+]
 test = [
   "pytest",
 ]

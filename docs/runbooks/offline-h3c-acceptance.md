@@ -29,8 +29,8 @@ aria-underlay-h3c-offline-acceptance --pretty
 
 The command prints a machine-readable JSON report to stdout and a human-readable
 summary to stderr. Each scenario includes rendered XML size, generated readback
-XML size, parser profile, and parsed-vs-observed resource counts. CI also writes
-both forms to an artifact:
+XML size, parser profile, parsed-vs-observed resource counts, and a
+`change_plan` block. CI also writes both forms to an artifact:
 
 ```bash
 aria-underlay-h3c-offline-acceptance \
@@ -43,3 +43,13 @@ Acceptance passes only when every scenario renders valid H3C Comware XML,
 completes mock NETCONF dry-run, prepare, commit, and final-confirm, emits H3C
 Comware-like running XML, parses it with `H3cStateParser`, and verifies parsed
 state against the post-apply scoped state.
+
+Each scenario reports `change_plan` metadata as the pre-change safety surface
+used before higher-risk features such as PBR and BGP:
+
+- `stages`: dependency-ordered execution phases.
+- `dependency_edges`: resource ordering constraints such as ACL binding before
+  ACL delete.
+- `blast_radius`: local VLAN/interface or policy reference impact.
+- `rollback_order`: human-readable reverse order for cleanup and recovery
+  review.

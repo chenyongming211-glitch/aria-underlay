@@ -14,6 +14,12 @@ from aria_underlay_adapter.backends.netconf_errors import (
 from aria_underlay_adapter.backends.netconf_errors import (
     adapter_operation_error as _adapter_operation_error,
 )
+from aria_underlay_adapter.backends.gnmi_capabilities import (
+    GnmiCapabilityProbe as _GnmiCapabilityProbe,
+)
+from aria_underlay_adapter.backends.gnmi_capabilities import (
+    probe_error_summary as _probe_error_summary,
+)
 from aria_underlay_adapter.backends.netconf_hostkey import (
     KnownHostsTrustStore as _KnownHostsTrustStore,
 )
@@ -36,6 +42,9 @@ from aria_underlay_adapter.backends.netconf_hostkey import (
 from aria_underlay_adapter.backends.netconf_hostkey import (
     validate_known_hosts_path as _validate_known_hosts_path,
 )
+from aria_underlay_adapter.backends.netconf_model_profile import (
+    probe_openconfig_netconf_paths as _probe_openconfig_netconf_paths,
+)
 from aria_underlay_adapter.backends.netconf_state import build_state_filter
 from aria_underlay_adapter.backends.netconf_state import (
     desired_state_is_empty as _desired_state_is_empty,
@@ -56,6 +65,10 @@ from aria_underlay_adapter.backends.netconf_state import verify_acls as _verify_
 from aria_underlay_adapter.backends.netconf_state import verify_interfaces as _verify_interfaces
 from aria_underlay_adapter.backends.netconf_state import verify_vlans as _verify_vlans
 from aria_underlay_adapter.errors import AdapterError
+from aria_underlay_adapter.model_profile import (
+    classify_model_profile,
+    extract_yang_modules_from_capabilities,
+)
 from aria_underlay_adapter.normalization import admin_state_to_text as _admin_state_to_text
 
 
@@ -103,17 +116,39 @@ class NcclientNetconfBackend:
     config_renderer: CandidateConfigRenderer | None = None
     state_parser: RunningStateParser | None = None
     allow_fixture_verified_state_parser: bool = False
+    gnmi_capability_probe: _GnmiCapabilityProbe | None = None
 
     def get_capabilities(self) -> BackendCapability:
         try:
             with self._connect() as session:
                 raw = [str(capability) for capability in session.server_capabilities]
+                module_only_capability = capability_from_raw(raw)
+                verified_paths = _probe_openconfig_netconf_paths(
+                    session,
+                    module_only_capability,
+                )
+            gnmi_supported_models: list[dict[str, str]] = []
+            warnings: list[str] = []
+            if self.gnmi_capability_probe is not None:
+                try:
+                    gnmi_result = self.gnmi_capability_probe.get_capabilities()
+                    gnmi_supported_models = gnmi_result.supported_models
+                except Exception as exc:
+                    warnings.append(
+                        "gNMI capabilities probe failed: "
+                        f"{_probe_error_summary(exc)}"
+                    )
         except AdapterError:
             raise
         except Exception as exc:
             raise _adapter_error_from_ncclient_exception(exc) from exc
 
-        return capability_from_raw(raw)
+        return capability_from_raw(
+            raw,
+            verified_paths=verified_paths,
+            gnmi_supported_models=gnmi_supported_models,
+            warnings=warnings,
+        )
 
     def _connect(self):
         if self.pinned_host_key_fingerprint:
@@ -718,7 +753,13 @@ def _force_unlock_session_id(lock_owner: str | None) -> str:
 NetconfBackend = NcclientNetconfBackend
 
 
-def capability_from_raw(raw_capabilities: Iterable[str]) -> BackendCapability:
+def capability_from_raw(
+    raw_capabilities: Iterable[str],
+    *,
+    verified_paths: dict[str, dict] | None = None,
+    gnmi_supported_models: list[dict[str, str]] | None = None,
+    warnings: list[str] | None = None,
+) -> BackendCapability:
     raw = list(raw_capabilities)
     raw_set = set(raw)
     supports_netconf = BASE_10 in raw_set or BASE_11 in raw_set
@@ -729,6 +770,7 @@ def capability_from_raw(raw_capabilities: Iterable[str]) -> BackendCapability:
     )
     supports_rollback_on_error = ROLLBACK_ON_ERROR in raw_set
     supports_writable_running = WRITABLE_RUNNING in raw_set
+    yang_modules = extract_yang_modules_from_capabilities(raw)
 
     return BackendCapability(
         model="",
@@ -742,4 +784,15 @@ def capability_from_raw(raw_capabilities: Iterable[str]) -> BackendCapability:
         supports_rollback_on_error=supports_rollback_on_error,
         supports_writable_running=supports_writable_running,
         supported_backends=["netconf"] if supports_netconf else [],
+        model_profile=classify_model_profile(
+            vendor="unknown",
+            model="unknown",
+            os_version="unknown",
+            supports_candidate=supports_candidate,
+            supports_validate=supports_validate,
+            supported_modules=yang_modules,
+            verified_paths=verified_paths or {},
+            gnmi_supported_models=gnmi_supported_models or [],
+        ),
+        warnings=warnings or [],
     )
