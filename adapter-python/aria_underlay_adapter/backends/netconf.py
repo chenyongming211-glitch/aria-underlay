@@ -14,6 +14,12 @@ from aria_underlay_adapter.backends.netconf_errors import (
 from aria_underlay_adapter.backends.netconf_errors import (
     adapter_operation_error as _adapter_operation_error,
 )
+from aria_underlay_adapter.backends.gnmi_capabilities import (
+    GnmiCapabilityProbe as _GnmiCapabilityProbe,
+)
+from aria_underlay_adapter.backends.gnmi_capabilities import (
+    probe_error_summary as _probe_error_summary,
+)
 from aria_underlay_adapter.backends.netconf_hostkey import (
     KnownHostsTrustStore as _KnownHostsTrustStore,
 )
@@ -110,6 +116,7 @@ class NcclientNetconfBackend:
     config_renderer: CandidateConfigRenderer | None = None
     state_parser: RunningStateParser | None = None
     allow_fixture_verified_state_parser: bool = False
+    gnmi_capability_probe: _GnmiCapabilityProbe | None = None
 
     def get_capabilities(self) -> BackendCapability:
         try:
@@ -120,12 +127,28 @@ class NcclientNetconfBackend:
                     session,
                     module_only_capability,
                 )
+            gnmi_supported_models: list[dict[str, str]] = []
+            warnings: list[str] = []
+            if self.gnmi_capability_probe is not None:
+                try:
+                    gnmi_result = self.gnmi_capability_probe.get_capabilities()
+                    gnmi_supported_models = gnmi_result.supported_models
+                except Exception as exc:
+                    warnings.append(
+                        "gNMI capabilities probe failed: "
+                        f"{_probe_error_summary(exc)}"
+                    )
         except AdapterError:
             raise
         except Exception as exc:
             raise _adapter_error_from_ncclient_exception(exc) from exc
 
-        return capability_from_raw(raw, verified_paths=verified_paths)
+        return capability_from_raw(
+            raw,
+            verified_paths=verified_paths,
+            gnmi_supported_models=gnmi_supported_models,
+            warnings=warnings,
+        )
 
     def _connect(self):
         if self.pinned_host_key_fingerprint:
@@ -734,6 +757,8 @@ def capability_from_raw(
     raw_capabilities: Iterable[str],
     *,
     verified_paths: dict[str, dict] | None = None,
+    gnmi_supported_models: list[dict[str, str]] | None = None,
+    warnings: list[str] | None = None,
 ) -> BackendCapability:
     raw = list(raw_capabilities)
     raw_set = set(raw)
@@ -767,5 +792,7 @@ def capability_from_raw(
             supports_validate=supports_validate,
             supported_modules=yang_modules,
             verified_paths=verified_paths or {},
+            gnmi_supported_models=gnmi_supported_models or [],
         ),
+        warnings=warnings or [],
     )

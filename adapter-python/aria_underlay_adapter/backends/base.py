@@ -18,6 +18,7 @@ class BackendCapability:
     supports_writable_running: bool
     supported_backends: list[str]
     model_profile: dict | None = None
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

@@ -65,3 +65,47 @@ def test_classifies_module_only_support_as_rejected_for_writes():
 
     assert profile["bgp_write_readiness"] == "write_rejected"
     assert "missing verified path" in profile["rejection_reasons"][0]
+
+
+def test_gnmi_supported_models_create_read_only_profile_path_candidates():
+    profile = classify_model_profile(
+        vendor="h3c",
+        model="lab-model",
+        os_version="lab-os",
+        supports_candidate=True,
+        supports_validate=True,
+        supported_modules={},
+        verified_paths={},
+        gnmi_supported_models=[
+            {
+                "name": "openconfig-network-instance",
+                "organization": "OpenConfig",
+                "version": "2024-10-30",
+            },
+            {
+                "name": "openconfig-bgp",
+                "organization": "OpenConfig",
+                "version": "2024-10-30",
+            },
+            {
+                "name": "openconfig-routing-policy",
+                "organization": "OpenConfig",
+                "version": "2024-10-30",
+            },
+        ],
+    )
+
+    paths = {path["path"]: path for path in profile["paths"]}
+    assert profile["gnmi_supported_models"][0]["name"] == "openconfig-network-instance"
+    assert paths["/network-instances/network-instance/protocols/protocol/bgp"] == {
+        "protocol": "openconfig_gnmi",
+        "model": "openconfig-bgp",
+        "revision": "2024-10-30",
+        "path": "/network-instances/network-instance/protocols/protocol/bgp",
+        "readable": False,
+        "writable": False,
+        "verified_on_device": False,
+        "deviations": [],
+        "notes": ["gNMI capabilities advertised model; path read/write not verified"],
+    }
+    assert profile["bgp_write_readiness"] == "write_rejected"

@@ -134,7 +134,9 @@ def classify_model_profile(
     supports_validate: bool,
     supported_modules: dict[str, str],
     verified_paths: dict[str, dict],
+    gnmi_supported_models: list[dict[str, str]] | None = None,
 ) -> dict:
+    gnmi_models = gnmi_supported_models or []
     rejection_reasons: list[str] = []
     bgp_ready = _classify_feature(
         feature="bgp",
@@ -161,7 +163,12 @@ def classify_model_profile(
         "vendor": vendor,
         "model": model,
         "os_version": os_version,
-        "paths": _profile_paths(supported_modules=supported_modules, verified_paths=verified_paths),
+        "paths": _profile_paths(
+            supported_modules=supported_modules,
+            verified_paths=verified_paths,
+        )
+        + _gnmi_profile_paths(gnmi_models),
+        "gnmi_supported_models": gnmi_models,
         "bgp_write_readiness": bgp_ready,
         "pbr_write_readiness": pbr_ready,
         "rejection_reasons": rejection_reasons,
@@ -222,6 +229,40 @@ def _profile_paths(
                 "verified_on_device": True,
                 "deviations": result.get("deviations", []),
                 "notes": result.get("notes", []),
+            }
+        )
+    return paths
+
+
+def _gnmi_profile_paths(gnmi_supported_models: list[dict[str, str]]) -> list[dict]:
+    model_revisions = {
+        str(model.get("name", "")): str(model.get("version", ""))
+        for model in gnmi_supported_models
+        if model.get("name")
+    }
+    model_names = set(model_revisions)
+    paths: list[dict] = []
+    for template in sorted(
+        _OPENCONFIG_NETCONF_PROBE_TEMPLATES,
+        key=lambda item: item["path"],
+    ):
+        required_modules = template["required_modules"]
+        if not required_modules.issubset(model_names):
+            continue
+        model = str(template["model"])
+        paths.append(
+            {
+                "protocol": "openconfig_gnmi",
+                "model": model,
+                "revision": model_revisions.get(model, ""),
+                "path": str(template["path"]),
+                "readable": False,
+                "writable": False,
+                "verified_on_device": False,
+                "deviations": [],
+                "notes": [
+                    "gNMI capabilities advertised model; path read/write not verified"
+                ],
             }
         )
     return paths

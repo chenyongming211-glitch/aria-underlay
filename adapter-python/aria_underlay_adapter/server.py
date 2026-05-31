@@ -25,6 +25,7 @@ except ImportError as exc:  # pragma: no cover - exercised before proto generati
     ) from exc
 
 from aria_underlay_adapter.drivers.fake import FakeDriver
+from aria_underlay_adapter.backends.gnmi_capabilities import GnmiCapabilityProbe
 from aria_underlay_adapter.backends.netconf import NcclientNetconfBackend
 from aria_underlay_adapter.drivers.error import AdapterErrorDriver
 from aria_underlay_adapter.drivers.netconf_backed import NetconfBackedDriver
@@ -196,6 +197,12 @@ def serve() -> None:
                 device,
                 secret_provider,
                 tofu_known_hosts_path=config.tofu_known_hosts_file,
+                gnmi_probe_enabled=config.gnmi_probe_enabled,
+                gnmi_port=config.gnmi_port,
+                gnmi_tls_enabled=config.gnmi_tls_enabled,
+                gnmi_tls_ca_cert_file=config.gnmi_tls_ca_cert_file,
+                gnmi_tls_cert_file=config.gnmi_tls_cert_file,
+                gnmi_tls_key_file=config.gnmi_tls_key_file,
             )
         )
     server = build_server(config, registry)
@@ -215,6 +222,12 @@ def _netconf_driver_from_device(
     device,
     secret_provider: LocalSecretProvider,
     tofu_known_hosts_path: str | None = None,
+    gnmi_probe_enabled: bool = False,
+    gnmi_port: int = 57400,
+    gnmi_tls_enabled: bool = True,
+    gnmi_tls_ca_cert_file: str | None = None,
+    gnmi_tls_cert_file: str | None = None,
+    gnmi_tls_key_file: str | None = None,
 ) -> NetconfBackedDriver | AdapterErrorDriver:
     try:
         secret = secret_provider.resolve(device.secret_ref)
@@ -228,6 +241,19 @@ def _netconf_driver_from_device(
     except AdapterError as error:
         return AdapterErrorDriver(error)
 
+    gnmi_probe = None
+    if gnmi_probe_enabled:
+        gnmi_probe = GnmiCapabilityProbe(
+            host=device.management_ip,
+            port=gnmi_port,
+            username=secret.username,
+            password=secret.password,
+            tls_enabled=gnmi_tls_enabled,
+            tls_ca_cert_file=gnmi_tls_ca_cert_file,
+            tls_cert_file=gnmi_tls_cert_file,
+            tls_key_file=gnmi_tls_key_file,
+        )
+
     return NetconfBackedDriver(
         NcclientNetconfBackend(
             host=device.management_ip,
@@ -236,6 +262,7 @@ def _netconf_driver_from_device(
             password=secret.password,
             key_path=secret.key_path,
             passphrase=secret.passphrase,
+            gnmi_capability_probe=gnmi_probe,
             **host_key_kwargs,
         )
     )

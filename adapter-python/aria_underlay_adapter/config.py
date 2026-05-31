@@ -15,6 +15,12 @@ class AdapterConfig:
     tls_cert_file: str | None
     tls_key_file: str | None
     tls_ca_cert_file: str | None
+    gnmi_probe_enabled: bool = False
+    gnmi_port: int = 57400
+    gnmi_tls_enabled: bool = True
+    gnmi_tls_ca_cert_file: str | None = None
+    gnmi_tls_cert_file: str | None = None
+    gnmi_tls_key_file: str | None = None
 
     @property
     def tls_enabled(self) -> bool:
@@ -49,6 +55,32 @@ class AdapterConfig:
             tls_cert_file=os.getenv("ARIA_UNDERLAY_ADAPTER_TLS_CERT_FILE"),
             tls_key_file=os.getenv("ARIA_UNDERLAY_ADAPTER_TLS_KEY_FILE"),
             tls_ca_cert_file=os.getenv("ARIA_UNDERLAY_ADAPTER_TLS_CA_CERT_FILE"),
+            gnmi_probe_enabled=_env_bool(
+                "ARIA_UNDERLAY_GNMI_PROBE_ENABLED",
+                default=False,
+            ),
+            gnmi_port=_env_int("ARIA_UNDERLAY_GNMI_PORT", default=57400),
+            gnmi_tls_enabled=_env_bool(
+                "ARIA_UNDERLAY_GNMI_TLS_ENABLED",
+                default=True,
+            ),
+            gnmi_tls_ca_cert_file=os.getenv("ARIA_UNDERLAY_GNMI_TLS_CA_CERT_FILE"),
+            gnmi_tls_cert_file=os.getenv("ARIA_UNDERLAY_GNMI_TLS_CERT_FILE"),
+            gnmi_tls_key_file=os.getenv("ARIA_UNDERLAY_GNMI_TLS_KEY_FILE"),
         )
         config.validate()
         return config
+
+
+def _env_bool(name: str, *, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, *, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return int(value)

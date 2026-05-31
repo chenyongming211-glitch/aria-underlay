@@ -55,7 +55,8 @@ class NetconfBackedDriver:
             )
 
         return pb2.GetCapabilitiesResponse(
-            capability=pb2.DeviceCapability(**capability_fields)
+            capability=pb2.DeviceCapability(**capability_fields),
+            warnings=list(capability.warnings),
         )
 
     def get_current_state(self, request):
