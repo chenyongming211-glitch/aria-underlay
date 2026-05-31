@@ -180,20 +180,16 @@ def _extract_schema_text(rpc_reply) -> str:
 def _extract_namespace(schema_text: str) -> str:
     """Extract the YANG module namespace from the schema text.
 
-    Looks for ``namespace "..."`` in the first 2000 characters.
+    Looks for ``namespace "..."`` or ``namespace '...'`` in the first
+    2000 characters. Handles both multi-line and single-line schemas.
     """
     if not schema_text:
         return ""
+    import re
     header = schema_text[:2000]
-    for line in header.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("namespace"):
-            parts = stripped.split('"')
-            if len(parts) >= 2:
-                return parts[1]
-            parts = stripped.split("'")
-            if len(parts) >= 2:
-                return parts[1]
+    match = re.search(r'namespace\s+["\']([^"\']+)["\']', header)
+    if match:
+        return match.group(1)
     return ""
 
 
