@@ -610,6 +610,12 @@ impl ApplyCoordinator {
                     journal_record,
                 )
                 .await?;
+            } else {
+                // Non-ConfirmedCommit strategies skip final_confirm_endpoint,
+                // leaving the journal in Verifying phase. finish_successful_apply
+                // requires FinalConfirming before Committed, so we insert a
+                // synchronous Verifying → FinalConfirming transition here.
+                self.finalize_non_confirmed_commit(journal_record)?;
             }
         }
 
@@ -804,6 +810,24 @@ impl ApplyCoordinator {
                 .await
             }
         }
+    }
+
+    /// Finalize non-ConfirmedCommit strategies by transitioning Verifying → FinalConfirming.
+    ///
+    /// For ConfirmedCommit strategies, `final_confirm_endpoint` performs the actual
+    /// final-confirm RPC and transitions through FinalConfirming. For other strategies
+    /// (CandidateCommit, RunningRollbackOnError, BestEffortCli), the commit is already
+    /// permanent after verify succeeds — there is no separate final-confirm operation.
+    ///
+    /// This method inserts a synchronous Verifying → FinalConfirming transition so that
+    /// `finish_successful_apply` can then legally transition FinalConfirming → Committed.
+    fn finalize_non_confirmed_commit(
+        &self,
+        journal_record: &mut TxJournalRecord,
+    ) -> UnderlayResult<()> {
+        journal_record.transition_phase(TxPhase::FinalConfirming)?;
+        self.journal.put(journal_record)?;
+        Ok(())
     }
 
     async fn rollback_after_endpoint_failure_preserving_primary(

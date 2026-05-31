@@ -322,4 +322,31 @@ mod tests {
         assert!(msg.contains("Started"), "error should mention source phase");
         assert!(msg.contains("Committed"), "error should mention target phase");
     }
+
+    #[test]
+    fn non_confirmed_commit_strategies_must_pass_through_final_confirming() {
+        // Bug #1 (2026-05-31 code review): non-ConfirmedCommit strategies
+        // (CandidateCommit, RunningRollbackOnError, BestEffortCli) leave the journal
+        // in Verifying phase after verify succeeds. They cannot skip directly to
+        // Committed — they must transition through FinalConfirming first.
+        //
+        // The fix in ApplyCoordinator::finalize_non_confirmed_commit inserts a
+        // synchronous Verifying → FinalConfirming transition for these strategies.
+
+        // Direct skip from Verifying to Committed is invalid
+        assert!(
+            validate_transition(&Verifying, &Committed).is_err(),
+            "Verifying -> Committed should be invalid (must pass through FinalConfirming)"
+        );
+
+        // Correct path for non-ConfirmedCommit strategies
+        assert!(
+            validate_transition(&Verifying, &FinalConfirming).is_ok(),
+            "Verifying -> FinalConfirming should be valid"
+        );
+        assert!(
+            validate_transition(&FinalConfirming, &Committed).is_ok(),
+            "FinalConfirming -> Committed should be valid"
+        );
+    }
 }
