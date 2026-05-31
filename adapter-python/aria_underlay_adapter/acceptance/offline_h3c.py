@@ -49,9 +49,11 @@ def run_acceptance(*, backend_profile: str = "confirmed") -> dict[str, Any]:
         except Exception as exc:  # pragma: no cover - exercised through reports
             scenario_reports.append(_failed_scenario_report(scenario, exc))
 
+    read_only_audits = [_run_pbr_bgp_read_only_audit(parser)]
     passed = sum(1 for scenario in scenario_reports if scenario["status"] == "passed")
     failed = len(scenario_reports) - passed
-    status = "passed" if failed == 0 else "failed"
+    audit_failed = sum(1 for audit in read_only_audits if audit["status"] != "passed")
+    status = "passed" if failed == 0 and audit_failed == 0 else "failed"
     return {
         "runner": RUNNER_NAME,
         "vendor": VENDOR,
@@ -63,6 +65,9 @@ def run_acceptance(*, backend_profile: str = "confirmed") -> dict[str, Any]:
         "passed": passed,
         "failed": failed,
         "scenarios": scenario_reports,
+        "read_only_audit_count": len(read_only_audits),
+        "read_only_audit_failed": audit_failed,
+        "read_only_audits": read_only_audits,
     }
 
 
@@ -99,7 +104,41 @@ def format_summary(report: dict[str, Any]) -> str:
                     error.get("message", ""),
                 )
             )
+    for audit in report.get("read_only_audits", []):
+        if audit["status"] == "passed":
+            touched_scope = audit.get("touched_scope", {})
+            lines.append(
+                "- {}: passed [{}], changed={}, write_decision={}, "
+                "blast_radius={}, vrfs={}, bgp_neighbors={}, "
+                "route_policies={}, pbr_policies={}, acl_refs={}, interfaces={}".format(
+                    audit["name"],
+                    ", ".join(audit["surface"]),
+                    str(audit["changed"]).lower(),
+                    audit["write_decision"],
+                    audit["blast_radius"],
+                    _format_summary_values(touched_scope.get("affected_vrfs", [])),
+                    _format_summary_values(touched_scope.get("bgp_neighbors", [])),
+                    _format_summary_values(touched_scope.get("route_policy_refs", [])),
+                    _format_summary_values(touched_scope.get("pbr_policy_refs", [])),
+                    _format_summary_values(touched_scope.get("acl_refs", [])),
+                    _format_summary_values(touched_scope.get("interfaces", [])),
+                )
+            )
+        else:
+            error = audit.get("error", {})
+            lines.append(
+                "- {}: failed [{}], {}: {}".format(
+                    audit["name"],
+                    ", ".join(audit["surface"]),
+                    error.get("code", "ERROR"),
+                    error.get("message", ""),
+                )
+            )
     return "\n".join(lines) + "\n"
+
+
+def _format_summary_values(values: list[Any]) -> str:
+    return ",".join(str(value) for value in values) if values else "-"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -233,6 +272,64 @@ def _failed_scenario_report(scenario: Scenario, exc: Exception) -> dict[str, Any
             "acl_bindings": 0,
         },
         "error": _error_payload(exc),
+    }
+
+
+def _run_pbr_bgp_read_only_audit(parser: H3cStateParser) -> dict[str, Any]:
+    try:
+        parsed = parser.parse_running(_h3c_high_risk_audit_xml())
+        audit = parsed["high_risk_audit"]
+    except Exception as exc:  # pragma: no cover - exercised through reports
+        return {
+            "name": "pbr_bgp_high_risk_read_only",
+            "status": "failed",
+            "surface": ["pbr", "bgp"],
+            "stages": ["parse", "audit"],
+            "changed": False,
+            "write_decision": "rejected",
+            "features_present": [],
+            "blast_radius": "routing_control_plane",
+            "unsupported_paths": [
+                "bgp: parser audit failed",
+                "pbr: parser audit failed",
+            ],
+            "warnings": [],
+            "pbr": {},
+            "bgp": {},
+            "touched_scope": _empty_high_risk_touched_scope(),
+            "error": _error_payload(exc),
+        }
+
+    return {
+        "name": "pbr_bgp_high_risk_read_only",
+        "status": "passed",
+        "surface": ["pbr", "bgp"],
+        "stages": ["parse", "audit"],
+        "changed": False,
+        "write_decision": audit["write_decision"],
+        "features_present": audit["features_present"],
+        "blast_radius": "routing_control_plane",
+        "unsupported_paths": [
+            "bgp: no path-level write evidence",
+            "pbr: no path-level write evidence",
+        ],
+        "touched_scope": audit["touched_scope"],
+        "pbr": audit["pbr"],
+        "bgp": audit["bgp"],
+        "warnings": audit["warnings"],
+    }
+
+
+def _empty_high_risk_touched_scope() -> dict[str, list[Any]]:
+    return {
+        "affected_vrfs": [],
+        "bgp_as_numbers": [],
+        "bgp_neighbors": [],
+        "route_policy_refs": [],
+        "pbr_policy_refs": [],
+        "acl_refs": [],
+        "interfaces": [],
+        "raw_paths": [],
     }
 
 
@@ -537,6 +634,38 @@ def _scenarios() -> tuple[Scenario, ...]:
             },
         ),
     )
+
+
+def _h3c_high_risk_audit_xml() -> str:
+    return """
+    <data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+      <top xmlns="http://www.h3c.com/netconf/config:1.0">
+        <PBR>
+          <Policies>
+            <Policy>
+              <PolicyName>pbr-tenant-a</PolicyName>
+              <AclNumber>3999</AclNumber>
+              <ApplyInterface>GigabitEthernet1/0/13</ApplyInterface>
+            </Policy>
+          </Policies>
+        </PBR>
+        <BGP>
+          <Instances>
+            <Instance>
+              <ASNumber>65001</ASNumber>
+              <VRF>tenant-a</VRF>
+              <Peers>
+                <Peer>
+                  <PeerAddress>192.0.2.1</PeerAddress>
+                  <ImportPolicy>rp-in</ImportPolicy>
+                </Peer>
+              </Peers>
+            </Instance>
+          </Instances>
+        </BGP>
+      </top>
+    </data>
+    """
 
 
 def _namespace(value: Any) -> Any:

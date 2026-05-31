@@ -104,6 +104,58 @@ def test_offline_h3c_acceptance_reports_change_plan_metadata():
     )
 
 
+def test_offline_h3c_acceptance_reports_pbr_bgp_read_only_audit():
+    report = offline_h3c.run_acceptance()
+
+    assert report["read_only_audits"] == [
+        {
+            "name": "pbr_bgp_high_risk_read_only",
+            "status": "passed",
+            "surface": ["pbr", "bgp"],
+            "stages": ["parse", "audit"],
+            "changed": False,
+            "write_decision": "read_only",
+            "features_present": ["bgp", "pbr"],
+            "blast_radius": "routing_control_plane",
+            "unsupported_paths": [
+                "bgp: no path-level write evidence",
+                "pbr: no path-level write evidence",
+            ],
+            "touched_scope": {
+                "affected_vrfs": ["tenant-a"],
+                "bgp_as_numbers": [65001],
+                "bgp_neighbors": ["192.0.2.1"],
+                "route_policy_refs": ["rp-in"],
+                "pbr_policy_refs": ["pbr-tenant-a"],
+                "acl_refs": [3999],
+                "interfaces": ["GigabitEthernet1/0/13"],
+                "raw_paths": ["/data/top/BGP", "/data/top/PBR"],
+            },
+            "pbr": {
+                "present": True,
+                "blast_radius": "policy_reference",
+                "policies": ["pbr-tenant-a"],
+                "acl_references": [3999],
+                "interfaces": ["GigabitEthernet1/0/13"],
+                "raw_paths": ["/data/top/PBR"],
+            },
+            "bgp": {
+                "present": True,
+                "blast_radius": "routing_control_plane",
+                "as_numbers": [65001],
+                "vrfs": ["tenant-a"],
+                "neighbors": ["192.0.2.1"],
+                "policy_references": ["rp-in"],
+                "raw_paths": ["/data/top/BGP"],
+            },
+            "warnings": [
+                "BGP config detected; read-only audit only until path-level write evidence exists",
+                "PBR config detected; read-only audit only until path-level write evidence exists",
+            ],
+        }
+    ]
+
+
 def test_offline_h3c_acceptance_summary_marks_parser_loop(capsys):
     result = offline_h3c.main([])
 
@@ -111,3 +163,9 @@ def test_offline_h3c_acceptance_summary_marks_parser_loop(capsys):
 
     assert result == 0
     assert "parser_loop=true" in captured.err
+    assert "vrfs=tenant-a" in captured.err
+    assert "bgp_neighbors=192.0.2.1" in captured.err
+    assert "route_policies=rp-in" in captured.err
+    assert "pbr_policies=pbr-tenant-a" in captured.err
+    assert "acl_refs=3999" in captured.err
+    assert "interfaces=GigabitEthernet1/0/13" in captured.err

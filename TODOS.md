@@ -53,9 +53,9 @@
 
 ---
 
-## P1: 进行中 — 标准模型 / SoT / ChangePlan 基础
+## P1: 已完成 — 标准模型 / SoT / ChangePlan 基础
 
-**状态**：核心合约已在 `codex/device-model-profile-contract` 分支实现，待 CI 通过后合入 `main`。已落地：`DeviceModelProfile`（含 `WriteReadiness`）、`SotSnapshot` 输入边界、`ChangePlan`（含 stage 顺序/dependency_edges/rollback_order/blast_radius/unsupported_paths/`DryRunWriteDecision`）、NETCONF YANG Library 探测、可选 gNMI capability 探测。
+**状态**：已完成并合入 `main`。`codex/device-model-profile-contract` 经 CI 通过后由 commit `cf7d0f5` 合入；后续 commit `7d9a61d` 继续补齐 YANG schema 采集能力。已落地：`DeviceModelProfile`（含 `WriteReadiness`）、`SotSnapshot` 输入边界、`ChangePlan`（含 stage 顺序/dependency_edges/rollback_order/blast_radius/unsupported_paths/`DryRunWriteDecision`）、NETCONF YANG module evidence、可选 gNMI capability 探测、YANG schema collection。
 
 **做什么**：把 OpenConfig/gNMI 评估、Source of Truth 输入边界和 ChangePlan dry-run 落地到核心开发计划和代码骨架中。详细执行计划见 `docs/superpowers/plans/2026-05-30-standard-model-sot-changeplan.md`。
 
@@ -85,7 +85,35 @@
 
 **工作量**：L
 **优先级**：P1（复杂网络功能写入前的基础层）
-**依赖**：Offline H3C Acceptance Runner 已完成；Rust 编译/测试继续以 GitHub Actions 为门禁
+**依赖**：已由 GitHub Actions 验证并合入 `main`；后续 PBR/BGP 写入仍必须以 path 级 profile evidence 和 ChangePlan 门禁为前置
+
+---
+
+## P1: 进行中 — PBR/BGP read-only parser/audit
+
+**状态**：初版已落地在 Python adapter：`H3cStateParser` 会从 running XML 中识别 PBR/BGP 高风险配置，输出 `high_risk_audit` 和结构化 `touched_scope`；offline H3C acceptance report 新增 `read_only_audits`，明确 `write_decision=read_only`、`blast_radius=routing_control_plane`、unsupported paths、affected VRFs、BGP neighbors、route-policy refs、PBR policy refs、ACL refs 和 interfaces。当前仍不生成 PBR/BGP renderer，不进入写配置路径。
+
+**做什么**：先把 PBR/BGP 作为只读审计对象接入 parser 和离线报告，让系统能发现现网中是否已经存在 PBR/BGP、涉及哪些 VRF/neighbor/policy/ACL/interface，以及为什么当前必须拒绝自动写入。
+
+**范围**：
+- H3C running XML parser 输出 PBR/BGP high-risk audit，不写入 `ObservedDeviceState` proto 主模型，避免误导为已支持配置面。
+- Offline H3C acceptance runner 输出 `read_only_audits`，覆盖 parser-only audit、read-only decision、blast radius、unsupported paths、`touched_scope` 和 warnings。
+- PBR 默认 blast radius 为 `policy_reference`；BGP 默认 blast radius 为 `routing_control_plane`。
+- 未满足 path-level read/write evidence 时，PBR/BGP 写入保持 read-only/rejected。
+
+**不做**：
+- 不实现 PBR/BGP intent。
+- 不实现 PBR/BGP renderer。
+- 不把识别到的 PBR/BGP 节点写入 shadow/expected store。
+- 不声明真实 H3C 设备 PBR/BGP XML 结构已经完整覆盖；真实设备样本到位后继续校准 parser。
+
+**下一步**：
+- 用真实 running XML 样本替换/补充当前 offline audit fixture。
+- 再决定是否推进 H3C Basic IPv4 ACL 或继续做 PBR/BGP path-level profile 验证。
+
+**工作量**：M
+**优先级**：P1（高风险功能写入前的只读证据层）
+**依赖**：DeviceModelProfile / ChangePlan / Offline H3C Acceptance Runner 已落地
 
 ---
 
@@ -149,7 +177,7 @@
 **为什么**：当前每接入一个新厂商需要手写 ~1700 行代码（renderer ~400 + parser ~400 + fixtures ~600 + acceptance ~100 + tests ~200）。不同厂商的 renderer 结构高度相似，只是 namespace 和 element name 不同，LLM 擅长这种 pattern matching + 转换。
 
 **工作流**：
-1. **Phase 1（只读采集）**：采集新设备的 running-config 样本、NETCONF capabilities、YANG modules。不写设备。
+1. **Phase 1（只读采集）**：采集新设备的 running-config 样本、NETCONF capabilities、YANG schema library。不写设备。
 2. **Phase 2（LLM 生成）**：用 H3C reference + 新厂商样本作为 prompt，生成 renderer/parser/fixtures/acceptance。最多 3 轮迭代（失败 → 喂回 LLM → 重新生成）。
 3. **Phase 3（自动验证）**：跑 offline acceptance runner。这是现有基础设施的天然复用。
 4. **Phase 4（人工修复）**：只修失败的 3-5 个 case，不需要从零写 1000 行。
@@ -175,34 +203,36 @@ renderers/
 **详细方案**：`docs/adapter-acceleration-strategy.md` §3
 
 **工作量**：M（1-2 周）
-**优先级**：P2（标准模型计划合入 main 之后）
-**依赖**：至少一个新厂商设备的 running-config 样本（采集可在 LLM 生成前独立完成）
+**优先级**：P2（标准模型计划和 YANG schema collection 已合入 main 之后）
+**依赖**：至少一个新厂商设备的 running-config 样本、NETCONF capabilities 和 YANG schema library 样本
 
 ---
 
-## P2/P3: 进行中 — YANG Schema 采集
+## P2/P3: 已完成 — YANG Schema 采集
 
-**状态**：核心采集逻辑已在 `codex/yang-schema-collection` 分支实现，待 CI 通过后合入 `main`。已落地：`backends/yang_schema.py`（collect/save/load）、`YangModuleSummary` proto 消息、`DeviceCapability.yang_modules` 字段、`DeviceModelProfile.yang_module_count`、`ARIA_UNDERLAY_YANG_SCHEMA_COLLECTION_ENABLED` 配置开关、save/load 单元测试和 NETCONF backend 测试。
+**状态**：已完成并合入 `main`（commit `7d9a61d`，GitHub Actions run `26704193631`）。已落地：`backends/yang_schema.py`（collect/save/load）、`YangModuleSummary` proto 消息、`DeviceCapability.yang_modules` 字段、`DeviceModelProfile.yang_module_count`、`ARIA_UNDERLAY_YANG_SCHEMA_COLLECTION_ENABLED` 配置开关、`ARIA_UNDERLAY_YANG_LIBRARY_DIR` 归档路径覆盖、save/load 单元测试和 NETCONF backend 测试。
 
 **做什么**：把所有接入设备的 YANG modules 通过 NETCONF `get-schema`（RFC 6022）采集并归档，建立 YANG library。结果存入 `data/yang-library/{vendor}/{model}/{os_version}/` 并通过 `DeviceCapability.yang_modules` 返回，`DeviceModelProfile.yang_module_count` 记录总数。
 
 **为什么**：YANG library 是三个适配加速方案的共同数据基础。即使后续不走 YANG 驱动方向，采集数据也有独立价值（设备能力归档、firmware 变更追踪）。
 
 **范围**：
-- 只读操作：`get-schema` + `get-config(source="running", filter=yang-library)`
-- 不影响设备配置
-- 扩展 `netconf_model_profile.py` 的 `extract_yang_modules_from_capabilities` 为完整 module 下载
-- Proto 增加 `repeated YangModuleSummary yang_modules` 字段
+- 只读操作：从 NETCONF server capabilities 提取 module hints，并通过 `get-schema` 下载 schema 文本
+- 默认关闭，通过 `ARIA_UNDERLAY_YANG_SCHEMA_COLLECTION_ENABLED=1` 启用；可用 `ARIA_UNDERLAY_YANG_LIBRARY_DIR` 覆盖归档根目录
+- 归档到 `data/yang-library/{vendor}/{model}/{os_version}/`，写入 `yang-modules.json` 和 `{name}@{revision}.yang`
+- Proto 增加 `YangModuleSummary`、`DeviceCapability.yang_modules`，`DeviceModelProfile.yang_module_count` 记录数量
+- 采集失败不影响 capability probe；失败 module 以 skipped/error summary 记录
 
 **不做**：
 - 不做 YANG schema diff（需要真实设备 candidate 探测，是独立工作项）
 - 不做 renderer/parser 自动生成
+- 不把 schema 下载成功视为 path-level writable 证据
 
 **详细方案**：`docs/adapter-acceleration-strategy.md` §2.3 阶段 A
 
 **工作量**：S（2-3 天）
-**优先级**：P2/P3（零风险，可与 LLM 辅助适配并行启动）
-**依赖**：无
+**优先级**：P2/P3（已完成，作为 LLM 辅助适配和 YANG conformance 的输入）
+**依赖**：后续真实设备验收需要采集并归档至少一组真实设备 YANG library 样本
 
 ---
 

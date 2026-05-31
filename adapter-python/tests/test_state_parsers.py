@@ -290,6 +290,76 @@ def test_h3c_parser_reads_real_comware_acl_interface_bindings():
     ]
 
 
+def test_h3c_parser_audits_pbr_and_bgp_as_read_only_high_risk_features():
+    state = H3cStateParser(model_hint="S5560-54C-EI").parse_running(
+        """
+        <data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+          <top xmlns="http://www.h3c.com/netconf/config:1.0">
+            <PBR>
+              <Policies>
+                <Policy>
+                  <PolicyName>pbr-tenant-a</PolicyName>
+                  <AclNumber>3999</AclNumber>
+                  <ApplyInterface>GigabitEthernet1/0/13</ApplyInterface>
+                </Policy>
+              </Policies>
+            </PBR>
+            <BGP>
+              <Instances>
+                <Instance>
+                  <ASNumber>65001</ASNumber>
+                  <VRF>tenant-a</VRF>
+                  <Peers>
+                    <Peer>
+                      <PeerAddress>192.0.2.1</PeerAddress>
+                      <ImportPolicy>rp-in</ImportPolicy>
+                    </Peer>
+                  </Peers>
+                </Instance>
+              </Instances>
+            </BGP>
+          </top>
+        </data>
+        """
+    )
+
+    audit = state["high_risk_audit"]
+
+    assert audit["write_decision"] == "read_only"
+    assert audit["features_present"] == ["bgp", "pbr"]
+    assert audit["touched_scope"] == {
+        "affected_vrfs": ["tenant-a"],
+        "bgp_as_numbers": [65001],
+        "bgp_neighbors": ["192.0.2.1"],
+        "route_policy_refs": ["rp-in"],
+        "pbr_policy_refs": ["pbr-tenant-a"],
+        "acl_refs": [3999],
+        "interfaces": ["GigabitEthernet1/0/13"],
+        "raw_paths": ["/data/top/BGP", "/data/top/PBR"],
+    }
+    assert audit["pbr"] == {
+        "present": True,
+        "blast_radius": "policy_reference",
+        "policies": ["pbr-tenant-a"],
+        "acl_references": [3999],
+        "interfaces": ["GigabitEthernet1/0/13"],
+        "raw_paths": ["/data/top/PBR"],
+    }
+    assert audit["bgp"] == {
+        "present": True,
+        "blast_radius": "routing_control_plane",
+        "as_numbers": [65001],
+        "vrfs": ["tenant-a"],
+        "neighbors": ["192.0.2.1"],
+        "policy_references": ["rp-in"],
+        "raw_paths": ["/data/top/BGP"],
+    }
+    assert audit["warnings"] == [
+        "BGP config detected; read-only audit only until path-level write evidence exists",
+        "PBR config detected; read-only audit only until path-level write evidence exists",
+    ]
+
+
 def test_h3c_scoped_parser_skips_unrequested_ifindex_without_model_hint():
     scope = SimpleNamespace(
         full=False,

@@ -231,7 +231,9 @@ Nautobot、文件或外部 API connector 后续都只能输出该结构，不能
 三个方案共享 YANG library 数据基础，不替代现有的事务安全和验收标准。生成的代码
 必须过同一套 offline acceptance runner，renderer 来源不影响 ACID 事务语义。
 
-**短期优先**：LLM 辅助适配 MVP + YANG Schema 采集（只读，零风险）。
+**当前状态**：YANG Schema 采集已落地并合入 `main`；短期下一步是在已有
+YANG library 基础上推进 LLM 辅助适配 MVP，或进入 YANG conformance /
+path-level validation。
 
 ### 3.5 幂等
 
@@ -1098,6 +1100,11 @@ PBR/BGP 写配置前必须满足：
 7. offline acceptance 覆盖 renderer/parser/ChangePlan 报告；真实设备到位后再做真机验收。
 
 未满足上述条件时，系统必须返回结构化拒绝，不允许退化成“尽量拼命令下发”。
+当前 PBR/BGP 只允许先进入 read-only audit：H3C parser 可以识别 running XML 中的
+PBR/BGP 高风险配置，offline acceptance report 输出 read-only decision、blast radius
+和 unsupported paths，并通过 `touched_scope` 结构化列出 affected VRFs、BGP AS、
+neighbors、route-policy refs、PBR policy refs、ACL refs、interfaces 和 raw paths，
+但不会生成 PBR/BGP intent、renderer 或 shadow 写入。
 
 ### 10.4 Lock Acquisition Strategy
 
@@ -1204,15 +1211,17 @@ Rust 主控不直接处理 SSH、NETCONF framing、厂商 XML 或 CLI。
 
 复杂功能还必须补充模型能力探测：
 
-- NETCONF YANG Library：module name、revision、feature、deviation。
+- NETCONF YANG Library / schema collection：module name、revision、namespace、
+  schema 下载结果和归档路径。
 - gNMI Capabilities：supported models、encodings。
 - OpenConfig path-level read：目标路径是否能读到稳定结构。
 - OpenConfig path-level write：无害对象是否能写入 candidate 并 validate。
 - Vendor native YANG path-level read/write：OpenConfig 不可用时才作为写路径候选。
 
-capability probe 只能给出候选能力；只有 path-level 读写验证通过，才允许把某功能
-标记为 writable。对于 BGP/PBR，module 存在但路径未验证时只能进入 read-only 或
-rejected 状态。
+capability probe 和 schema collection 只能给出候选能力；schema 下载成功也只证明
+设备声明并提供了 module 文本，不等于目标路径可读写。只有 path-level 读写验证通过，
+才允许把某功能标记为 writable。对于 BGP/PBR，module 存在但路径未验证时只能进入
+read-only 或 rejected 状态。
 
 ### 11.4 RPC
 

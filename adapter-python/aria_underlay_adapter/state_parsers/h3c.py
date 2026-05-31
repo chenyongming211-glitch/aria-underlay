@@ -44,8 +44,12 @@ class H3cStateParser(FixtureStateParser):
 
         vlan_node = _first_descendant(root, "VLAN")
         acl_node = _first_descendant(root, "ACL")
+        high_risk_audit = _parse_high_risk_audit(root)
         if vlan_node is None and acl_node is None:
-            return super().parse_running(xml, scope=scope)
+            return _attach_high_risk_audit(
+                super().parse_running(xml, scope=scope),
+                high_risk_audit,
+            )
 
         vlans = _parse_real_vlans(vlan_node) if vlan_node is not None else []
         interfaces = (
@@ -68,12 +72,12 @@ class H3cStateParser(FixtureStateParser):
             if acl_node is not None
             else []
         )
-        return {
+        return _attach_high_risk_audit({
             "vlans": _filter_vlans(vlans, scope),
             "interfaces": _filter_interfaces(interfaces, scope),
             "acls": _filter_acls(acls, scope),
             "acl_bindings": _filter_acl_bindings(acl_bindings, scope),
-        }
+        }, high_risk_audit)
 
 
 def _parse_real_vlans(vlan_node) -> list[dict]:
@@ -370,6 +374,172 @@ def _parse_acl_direction(value: str) -> str:
     if value == "2":
         return "outbound"
     raise _parse_error(f"unsupported ACL binding direction {value}")
+
+
+def _attach_high_risk_audit(state: dict, audit: dict) -> dict:
+    if not audit["features_present"]:
+        return state
+    enriched = dict(state)
+    enriched["high_risk_audit"] = audit
+    return enriched
+
+
+def _parse_high_risk_audit(root) -> dict:
+    pbr_nodes = _feature_nodes(root, "pbr")
+    bgp_nodes = _feature_nodes(root, "bgp")
+    pbr = _pbr_audit(pbr_nodes)
+    bgp = _bgp_audit(bgp_nodes)
+
+    features_present = []
+    warnings = []
+    if bgp["present"]:
+        features_present.append("bgp")
+        warnings.append(
+            "BGP config detected; read-only audit only until path-level write evidence exists"
+        )
+    if pbr["present"]:
+        features_present.append("pbr")
+        warnings.append(
+            "PBR config detected; read-only audit only until path-level write evidence exists"
+        )
+
+    return {
+        "features_present": features_present,
+        "write_decision": "read_only" if features_present else "allowed_vendor_private",
+        "touched_scope": _high_risk_touched_scope(pbr, bgp),
+        "pbr": pbr,
+        "bgp": bgp,
+        "warnings": warnings,
+    }
+
+
+def _pbr_audit(nodes: list[tuple[str, object]]) -> dict:
+    return {
+        "present": bool(nodes),
+        "blast_radius": "policy_reference",
+        "policies": _dedupe_sorted(
+            _text_values(nodes, lambda name: "policy" in name and "route" not in name)
+        ),
+        "acl_references": _dedupe_sorted_ints(
+            _integer_values(nodes, lambda name: "acl" in name)
+        ),
+        "interfaces": _dedupe_sorted(
+            _text_values(nodes, lambda name: "interface" in name or name in {"ifname"})
+        ),
+        "raw_paths": [path for path, _node in nodes],
+    }
+
+
+def _bgp_audit(nodes: list[tuple[str, object]]) -> dict:
+    return {
+        "present": bool(nodes),
+        "blast_radius": "routing_control_plane",
+        "as_numbers": _dedupe_sorted_ints(
+            _integer_values(nodes, lambda name: name in {"as", "asnumber", "localas"})
+        ),
+        "vrfs": _dedupe_sorted(
+            _text_values(nodes, lambda name: "vrf" in name or "vpninstance" in name)
+        ),
+        "neighbors": _dedupe_sorted(
+            _text_values(
+                nodes,
+                lambda name: ("peer" in name or "neighbor" in name),
+                value_filter=_looks_like_ipv4,
+            )
+        ),
+        "policy_references": _dedupe_sorted(
+            _text_values(
+                nodes,
+                lambda name: "policy" in name,
+                value_filter=lambda value: bool(value) and not value.isdigit(),
+            )
+        ),
+        "raw_paths": [path for path, _node in nodes],
+    }
+
+
+def _high_risk_touched_scope(pbr: dict, bgp: dict) -> dict:
+    return {
+        "affected_vrfs": bgp["vrfs"],
+        "bgp_as_numbers": bgp["as_numbers"],
+        "bgp_neighbors": bgp["neighbors"],
+        "route_policy_refs": bgp["policy_references"],
+        "pbr_policy_refs": pbr["policies"],
+        "acl_refs": pbr["acl_references"],
+        "interfaces": pbr["interfaces"],
+        "raw_paths": sorted(set(bgp["raw_paths"] + pbr["raw_paths"])),
+    }
+
+
+def _feature_nodes(root, feature: str) -> list[tuple[str, object]]:
+    nodes = []
+    for path, node in _walk_paths(root):
+        name = _normalized_local_name(node.tag)
+        if feature == "bgp" and "bgp" in name:
+            nodes.append((path, node))
+        elif feature == "pbr" and (
+            "pbr" in name or ("policy" in name and "route" in name)
+        ):
+            nodes.append((path, node))
+    return nodes
+
+
+def _text_values(nodes, name_filter, *, value_filter=None) -> list[str]:
+    values = []
+    for _path, node in nodes:
+        for child in node.iter():
+            name = _normalized_local_name(child.tag)
+            if not name_filter(name):
+                continue
+            value = _text(child)
+            if not value:
+                continue
+            if value_filter is not None and not value_filter(value):
+                continue
+            values.append(value)
+    return values
+
+
+def _integer_values(nodes, name_filter) -> list[int]:
+    values = []
+    for value in _text_values(nodes, name_filter):
+        try:
+            values.append(int(value))
+        except ValueError:
+            continue
+    return values
+
+
+def _dedupe_sorted(values: list[str]) -> list[str]:
+    return sorted({value for value in values if value})
+
+
+def _dedupe_sorted_ints(values: list[int]) -> list[int]:
+    return sorted(set(values))
+
+
+def _looks_like_ipv4(value: str) -> bool:
+    parts = value.split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        return all(0 <= int(part) <= 255 for part in parts)
+    except ValueError:
+        return False
+
+
+def _walk_paths(root):
+    def walk(node, path):
+        yield (path, node)
+        for child in list(node):
+            child_path = f"{path}/{_local_name(child.tag)}"
+            yield from walk(child, child_path)
+
+    yield from walk(root, f"/{_local_name(root.tag)}")
+
+
+def _normalized_local_name(tag: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", _local_name(tag).lower())
 
 
 def _descriptions_by_ifindex(root) -> dict[int, str]:

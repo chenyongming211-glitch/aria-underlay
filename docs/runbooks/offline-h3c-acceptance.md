@@ -53,3 +53,11 @@ used before higher-risk features such as PBR and BGP:
 - `blast_radius`: local VLAN/interface or policy reference impact.
 - `rollback_order`: human-readable reverse order for cleanup and recovery
   review.
+
+The report also includes `read_only_audits` for high-risk surfaces that must not
+enter the write path yet. The current PBR/BGP audit is parser-only: it detects
+PBR/BGP nodes in H3C running XML, reports structured `touched_scope` with
+affected VRFs, BGP AS numbers, neighbors, route-policy references, PBR policy
+references, ACL references, interfaces, raw XML paths, and warnings, and returns
+`write_decision=read_only` with unsupported paths until real path-level write
+evidence exists.

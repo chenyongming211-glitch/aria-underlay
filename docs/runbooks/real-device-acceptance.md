@@ -31,7 +31,8 @@ H3C NETCONF instead of gNMI.
 
 Required evidence:
 
-- NETCONF server capabilities and YANG Library module/revision inventory.
+- NETCONF server capabilities, YANG Library module/revision inventory, and
+  when enabled, `get-schema` collection output.
 - gNMI Capabilities output when gNMI is enabled or being evaluated.
 - OpenConfig path read/write result for each target feature path, if present.
 - Vendor native YANG path read/write result when OpenConfig is unavailable or
@@ -43,6 +44,19 @@ Required evidence:
   decision (`DryRunWriteDecision`: `allowed_standard_model`,
   `allowed_vendor_native`, `allowed_vendor_private`, `read_only`, or
   `rejected`).
+
+To collect schema text during a capability probe, run the adapter with:
+
+```text
+ARIA_UNDERLAY_YANG_SCHEMA_COLLECTION_ENABLED=1
+ARIA_UNDERLAY_YANG_LIBRARY_DIR=/path/to/yang-library
+```
+
+The expected artifact is
+`data/yang-library/{vendor}/{model}/{os_version}/yang-modules.json` plus any
+downloaded `{name}@{revision}.yang` files. Record downloaded and skipped module
+counts, and preserve `get-schema` errors as evidence. Schema collection is
+read-only evidence; it is not a write-readiness decision.
 
 Do not treat module presence as write support. If only module-level evidence is
 available, record the feature as read-only or rejected for writes. For PBR/BGP,

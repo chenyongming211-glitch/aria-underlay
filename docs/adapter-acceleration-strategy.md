@@ -116,76 +116,48 @@ def parse_vlan(vlan_node: Element, module_schema: YangModule) -> dict:
 
 ### 2.3 渐进落地方案
 
-#### 阶段 A：YANG Schema 采集和归档
+#### 阶段 A：YANG Schema 采集和归档（已落地）
 
-**目标**：把所有接入设备的 YANG modules 采集并归档，建立 YANG library。
+**状态**：已合入 `main`（commit `7d9a61d`）。实现位于
+`adapter-python/aria_underlay_adapter/backends/yang_schema.py`。
+
+**目标**：把接入设备声明并可下载的 YANG modules 采集并归档，建立 YANG library。
 
 ```
 接入新设备
-  → NETCONF get-schema（RFC 6022）列出所有可用 YANG modules
-  → 逐个下载 module 文本
+  → NETCONF hello capabilities 提取 module/revision hints
+  → 可选启用 get-schema（RFC 6022）下载 module 文本
   → 存入 data/yang-library/{vendor}/{model}/{os_version}/
-  → 记录 module name + revision + namespace
-  → 写入 DeviceModelProfile.yang_modules
+  → 写入 yang-modules.json 和 module .yang 文件
+  → 通过 DeviceCapability.yang_modules 返回摘要
+  → DeviceModelProfile.yang_module_count 记录数量
 ```
 
-**采集脚本**（复用现有 NETCONF 探测能力）：
+**现有接口**（复用现有 NETCONF 探测能力）：
 
 ```python
-# adapter-python/aria_underlay_adapter/yang_collector.py
-
-class YangCollector:
-    """只读采集设备 YANG library，不修改任何配置。"""
-    
-    def collect(self, device_config: dict) -> YangLibraryBundle:
-        with self._connect(device_config) as session:
-            # 1. 从 NETCONF hello 提取 module hints
-            hello_modules = extract_yang_modules_from_capabilities(
-                [str(cap) for cap in session.server_capabilities]
-            )
-            
-            # 2. 通过 get-schema 下载完整 module 文本
-            modules = {}
-            for module_name, revision in hello_modules.items():
-                try:
-                    module_text = session.get_schema(module_name, revision)
-                    modules[module_name] = YangModule(
-                        name=module_name,
-                        revision=revision,
-                        text=module_text,
-                    )
-                except RpcError:
-                    # 部分设备不支持 get-schema，记录为 unavailable
-                    modules[module_name] = YangModule.unavailable(module_name, revision)
-            
-            return YangLibraryBundle(
-                vendor=device_config["vendor"],
-                model=device_config["model"],
-                os_version=device_config["os_version"],
-                modules=modules,
-            )
-    
-    def save(self, bundle: YangLibraryBundle, output_dir: Path) -> None:
-        vendor_dir = output_dir / bundle.vendor / bundle.model / bundle.os_version
-        vendor_dir.mkdir(parents=True, exist_ok=True)
-        for module in bundle.modules.values():
-            if module.available:
-                (vendor_dir / f"{module.name}@{module.revision}.yang").write_text(module.text)
-        # 写入结构化摘要
-        (vendor_dir / "summary.json").write_text(bundle.to_json())
+from aria_underlay_adapter.backends.yang_schema import (
+    collect_and_save_yang_schemas,
+    load_yang_library,
+)
 ```
 
 **安全约束**：
-- 只做只读操作（`get-schema`、`get-config(source="running", filter=...yang-library...)`）
-- 不影响设备配置
-- 采集结果作为 evidence 存入 `DeviceModelProfile`
+- 只做只读操作：从 server capabilities 提取 module hints，并对可用 module 调用
+  `get-schema`
+- 默认关闭，通过 `ARIA_UNDERLAY_YANG_SCHEMA_COLLECTION_ENABLED=1` 启用
+- 可通过 `ARIA_UNDERLAY_YANG_LIBRARY_DIR` 覆盖归档根目录
+- 采集失败不影响 capability probe；失败 module 以 skipped/error summary 记录
+- module/schema 存在只作为 evidence，不等于 path-level writable
 
 **与现有架构集成**：
-- `netconf_model_profile.py` 已有 `extract_yang_modules_from_capabilities`，扩展为完整 module 下载
-- `DeviceModelProfile` proto 增加 `repeated YangModuleSummary yang_modules` 字段
-- 离线 acceptance report 新增 `yang_library` 字段
+- `netconf_model_profile.py` 继续负责从 NETCONF capabilities 提取 module/revision hints
+- `DeviceCapability.yang_modules` 返回采集摘要
+- `DeviceModelProfile.yang_module_count` 记录归档 module 数量
+- 离线 acceptance report 目前不消费 YANG library；后续可在 conformance/path-level
+  validation 阶段接入
 
-**工作量**：2-3 天
+**工作量**：已完成
 
 **产出**：每台设备的完整 YANG library 文本 + 结构化摘要。
 
@@ -849,9 +821,10 @@ class NetconfBackedDriver:
 **数据流**：
 
 ```
-YANG 采集 → YANG library → DeviceModelProfile.yang_modules
-                              │
-YANG Diff → conformance report → DeviceModelProfile.yang_conformance
+YANG 采集 → YANG library → DeviceCapability.yang_modules
+           │                  └──→ DeviceModelProfile.yang_module_count
+           │
+           └──→ YANG Diff → conformance report → DeviceModelProfile.yang_conformance
                                     │
                                     ├──→ YANG 驱动（conformant paths 自动生成）
                                     ├──→ LLM 辅助（conformance 作为 prompt context）
@@ -880,20 +853,22 @@ YANG Diff → conformance report → DeviceModelProfile.yang_conformance
 
 | 序号 | 事项 | 前置条件 | 工作量 | 风险 | 价值 |
 |------|------|----------|--------|------|------|
-| 1 | **LLM 辅助适配 MVP** | 现有 H3C reference + 一个新厂商样本 | 1-2 周 | 低 | 高：新厂商接入时间减半 |
-| 2 | **YANG Schema 采集** | NETCONF get-schema 支持 | 2-3 天 | 极低 | 中：数据基础 |
-| 3 | **Runtime YANG Validator** | YANG library 采集完成 | 1 周 | 低 | 中：运行时安全网 |
-| 4 | **YANG Schema Diff** | 真实设备 + YANG library | 1-2 周 | 中 | 高：自动化基础 |
-| 5 | **Schema-Driven Renderer** | Schema diff 数据积累 | 1-2 月 | 中 | 高：长期减少手写 |
+| 基线 | **YANG Schema 采集** | 已合入 main；真实设备到位后补样本 | 已完成 | 极低 | 中：数据基础 |
+| 1 | **LLM 辅助适配 MVP** | 现有 H3C reference + 一个新厂商样本 + 已归档 YANG library | 1-2 周 | 低 | 高：新厂商接入时间减半 |
+| 2 | **Runtime YANG Validator** | YANG library 采集完成 | 1 周 | 低 | 中：运行时安全网 |
+| 3 | **YANG Schema Diff** | 真实设备 + YANG library | 1-2 周 | 中 | 高：自动化基础 |
+| 4 | **Schema-Driven Renderer** | Schema diff 数据积累 | 1-2 月 | 中 | 高：长期减少手写 |
 
-**第一件事应该做 LLM 辅助适配**，因为：
+**在适配加速路线里，当前第一件事应该做 LLM 辅助适配**，因为：
 - 投入产出比最高（直接减少新厂商接入时间）
 - 风险最低（生成的代码必须过 acceptance）
 - 不依赖真实设备（可以用采集的样本离线做）
 - 和现有架构完全兼容（只是在 `renderers/` 下加一个 `generated/` 层级）
 
-**YANG 采集应该同步启动**，因为：
-- 只读操作，零风险
-- 是三个方案的共同数据基础
-- 工作量极小（2-3 天）
-- 即使后续不走 YANG 驱动方向，采集数据也有独立价值（设备能力归档）
+如果当前目标切回 PBR/BGP 功能面，则优先级以 `docs/implementation-plan.md`
+为准：先做 read-only parser / audit 和 path-level profile 验证，不直接写配置。
+
+**YANG 采集基础已经完成**，后续重点变成：
+- 在真实设备到位后归档至少一组 YANG library 样本
+- 把 YANG library 作为 LLM prompt context 和 Runtime Validator 输入
+- 进入 path-level conformance / write-readiness 验证，而不是把 module 存在当成可写证据

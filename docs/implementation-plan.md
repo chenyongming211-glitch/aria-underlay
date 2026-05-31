@@ -1379,21 +1379,18 @@ AuditEvent
 早期初始化、fake adapter、事务骨架、H3C renderer/parser、可靠性 bugfix 和 offline
 H3C acceptance runner 已经完成。当前不要再按 Sprint 0 初始化顺序推进。
 
-按这个顺序开始下一阶段：
+当前标准模型基础已经合入 `main`，下一阶段不要重复做已完成的 contract 和 report
+骨架。按这个顺序继续推进：
 
 ```text
-1. 落地标准模型 / SoT / ChangePlan 计划文档
-2. 实现 DeviceModelProfile contract
-3. 实现 NETCONF YANG Library / gNMI Capabilities 探测报告
-4. 定义 SoT snapshot 边界，不绑定具体外部 SoT 产品
-5. 实现 ChangePlan dependency graph、stages、rollback order、blast-radius
-6. 将 ChangePlan 接入 dry-run 和 offline H3C acceptance report
-7. 对 PBR/BGP 先做 read-only parser / audit 设计，不直接写配置
-8. 真实设备到位后做 model profile 路径级读写验收
-9. 满足 profile 后再决定 OpenConfig 写、vendor native YANG 写，或拒绝自动写
+1. 保持已完成基线：DeviceModelProfile、SoT Snapshot、ChangePlan、DryRunWriteDecision、NETCONF YANG schema collection、可选 gNMI capabilities evidence。
+2. PBR/BGP read-only parser / audit 初版已接入 H3C parser 和 offline acceptance report，不直接写配置。
+3. PBR/BGP touched_scope 已结构化输出：affected VRFs、BGP AS、neighbors、route-policy refs、PBR policy refs、ACL refs、interfaces、raw paths。
+4. 真实设备到位后做 model profile path-level read/write 验收，并归档 YANG schema library。
+5. 满足 profile 后再决定 OpenConfig 写、vendor native YANG 写、manual-gated，或 rejected。
+6. 如果短期需要继续扩命令面，H3C Basic IPv4 ACL 是低风险候选，但不能绕过 profile/ChangePlan 门禁。
 ```
 
-H3C Batch 2 Basic IPv4 ACL 仍是低风险命令面扩展，但它不应抢在
-DeviceModelProfile 和 ChangePlan 基础之前推进到复杂策略功能。PBR/BGP 写配置必须等
-标准模型评估、依赖顺序、blast-radius、readback verify 和 rollback order 全部有报告
-和测试闭环后再进入实现。
+H3C Batch 2 Basic IPv4 ACL 仍是低风险命令面扩展，但它不能替代 PBR/BGP 的模型能力
+评估。PBR/BGP 写配置必须等标准模型评估、依赖顺序、blast-radius、readback verify
+和 rollback order 全部有真实设备 evidence 和测试闭环后再进入实现。
