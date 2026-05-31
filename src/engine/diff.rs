@@ -27,9 +27,6 @@ pub enum ChangeOp {
         before: Option<InterfaceConfig>,
         after: InterfaceConfig,
     },
-    DeleteInterfaceConfig {
-        name: String,
-    },
     CreateAcl(AclConfig),
     UpdateAcl {
         before: AclConfig,
@@ -51,21 +48,6 @@ pub enum ChangeOp {
 }
 
 pub fn compute_diff(desired: &DeviceDesiredState, current: &DeviceShadowState) -> ChangeSet {
-    compute_diff_inner(desired, current, true)
-}
-
-pub fn compute_merge_upsert_diff(
-    desired: &DeviceDesiredState,
-    current: &DeviceShadowState,
-) -> ChangeSet {
-    compute_diff_inner(desired, current, false)
-}
-
-fn compute_diff_inner(
-    desired: &DeviceDesiredState,
-    current: &DeviceShadowState,
-    infer_deletes_from_absence: bool,
-) -> ChangeSet {
     let desired = normalize_desired_state(desired.clone());
     let current = normalize_shadow_state(current.clone());
     let mut change_set = ChangeSet::empty(desired.device_id.clone());
@@ -100,24 +82,6 @@ fn compute_diff_inner(
     for vlan_id in &desired.delete_vlan_ids {
         if current.vlans.contains_key(vlan_id) {
             change_set.ops.push(ChangeOp::DeleteVlan { vlan_id: *vlan_id });
-        }
-    }
-
-    if infer_deletes_from_absence {
-        for vlan_id in current.vlans.keys() {
-            if !desired.vlans.contains_key(vlan_id) && !desired.delete_vlan_ids.contains(vlan_id) {
-                change_set.ops.push(ChangeOp::DeleteVlan { vlan_id: *vlan_id });
-            }
-        }
-    }
-
-    if infer_deletes_from_absence {
-        for name in current.interfaces.keys() {
-            if !desired.interfaces.contains_key(name) {
-                change_set
-                    .ops
-                    .push(ChangeOp::DeleteInterfaceConfig { name: name.clone() });
-            }
         }
     }
 
@@ -159,31 +123,9 @@ fn compute_diff_inner(
         }
     }
 
-    if infer_deletes_from_absence {
-        for (key, current_binding) in &current.acl_bindings {
-            if !desired.acl_bindings.contains_key(key)
-                && !desired.delete_acl_bindings.contains_key(key)
-            {
-                change_set.ops.push(ChangeOp::DeleteAclBinding {
-                    interface_name: current_binding.interface_name.clone(),
-                    direction: current_binding.direction.clone(),
-                    acl_id: current_binding.acl_id,
-                });
-            }
-        }
-    }
-
     for acl_id in &desired.delete_acl_ids {
         if current.acls.contains_key(acl_id) {
             change_set.ops.push(ChangeOp::DeleteAcl { acl_id: *acl_id });
-        }
-    }
-
-    if infer_deletes_from_absence {
-        for acl_id in current.acls.keys() {
-            if !desired.acls.contains_key(acl_id) && !desired.delete_acl_ids.contains(acl_id) {
-                change_set.ops.push(ChangeOp::DeleteAcl { acl_id: *acl_id });
-            }
         }
     }
 
@@ -234,9 +176,6 @@ impl ChangeSet {
                 }
                 ChangeOp::UpdateInterface { after, .. } => {
                     state.interfaces.insert(after.name.clone(), after.clone());
-                }
-                ChangeOp::DeleteInterfaceConfig { name } => {
-                    state.interfaces.remove(name);
                 }
                 ChangeOp::CreateAcl(acl) => {
                     state.acls.insert(acl.acl_id, acl.clone());

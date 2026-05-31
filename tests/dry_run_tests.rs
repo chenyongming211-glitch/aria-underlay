@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use aria_underlay::api::request::ApplyReconcileMode;
 use aria_underlay::engine::diff::ChangeOp;
 use aria_underlay::engine::dry_run::build_dry_run_plan;
 use aria_underlay::model::{AdminState, DeviceId, InterfaceConfig, PortMode, VlanConfig};
@@ -12,8 +11,7 @@ fn dry_run_reports_noop_when_all_device_diffs_are_empty() {
     let desired = vec![desired_state("leaf-a", vec![vlan(100, "prod")])];
     let current = vec![shadow_state("leaf-a", vec![vlan(100, "prod")])];
 
-    let plan = build_dry_run_plan(&desired, &current, ApplyReconcileMode::FullReplace)
-        .expect("dry-run should build");
+    let plan = build_dry_run_plan(&desired, &current).expect("dry-run should build");
 
     assert!(plan.is_noop());
     assert_eq!(plan.change_sets.len(), 1);
@@ -31,8 +29,7 @@ fn dry_run_reports_per_device_change_sets() {
         shadow_state("leaf-b", vec![vlan(200, "old")]),
     ];
 
-    let plan = build_dry_run_plan(&desired, &current, ApplyReconcileMode::FullReplace)
-        .expect("dry-run should build");
+    let plan = build_dry_run_plan(&desired, &current).expect("dry-run should build");
 
     assert!(!plan.is_noop());
     assert_eq!(
@@ -49,16 +46,25 @@ fn dry_run_reports_per_device_change_sets() {
 }
 
 #[test]
-fn merge_upsert_dry_run_uses_explicit_delete_scope() {
+fn dry_run_uses_explicit_delete_scope() {
     let mut desired = desired_state("leaf-a", vec![]);
     desired.delete_vlan_ids.insert(200);
     let desired = vec![desired];
     let current = vec![shadow_state("leaf-a", vec![vlan(200, "old"), vlan(300, "kept")])];
 
-    let plan = build_dry_run_plan(&desired, &current, ApplyReconcileMode::MergeUpsert)
-        .expect("dry-run should build");
+    let plan = build_dry_run_plan(&desired, &current).expect("dry-run should build");
 
     assert_eq!(plan.change_sets[0].ops, vec![ChangeOp::DeleteVlan { vlan_id: 200 }]);
+}
+
+#[test]
+fn dry_run_preserves_absent_existing_vlan_without_explicit_delete() {
+    let desired = vec![desired_state("leaf-a", vec![])];
+    let current = vec![shadow_state("leaf-a", vec![vlan(300, "kept")])];
+
+    let plan = build_dry_run_plan(&desired, &current).expect("dry-run should build");
+
+    assert!(plan.is_noop());
 }
 
 #[test]
@@ -66,7 +72,7 @@ fn dry_run_fails_when_current_state_is_missing() {
     let desired = vec![desired_state("leaf-a", vec![vlan(100, "prod")])];
     let current = vec![];
 
-    let err = build_dry_run_plan(&desired, &current, ApplyReconcileMode::FullReplace).unwrap_err();
+    let err = build_dry_run_plan(&desired, &current).unwrap_err();
 
     assert!(format!("{err}").contains("missing current state for device leaf-a"));
 }

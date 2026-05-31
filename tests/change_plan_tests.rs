@@ -1,4 +1,3 @@
-use aria_underlay::api::request::ApplyReconcileMode;
 use aria_underlay::device::model_profile::{
     DeviceModelProfile, ModelPathSupport, ModelProtocol, WriteReadiness,
 };
@@ -99,8 +98,7 @@ fn dry_run_builds_change_plan_alongside_change_set() {
         warnings: vec![],
     }];
 
-    let plan = build_dry_run_plan(&desired, &current, ApplyReconcileMode::FullReplace)
-        .expect("dry-run should build");
+    let plan = build_dry_run_plan(&desired, &current).expect("dry-run should build");
 
     assert_eq!(plan.change_sets.len(), 1);
     assert_eq!(plan.change_plans.len(), 1);

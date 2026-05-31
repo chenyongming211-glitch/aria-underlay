@@ -164,7 +164,7 @@ unset ARIA_UNDERLAY_TRUNK_ALLOWED_VLANS
 - `real_apply_change_sets` contains `CreateVlan` for the test VLAN.
 - `real_apply_change_sets` contains `UpdateInterface` for the access port.
 - `real_apply_change_sets` contains no `DeleteVlan`.
-- `real_apply_change_sets` contains no `DeleteInterfaceConfig`.
+- `real_apply_change_sets` contains no interface delete operation.
 - `real_apply_status` is `Success` or `SuccessWithWarning`.
 - `real_apply_strategy` is recorded.
 - `tx_id` is recorded.
@@ -535,8 +535,8 @@ also needs SSH access to the switch management address, normally TCP 22.
 
 ## Failure Handling
 
-- If dry-run contains `DeleteVlan` or `DeleteInterfaceConfig`, stop. The request
-  is not scoped safely enough for real-device acceptance.
+- If dry-run contains `DeleteVlan` or any interface delete operation, stop. The
+  request is not scoped safely enough for real-device acceptance.
 - If ACL dry-run contains `UpdateAcl` or `DeleteAcl`, stop. The candidate ACL
   is not a clean isolated create.
 - If ACL binding dry-run contains `UpdateAclBinding` or `DeleteAclBinding`,

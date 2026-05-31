@@ -232,9 +232,6 @@ pub fn state_scope_from_change_set(change_set: &ChangeSet) -> adapter::StateScop
                 }
                 interface_names.insert(after.name.clone());
             }
-            ChangeOp::DeleteInterfaceConfig { name } => {
-                interface_names.insert(name.clone());
-            }
             ChangeOp::CreateAcl(acl) => {
                 acl_ids.insert(u32::from(acl.acl_id));
             }

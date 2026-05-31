@@ -54,10 +54,11 @@ Schema:
 - `UnderlayDomainIntent.delete_acl_bindings`
 - Matching `DeviceDesiredState` and protobuf fields for adapter handoff.
 
-Mode behavior:
+Apply behavior:
 
-- `MergeUpsert` deletes only explicit targets.
-- `FullReplace` keeps full replacement semantics.
+- Reconciliation has one explicit merge/upsert semantic.
+- Deletes are allowed only for explicit targets.
+- Full replacement by absence is unsupported.
 
 Execution order must protect references:
 

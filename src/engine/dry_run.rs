@@ -2,10 +2,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::api::request::ApplyReconcileMode;
 use crate::device::model_profile::DeviceModelProfile;
 use crate::engine::change_plan::{build_change_plan_with_profile, ChangePlan};
-use crate::engine::diff::{compute_diff, compute_merge_upsert_diff, ChangeSet};
+use crate::engine::diff::{compute_diff, ChangeSet};
 use crate::model::DeviceId;
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::state::DeviceShadowState;
@@ -26,20 +25,13 @@ impl DryRunPlan {
 pub fn build_dry_run_plan(
     desired_states: &[DeviceDesiredState],
     current_states: &[DeviceShadowState],
-    reconcile_mode: ApplyReconcileMode,
 ) -> UnderlayResult<DryRunPlan> {
-    build_dry_run_plan_with_profiles(
-        desired_states,
-        current_states,
-        reconcile_mode,
-        &BTreeMap::new(),
-    )
+    build_dry_run_plan_with_profiles(desired_states, current_states, &BTreeMap::new())
 }
 
 pub fn build_dry_run_plan_with_profiles(
     desired_states: &[DeviceDesiredState],
     current_states: &[DeviceShadowState],
-    reconcile_mode: ApplyReconcileMode,
     profiles: &BTreeMap<DeviceId, DeviceModelProfile>,
 ) -> UnderlayResult<DryRunPlan> {
     let current_by_device = current_states
@@ -58,10 +50,7 @@ pub fn build_dry_run_plan_with_profiles(
                     desired.device_id.0
                 ))
             })?;
-        let change_set = match reconcile_mode {
-            ApplyReconcileMode::MergeUpsert => compute_merge_upsert_diff(desired, current),
-            ApplyReconcileMode::FullReplace => compute_diff(desired, current),
-        };
+        let change_set = compute_diff(desired, current);
         let profile = profiles.get(&desired.device_id);
         let change_plan = build_change_plan_with_profile(&change_set, profile);
         change_sets.push(change_set);

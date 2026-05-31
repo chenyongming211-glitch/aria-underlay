@@ -386,9 +386,6 @@ fn derives_state_scope_from_change_set_including_deletes() {
                     mode: PortMode::Access { vlan_id: 100 },
                 },
             },
-            ChangeOp::DeleteInterfaceConfig {
-                name: "GE1/0/2".into(),
-            },
             ChangeOp::CreateAcl(acl(3999)),
             ChangeOp::DeleteAcl { acl_id: 3998 },
             ChangeOp::CreateAclBinding(acl_binding(
@@ -410,7 +407,7 @@ fn derives_state_scope_from_change_set_including_deletes() {
     assert_eq!(scope.vlan_ids, vec![100, 200]);
     assert_eq!(
         scope.interface_names,
-        vec!["GE1/0/1", "GE1/0/2", "GE1/0/3", "GE1/0/4"]
+        vec!["GE1/0/1", "GE1/0/3", "GE1/0/4"]
     );
     assert_eq!(scope.acl_ids, vec![3998, 3999]);
 }

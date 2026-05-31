@@ -100,10 +100,11 @@ Implemented boundary:
   and `delete_acl_bindings`.
 - `DeviceDesiredState` carries the same explicit delete targets through
   dry-run, journal, recovery, adapter protobuf, renderer, and verify paths.
-- `MergeUpsert` computes deletes only from these explicit fields. Objects that
-  are merely absent from desired state are left untouched.
-- `FullReplace` keeps its existing replacement semantics and may still infer
-  deletes from the full observed state.
+- Apply reconciliation uses one explicit merge/upsert semantic: deletes are
+  computed only from these explicit fields. Objects that are merely absent from
+  desired state are left untouched.
+- Full replacement by absence is unsupported because it can infer destructive
+  deletes from an incomplete desired-state payload.
 
 Not in Batch 1 implementation:
 

@@ -1,9 +1,7 @@
 use std::collections::BTreeSet;
 use std::io;
 
-use aria_underlay::api::request::{
-    ApplyDomainIntentRequest, ApplyOptions, ApplyReconcileMode,
-};
+use aria_underlay::api::request::{ApplyDomainIntentRequest, ApplyOptions};
 use aria_underlay::api::{AriaUnderlayService, UnderlayService};
 use aria_underlay::device::{DeviceInventory, HostKeyPolicy, RegisterDeviceRequest};
 use aria_underlay::engine::diff::ChangeOp;
@@ -114,7 +112,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         options: ApplyOptions {
             dry_run: false,
             allow_degraded_atomicity: allow_degraded,
-            reconcile_mode: ApplyReconcileMode::MergeUpsert,
             drift_policy: DriftPolicy::ReportOnly,
         },
     };
@@ -130,7 +127,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             matches!(
                 op,
                 ChangeOp::DeleteVlan { .. }
-                    | ChangeOp::DeleteInterfaceConfig { .. }
                     | ChangeOp::DeleteAcl { .. }
                     | ChangeOp::UpdateAcl { .. }
                     | ChangeOp::UpdateAclBinding { .. }

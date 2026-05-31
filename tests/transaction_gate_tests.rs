@@ -348,7 +348,6 @@ async fn preflight_fetches_only_desired_scope_to_avoid_unrelated_delete_ops() {
             .all(|op| !matches!(
                 op,
                 aria_underlay::engine::diff::ChangeOp::DeleteVlan { .. }
-                    | aria_underlay::engine::diff::ChangeOp::DeleteInterfaceConfig { .. }
             )),
         "merge-upsert preflight should not plan deletes for unrelated observed state: {:?}",
         dry_run.change_sets

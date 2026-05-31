@@ -46,7 +46,7 @@ Copy this checklist for every switch/model acceptance run.
 - [ ] Dry-run contains `UpdateInterface` for the access port.
 - [ ] Dry-run includes the expected access/VLAN descriptions when configured.
 - [ ] Dry-run contains no `DeleteVlan`.
-- [ ] Dry-run contains no `DeleteInterfaceConfig`.
+- [ ] Dry-run contains no interface delete operation.
 
 ## Access Apply
 
@@ -75,7 +75,7 @@ Copy this checklist for every switch/model acceptance run.
 - [ ] Dry-run after allowed VLAN list includes the test VLAN.
 - [ ] Dry-run includes the expected trunk/VLAN descriptions when configured.
 - [ ] Dry-run contains no `DeleteVlan`.
-- [ ] Dry-run contains no `DeleteInterfaceConfig`.
+- [ ] Dry-run contains no interface delete operation.
 
 ## Trunk Apply
 

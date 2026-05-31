@@ -510,9 +510,6 @@ pub enum ChangeOp {
         before: Option<InterfaceConfig>,
         after: InterfaceConfig,
     },
-    DeleteInterfaceConfig {
-        name: String,
-    },
 }
 ```
 

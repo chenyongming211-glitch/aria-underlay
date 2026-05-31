@@ -1,4 +1,4 @@
-use aria_underlay::engine::diff::{compute_diff, compute_merge_upsert_diff, ChangeOp, ChangeSet};
+use aria_underlay::engine::diff::{compute_diff, ChangeOp, ChangeSet};
 use aria_underlay::model::{
     AclAction, AclBinding, AclConfig, AclDirection, AclEndpoint, AclKind, AclProtocol, AclRule,
     AdminState, DeviceId, InterfaceConfig, PortMode, VlanConfig,
@@ -60,13 +60,13 @@ fn changed_vlan_updates_vlan() {
 }
 
 #[test]
-fn extra_vlan_deletes_vlan() {
+fn absent_vlan_is_preserved_without_explicit_delete() {
     let desired = desired_state(vec![], vec![]);
     let current = shadow_state(vec![vlan(200, Some("old"), None)], vec![]);
 
     let change_set = compute_diff(&desired, &current);
 
-    assert_eq!(change_set.ops, vec![ChangeOp::DeleteVlan { vlan_id: 200 }]);
+    assert!(change_set.is_empty());
 }
 
 #[test]
@@ -163,13 +163,13 @@ fn changed_acl_updates_acl() {
 }
 
 #[test]
-fn extra_acl_deletes_acl() {
+fn absent_acl_is_preserved_without_explicit_delete() {
     let desired = desired_state_with_acls(vec![], vec![], vec![]);
     let current = shadow_state_with_acls(vec![], vec![], vec![acl(3999, "old")]);
 
     let change_set = compute_diff(&desired, &current);
 
-    assert_eq!(change_set.ops, vec![ChangeOp::DeleteAcl { acl_id: 3999 }]);
+    assert!(change_set.is_empty());
 }
 
 #[test]
@@ -222,13 +222,12 @@ fn changed_acl_binding_updates_binding() {
                 before: acl_binding("GE1/0/13", AclDirection::Inbound, 3998),
                 after: acl_binding("GE1/0/13", AclDirection::Inbound, 3999),
             },
-            ChangeOp::DeleteAcl { acl_id: 3998 },
         ]
     );
 }
 
 #[test]
-fn extra_acl_binding_deletes_binding() {
+fn absent_acl_binding_is_preserved_without_explicit_delete() {
     let desired = desired_state_with_acl_bindings(vec![], vec![], vec![], vec![]);
     let current = shadow_state_with_acl_bindings(
         vec![],
@@ -239,21 +238,11 @@ fn extra_acl_binding_deletes_binding() {
 
     let change_set = compute_diff(&desired, &current);
 
-    assert_eq!(
-        change_set.ops,
-        vec![
-            ChangeOp::DeleteAclBinding {
-                interface_name: "GE1/0/13".into(),
-                direction: AclDirection::Outbound,
-                acl_id: 3999,
-            },
-            ChangeOp::DeleteAcl { acl_id: 3999 },
-        ]
-    );
+    assert!(change_set.is_empty());
 }
 
 #[test]
-fn merge_upsert_does_not_infer_deletes_from_absence() {
+fn absence_does_not_infer_deletes() {
     let desired = desired_state_with_acl_bindings(vec![], vec![], vec![], vec![]);
     let current = shadow_state_with_acl_bindings(
         vec![vlan(200, Some("existing"), None)],
@@ -262,13 +251,13 @@ fn merge_upsert_does_not_infer_deletes_from_absence() {
         vec![acl_binding("GE1/0/13", AclDirection::Inbound, 3999)],
     );
 
-    let change_set = compute_merge_upsert_diff(&desired, &current);
+    let change_set = compute_diff(&desired, &current);
 
     assert!(change_set.is_empty());
 }
 
 #[test]
-fn merge_upsert_deletes_only_explicit_delete_targets() {
+fn explicit_delete_targets_are_deleted() {
     let mut desired = desired_state_with_acl_bindings(vec![], vec![], vec![], vec![]);
     desired.delete_vlan_ids.insert(200);
     desired.delete_acl_ids.insert(3999);
@@ -286,7 +275,7 @@ fn merge_upsert_deletes_only_explicit_delete_targets() {
         ],
     );
 
-    let change_set = compute_merge_upsert_diff(&desired, &current);
+    let change_set = compute_diff(&desired, &current);
 
     assert_eq!(
         change_set.ops,
@@ -317,7 +306,7 @@ fn applying_change_set_updates_shadow_without_dropping_unrelated_state() {
         vec![],
         vec![],
     );
-    let change_set = compute_merge_upsert_diff(&desired, &current);
+    let change_set = compute_diff(&desired, &current);
 
     let updated = change_set.apply_to_shadow(Some(&current), &desired, 0);
 

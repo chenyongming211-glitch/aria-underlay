@@ -810,10 +810,6 @@ pub fn build_change_plan(change_set: &ChangeSet) -> ChangePlan {
                 update_base.push(op.clone());
                 rollback_order.push(format!("restore interface {}", after.name));
             }
-            ChangeOp::DeleteInterfaceConfig { name } => {
-                delete_base.push(op.clone());
-                rollback_order.push(format!("restore interface {}", name));
-            }
         }
     }
 
