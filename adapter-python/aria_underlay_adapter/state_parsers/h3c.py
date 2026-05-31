@@ -469,24 +469,43 @@ def _pbr_audit(nodes: list[tuple[str, object]]) -> dict:
 
 
 def _bgp_audit(nodes: list[tuple[str, object]]) -> dict:
+    as_numbers = _dedupe_sorted_ints(
+        _integer_values(nodes, lambda name: name in {"as", "asnumber", "localas"})
+    )
+    neighbor_details = _bgp_neighbor_details(nodes)
+    neighbor_addresses = [detail["address"] for detail in neighbor_details]
+    neighbor_policies = [
+        policy
+        for detail in neighbor_details
+        for policy in (detail["import_policy"], detail["export_policy"])
+        if policy
+    ]
+    session_states = [
+        detail["session_state"] for detail in neighbor_details if detail["session_state"]
+    ]
+    vrfs = [
+        detail["vrf"] for detail in neighbor_details if detail["vrf"]
+    ] + _text_values(nodes, lambda name: "vrf" in name or "vpninstance" in name)
+
     return {
         "present": bool(nodes),
         "blast_radius": "routing_control_plane",
-        "as_numbers": _dedupe_sorted_ints(
-            _integer_values(nodes, lambda name: name in {"as", "asnumber", "localas"})
-        ),
-        "vrfs": _dedupe_sorted(
-            _text_values(nodes, lambda name: "vrf" in name or "vpninstance" in name)
-        ),
+        "as_numbers": as_numbers,
+        "local_as": _single_value_or_none(as_numbers),
+        "vrfs": _dedupe_sorted(vrfs),
         "neighbors": _dedupe_sorted(
-            _text_values(
+            neighbor_addresses
+            + _text_values(
                 nodes,
                 lambda name: ("peer" in name or "neighbor" in name),
                 value_filter=_looks_like_ipv4,
             )
         ),
+        "neighbor_details": neighbor_details,
+        "session_states": _dedupe_sorted(session_states),
         "policy_references": _dedupe_sorted(
-            _text_values(
+            neighbor_policies
+            + _text_values(
                 nodes,
                 lambda name: "policy" in name,
                 value_filter=lambda value: bool(value) and not value.isdigit(),
@@ -494,6 +513,175 @@ def _bgp_audit(nodes: list[tuple[str, object]]) -> dict:
         ),
         "raw_paths": [path for path, _node in nodes],
     }
+
+
+def _bgp_neighbor_details(nodes: list[tuple[str, object]]) -> list[dict]:
+    details = []
+    seen = set()
+    for bgp_path, bgp_node in nodes:
+        for instance_path, instance in _bgp_instance_nodes(bgp_path, bgp_node):
+            instance_vrf = _first_text_value(
+                instance, lambda name: "vrf" in name or "vpninstance" in name
+            )
+            for peer_path, peer in _bgp_peer_nodes(instance_path, instance):
+                address = _first_text_value(
+                    peer, _bgp_neighbor_address_name, value_filter=_looks_like_ipv4
+                )
+                if address is None:
+                    address = _first_ipv4_text(peer)
+                if address is None:
+                    continue
+
+                detail = {
+                    "address": address,
+                    "remote_as": _first_integer_value(peer, _bgp_remote_as_name),
+                    "session_state": _normalize_bgp_session_state(
+                        _first_text_value(peer, _bgp_session_state_name)
+                    ),
+                    "import_policy": _first_text_value(peer, _bgp_import_policy_name),
+                    "export_policy": _first_text_value(peer, _bgp_export_policy_name),
+                    "vrf": _first_text_value(
+                        peer, lambda name: "vrf" in name or "vpninstance" in name
+                    )
+                    or instance_vrf,
+                    "raw_path": peer_path,
+                }
+                key = (
+                    detail["vrf"],
+                    detail["address"],
+                    detail["remote_as"],
+                    detail["raw_path"],
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                details.append(detail)
+
+    return sorted(
+        details,
+        key=lambda detail: (
+            detail["vrf"] or "",
+            detail["address"],
+            detail["remote_as"] or -1,
+            detail["raw_path"],
+        ),
+    )
+
+
+def _bgp_instance_nodes(bgp_path: str, bgp_node) -> list[tuple[str, object]]:
+    instances = [
+        (path, node)
+        for path, node in _walk_paths_from(bgp_path, bgp_node)
+        if _normalized_local_name(node.tag) == "instance"
+    ]
+    return instances or [(bgp_path, bgp_node)]
+
+
+def _bgp_peer_nodes(instance_path: str, instance) -> list[tuple[str, object]]:
+    return [
+        (path, node)
+        for path, node in _walk_paths_from(instance_path, instance)
+        if _normalized_local_name(node.tag) in {"peer", "neighbor"}
+    ]
+
+
+def _first_text_value(node, name_filter, *, value_filter=None) -> str | None:
+    for child in node.iter():
+        name = _normalized_local_name(child.tag)
+        if not name_filter(name):
+            continue
+        value = _text(child)
+        if not value:
+            continue
+        if value_filter is not None and not value_filter(value):
+            continue
+        return value
+    return None
+
+
+def _first_integer_value(node, name_filter) -> int | None:
+    value = _first_text_value(node, name_filter)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _first_ipv4_text(node) -> str | None:
+    for child in node.iter():
+        value = _text(child)
+        if _looks_like_ipv4(value):
+            return value
+    return None
+
+
+def _bgp_neighbor_address_name(name: str) -> bool:
+    return (
+        name
+        in {
+            "peeraddress",
+            "peeraddr",
+            "neighboraddress",
+            "neighboraddr",
+            "neighborip",
+            "peerip",
+        }
+        or ("address" in name and ("peer" in name or "neighbor" in name))
+    )
+
+
+def _bgp_remote_as_name(name: str) -> bool:
+    return name in {
+        "peeras",
+        "remoteas",
+        "remoteasnumber",
+        "peerremoteas",
+        "neighboras",
+        "neighborasnumber",
+    } or ("as" in name and ("peer" in name or "remote" in name or "neighbor" in name))
+
+
+def _bgp_session_state_name(name: str) -> bool:
+    return name in {"state", "sessionstate", "peerstate", "neighborstate"} or (
+        "state" in name and ("session" in name or "peer" in name or "neighbor" in name)
+    )
+
+
+def _bgp_import_policy_name(name: str) -> bool:
+    return ("policy" in name and ("import" in name or "inbound" in name)) or name in {
+        "inpolicy",
+        "inroutepolicy",
+    }
+
+
+def _bgp_export_policy_name(name: str) -> bool:
+    return ("policy" in name and ("export" in name or "outbound" in name)) or name in {
+        "outpolicy",
+        "outroutepolicy",
+    }
+
+
+def _normalize_bgp_session_state(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
+
+
+def _single_value_or_none(values: list[int]) -> int | None:
+    return values[0] if len(values) == 1 else None
+
+
+def _walk_paths_from(base_path: str, root):
+    def walk(node, path):
+        yield (path, node)
+        for child in list(node):
+            child_path = f"{path}/{_local_name(child.tag)}"
+            yield from walk(child, child_path)
+
+    yield from walk(root, base_path)
 
 
 def _high_risk_touched_scope(pbr: dict, bgp: dict) -> dict:

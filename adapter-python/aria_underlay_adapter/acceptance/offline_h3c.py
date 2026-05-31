@@ -484,8 +484,11 @@ def _empty_high_risk_audit() -> dict[str, Any]:
             "present": False,
             "blast_radius": "routing_control_plane",
             "as_numbers": [],
+            "local_as": None,
             "vrfs": [],
             "neighbors": [],
+            "neighbor_details": [],
+            "session_states": [],
             "policy_references": [],
             "raw_paths": [],
         },
@@ -887,7 +890,10 @@ def _h3c_high_risk_audit_xml() -> str:
               <Peers>
                 <Peer>
                   <PeerAddress>192.0.2.1</PeerAddress>
+                  <PeerAS>65002</PeerAS>
+                  <SessionState>Established</SessionState>
                   <ImportPolicy>rp-in</ImportPolicy>
+                  <ExportPolicy>rp-out</ExportPolicy>
                 </Peer>
               </Peers>
             </Instance>

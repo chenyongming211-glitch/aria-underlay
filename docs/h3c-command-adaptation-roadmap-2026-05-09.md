@@ -183,7 +183,10 @@ Start with read-only BGP parser support:
 
 - Local AS.
 - Neighbor id/address.
+- Remote AS.
 - Session state.
+- Import/export route-policy references.
+- Per-neighbor raw XML path for real-sample calibration.
 
 Write support should come only after read-only parsing has been validated on
 representative devices. BGP writes require separate design review because the

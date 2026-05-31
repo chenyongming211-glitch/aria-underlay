@@ -128,7 +128,7 @@ def test_offline_h3c_acceptance_reports_pbr_bgp_read_only_audit():
                 "affected_vrfs": ["tenant-a"],
                 "bgp_as_numbers": [65001],
                 "bgp_neighbors": ["192.0.2.1"],
-                "route_policy_refs": ["rp-in"],
+                "route_policy_refs": ["rp-in", "rp-out"],
                 "pbr_policy_refs": ["pbr-tenant-a"],
                 "acl_refs": [3999],
                 "interfaces": ["GigabitEthernet1/0/13"],
@@ -146,9 +146,22 @@ def test_offline_h3c_acceptance_reports_pbr_bgp_read_only_audit():
                 "present": True,
                 "blast_radius": "routing_control_plane",
                 "as_numbers": [65001],
+                "local_as": 65001,
                 "vrfs": ["tenant-a"],
                 "neighbors": ["192.0.2.1"],
-                "policy_references": ["rp-in"],
+                "neighbor_details": [
+                    {
+                        "address": "192.0.2.1",
+                        "remote_as": 65002,
+                        "session_state": "established",
+                        "import_policy": "rp-in",
+                        "export_policy": "rp-out",
+                        "vrf": "tenant-a",
+                        "raw_path": "/data/top/BGP/Instances/Instance/Peers/Peer",
+                    }
+                ],
+                "session_states": ["established"],
+                "policy_references": ["rp-in", "rp-out"],
                 "raw_paths": ["/data/top/BGP"],
             },
             "warnings": [
@@ -168,7 +181,7 @@ def test_offline_h3c_acceptance_summary_marks_parser_loop(capsys):
     assert "parser_loop=true" in captured.err
     assert "vrfs=tenant-a" in captured.err
     assert "bgp_neighbors=192.0.2.1" in captured.err
-    assert "route_policies=rp-in" in captured.err
+    assert "route_policies=rp-in,rp-out" in captured.err
     assert "pbr_policies=pbr-tenant-a" in captured.err
     assert "acl_refs=3999" in captured.err
     assert "interfaces=GigabitEthernet1/0/13" in captured.err
@@ -198,7 +211,7 @@ def test_offline_h3c_acceptance_loads_pbr_bgp_real_samples(tmp_path):
         "affected_vrfs": ["tenant-b"],
         "bgp_as_numbers": [65010],
         "bgp_neighbors": ["203.0.113.10"],
-        "route_policy_refs": ["rp-redacted-in"],
+        "route_policy_refs": ["rp-redacted-in", "rp-redacted-out"],
         "pbr_policy_refs": ["pbr-redacted"],
         "acl_refs": [3998],
         "interfaces": ["GigabitEthernet1/0/24"],
@@ -207,6 +220,17 @@ def test_offline_h3c_acceptance_loads_pbr_bgp_real_samples(tmp_path):
     assert sample_audit["unsupported_paths"] == [
         "bgp: no path-level write evidence",
         "pbr: no path-level write evidence",
+    ]
+    assert sample_audit["bgp"]["neighbor_details"] == [
+        {
+            "address": "203.0.113.10",
+            "remote_as": 65020,
+            "session_state": "idle",
+            "import_policy": "rp-redacted-in",
+            "export_policy": "rp-redacted-out",
+            "vrf": "tenant-b",
+            "raw_path": "/data/top/BGP/Instances/Instance/Peers/Peer",
+        }
     ]
 
 
@@ -234,6 +258,7 @@ def test_offline_h3c_acceptance_cli_reports_real_sample_scope(tmp_path, capsys):
     assert f"sample={sample}" in captured.err
     assert "vrfs=tenant-b" in captured.err
     assert "bgp_neighbors=203.0.113.10" in captured.err
+    assert "route_policies=rp-redacted-in,rp-redacted-out" in captured.err
     assert "pbr_policies=pbr-redacted" in captured.err
 
 
@@ -258,7 +283,10 @@ def _pbr_bgp_real_sample_xml() -> str:
               <Peers>
                 <Peer>
                   <PeerAddress>203.0.113.10</PeerAddress>
+                  <PeerAS>65020</PeerAS>
+                  <SessionState>Idle</SessionState>
                   <ImportPolicy>rp-redacted-in</ImportPolicy>
+                  <ExportPolicy>rp-redacted-out</ExportPolicy>
                 </Peer>
               </Peers>
             </Instance>
