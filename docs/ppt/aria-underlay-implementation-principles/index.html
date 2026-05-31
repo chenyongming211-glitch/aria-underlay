@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Aria Underlay 产品实现原理 · 技术培训</title>
+  <link rel="stylesheet" href="../assets/fonts.css">
+  <link rel="stylesheet" href="../assets/base.css">
+  <link rel="stylesheet" href="../assets/animations/animations.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="tpl-aria-training">
+<div class="deck">
+
+  <section class="slide cover" data-title="Cover">
+    <p class="kicker">technical training / implementation principles</p>
+    <h1 class="h1 anim-fade-up" data-anim="fade-up">Aria Underlay<br><span>产品实现原理</span></h1>
+    <p class="lede mt-m">从业务 intent 到 NETCONF 配置下发：事务、状态、厂商适配和离线验收闭环。</p>
+    <div class="speaker">
+      <div class="avatar">AU</div>
+      <div>
+        <b>内部技术培训</b>
+        <span>Rust Core + Python Adapter + H3C NETCONF · 45 min</span>
+      </div>
+    </div>
+    <div class="deck-footer"><span class="mono">#underlay #netconf #transaction #h3c</span><span class="slide-number" data-current="1" data-total="12"></span></div>
+    <aside class="notes">
+      <p>这一页先把培训目标说清楚：我们不是讲一个单点功能，而是讲 <strong>Aria Underlay 怎样把网络配置变成一个可验证、可恢复、可审计的工程系统</strong>。</p>
+      <p>今天会沿着真实执行链路讲：业务输入怎么进入 Rust Core，为什么 Python Adapter 只负责设备动作，事务日志和 shadow state 为什么是核心，H3C NETCONF 怎么通过 renderer、parser 和 offline acceptance 做闭环。</p>
+      <p>最后会说明边界：哪些能力已经可以离线证明，哪些必须等真实交换机验收后才能提升为生产就绪。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="Agenda">
+    <p class="kicker">agenda.yaml</p>
+    <h2 class="h2">今天讲 6 件事</h2>
+    <div class="stack mt-l">
+      <div class="agenda-row"><span class="num">01</span><span class="t">产品目标：把配置下发做成事务系统</span><span class="d">5 min</span></div>
+      <div class="agenda-row"><span class="num">02</span><span class="t">架构分层：Rust Core 和 Python Adapter 怎么分工</span><span class="d">7 min</span></div>
+      <div class="agenda-row"><span class="num">03</span><span class="t">执行链路：intent、plan、diff、render、verify</span><span class="d">10 min</span></div>
+      <div class="agenda-row"><span class="num">04</span><span class="t">事务可靠性：journal、shadow、lock、recovery</span><span class="d">12 min</span></div>
+      <div class="agenda-row"><span class="num">05</span><span class="t">厂商适配：H3C renderer/parser/offline acceptance</span><span class="d">8 min</span></div>
+      <div class="agenda-row"><span class="num">06</span><span class="t">运维闭环和上线边界</span><span class="d">3 min</span></div>
+    </div>
+    <aside class="notes">
+      <p>这页给大家一个路线图。培训的重点不是 API 怎么调，而是每个模块为什么这样设计。</p>
+      <p>最关键的概念有两个：第一，<strong>Rust Core 负责最终事务语义</strong>，不能让适配器自己决定成功还是失败；第二，<strong>状态必须能被重复计算和恢复</strong>，所以 journal、shadow、diff、verify 是一条线。</p>
+      <p>如果听完以后大家能解释“为什么不能用 FullReplace 隐式删除”、“为什么没有真实交换机时只能 fixture/offline 验证”，这次培训就达标了。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="Problem">
+    <p class="kicker">// product problem</p>
+    <h2 class="h2">普通脚本下发配置，最大问题不是“能不能发”</h2>
+    <div class="grid g3 mt-l">
+      <div class="card card-accent">
+        <h4>失败不可恢复</h4>
+        <p class="dim">命令发到一半断开，系统不知道设备处于哪个状态，后续操作只能靠人工猜。</p>
+        <span class="tag mt-s">InDoubt</span>
+      </div>
+      <div class="card card-accent">
+        <h4>隐式删除危险</h4>
+        <p class="dim">“期望状态里没写”不等于“应该删除”。FullReplace 容易把野配置和业务配置一起清掉。</p>
+        <span class="tag mt-s">explicit delete only</span>
+      </div>
+      <div class="card card-accent">
+        <h4>厂商行为不一致</h4>
+        <p class="dim">NETCONF 支持不代表 XML schema、candidate、commit、readback 都一致。</p>
+        <span class="tag mt-s">vendor profile</span>
+      </div>
+    </div>
+    <div class="callout mt-l">
+      <b>产品核心目标</b>
+      <span>把网络配置下发从“脚本动作”升级成“有状态、有事务、有恢复证据的控制面”。</span>
+    </div>
+    <aside class="notes">
+      <p>这里要强调：我们做的不是一个 NETCONF 命令包装器。真正的问题是，配置系统一旦开始修改设备，就必须能回答三个问题：现在做到哪一步了、失败以后能不能恢复、恢复以后还能不能证明状态一致。</p>
+      <p>所以产品目标不是“发 XML 成功”，而是<strong>发之前能验证、发的时候能锁住、发完能读回、失败能恢复、人工介入能审计</strong>。</p>
+      <p>这也是后来移除 FullReplace 的原因。删除必须显式表达，例如 delete VLAN、delete ACL、delete interface config，而不是靠 desired state 缺失来推断。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="Architecture">
+    <p class="kicker">architecture.rs</p>
+    <h2 class="h2">脑手分离：Rust 做控制面，Python 做设备动作</h2>
+    <div class="arch mt-l">
+      <div class="lane rust">
+        <h3>Rust Core</h3>
+        <p>事务语义、规划、diff、journal、shadow、recovery、worker、运维 API。</p>
+        <div class="pill-row">
+          <span class="pill">intent validation</span>
+          <span class="pill">planner</span>
+          <span class="pill">diff / normalize</span>
+          <span class="pill">transaction journal</span>
+          <span class="pill">endpoint lock</span>
+          <span class="pill">recovery</span>
+        </div>
+      </div>
+      <div class="bridge">
+        <span>gRPC / protobuf</span>
+        <b>DesiredDeviceState</b>
+        <b>Prepare / Commit / Verify / Recover</b>
+      </div>
+      <div class="lane python">
+        <h3>Python Adapter</h3>
+        <p>厂商 renderer/parser、NETCONF session、mock backend、dry-run preflight。</p>
+        <div class="pill-row">
+          <span class="pill">H3C renderer</span>
+          <span class="pill">state parser</span>
+          <span class="pill">ncclient</span>
+          <span class="pill">mock NETCONF</span>
+          <span class="pill">offline acceptance</span>
+        </div>
+      </div>
+    </div>
+    <aside class="notes">
+      <p>这个架构的核心是“脑手分离”。Rust 是脑子，决定事务怎么走、哪些变更允许、失败时系统最终应该是什么状态。Python 是手，负责连接设备、渲染 XML、执行 NETCONF 操作和读回解析。</p>
+      <p>为什么不让 Python 决定事务结果？因为 Python 更贴近设备，会遇到各种厂商细节。如果让它自己推断成功失败，Rust journal 就失去权威，恢复路径会混乱。</p>
+      <p>所以 gRPC 边界很重要：Rust 给出明确 action，Python 执行并返回结构化结果。最终 operation status 必须由 Rust 根据 journal、adapter result、verify 和 shadow write 一起决定。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="Data Flow">
+    <p class="kicker">apply_pipeline()</p>
+    <h2 class="h2">一次 apply 的主路径</h2>
+    <div class="pipeline mt-l">
+      <div class="step"><span>1</span><b>Intent</b><small>用户声明 create / update / delete</small></div>
+      <div class="step"><span>2</span><b>Validate</b><small>字段、厂商能力、显式删除冲突</small></div>
+      <div class="step"><span>3</span><b>Plan</b><small>domain intent 拆成 device desired</small></div>
+      <div class="step"><span>4</span><b>Diff</b><small>desired vs shadow 生成 change set</small></div>
+      <div class="step"><span>5</span><b>Prepare</b><small>renderer 输出 XML，adapter 写 candidate</small></div>
+      <div class="step"><span>6</span><b>Commit</b><small>confirmed commit / candidate commit</small></div>
+      <div class="step"><span>7</span><b>Verify</b><small>get-config 读回，parser 标准化比对</small></div>
+      <div class="step"><span>8</span><b>Shadow</b><small>落盘新状态，再写 Committed</small></div>
+    </div>
+    <div class="terminal mt-l compact">
+      <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>关键约束</span></div>
+<pre>没有 journal 的配置变更不能进入 running
+没有显式 delete intent 的资源不能因为缺失而被删除
+adapter RPC 返回成功不等于最终事务成功
+verify 不通过时必须回滚或进入 InDoubt</pre>
+    </div>
+    <aside class="notes">
+      <p>这一页从执行链路看系统。用户输入的是 intent，不是设备命令。intent 先校验，再被 planner 拆成每台设备的 desired state。</p>
+      <p>diff 阶段只比较 desired 和 shadow，并且现在只支持 MergeUpsert 加显式删除。也就是说，没提到的资源保留，提到 delete 的资源才删除。</p>
+      <p>真正进入设备前，Rust 会写 journal 并获取 endpoint lock。设备执行完成后，还要 verify 读回。最后顺序也很关键：<strong>shadow 写成功后才能把 journal 标记为 Committed</strong>，这样才能缩小崩溃窗口。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="Transaction">
+    <p class="kicker">transaction_state_machine</p>
+    <h2 class="h2">事务状态机是可靠性的骨架</h2>
+    <div class="state-machine mt-l">
+      <div class="state">Accepted</div>
+      <div class="arrow">→</div>
+      <div class="state">Preparing</div>
+      <div class="arrow">→</div>
+      <div class="state">Prepared</div>
+      <div class="arrow">→</div>
+      <div class="state">Committing</div>
+      <div class="arrow">→</div>
+      <div class="state good">Committed</div>
+    </div>
+    <div class="state-machine second">
+      <div class="state warn">RollingBack</div>
+      <div class="arrow">→</div>
+      <div class="state neutral">RolledBack</div>
+      <div class="arrow muted">/</div>
+      <div class="state bad">InDoubt</div>
+      <div class="arrow">→</div>
+      <div class="state neutral">ForceResolved</div>
+    </div>
+    <div class="grid g2 mt-l">
+      <div class="card">
+        <h4>phase transition 统一入口</h4>
+        <p class="dim">生产路径不直接改 phase，必须走 transition_phase 校验状态转移。</p>
+      </div>
+      <div class="card">
+        <h4>InDoubt 不自动清理</h4>
+        <p class="dim">不能证明最终状态时阻断后续事务，由人工 force-resolve 并留下审计记录。</p>
+      </div>
+    </div>
+    <aside class="notes">
+      <p>事务状态机的价值是把“代码执行到哪了”变成“系统能恢复的证据”。Accepted、Preparing、Prepared、Committing、Committed 是正常路径；失败时会进入 RollingBack、RolledBack 或 InDoubt。</p>
+      <p>这里有一个原则：<strong>不知道就不能假装知道</strong>。如果 adapter 崩溃、commit 后 shadow 写失败、或者恢复时无法确认设备状态，系统应该进入 InDoubt，而不是返回 SuccessWithWarning。</p>
+      <p>ForceResolved 是 break-glass 操作，不是自动修复。它的意义是让运维可以在检查设备后，带着理由解除阻塞，同时保留审计。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="State">
+    <p class="kicker">state_consistency</p>
+    <h2 class="h2">三份状态各管一件事</h2>
+    <div class="grid g3 mt-l">
+      <div class="card state-card">
+        <h4>Intent</h4>
+        <p class="dim">用户希望系统达到什么状态，包括显式 create / update / delete。</p>
+        <code>UnderlayDomainIntent</code>
+      </div>
+      <div class="card state-card">
+        <h4>Shadow</h4>
+        <p class="dim">Rust 认为设备已经成功落地的标准化状态，是 diff 的基线。</p>
+        <code>ObservedDeviceState</code>
+      </div>
+      <div class="card state-card">
+        <h4>Observed</h4>
+        <p class="dim">从设备 get-config 读回并由 parser 标准化后的实际状态。</p>
+        <code>GetCurrentState</code>
+      </div>
+    </div>
+    <div class="compare mt-l">
+      <div><b>desired vs shadow</b><span>生成 change set</span></div>
+      <div><b>observed vs desired</b><span>post-commit verify</span></div>
+      <div><b>observed vs shadow</b><span>drift audit</span></div>
+    </div>
+    <aside class="notes">
+      <p>这里讲状态模型。Intent 是输入，shadow 是我们对已落地状态的本地权威记录，observed 是从设备读回的事实。</p>
+      <p>Diff 用 desired 和 shadow 计算，因为它要知道这次应该发什么变化；verify 用 observed 和 desired 比对，因为它要证明设备最终符合本次期望；drift audit 用 observed 和 shadow 比对，因为它要发现人工改动或设备漂移。</p>
+      <p>这三份状态不能混用。尤其不能拿 desired 缺失去推断删除，否则系统会把“没说”理解成“删除”，这就是 FullReplace 的风险。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="Explicit Deletes">
+    <p class="kicker">merge_upsert_only</p>
+    <h2 class="h2">为什么移除 FullReplace，只保留显式删除</h2>
+    <div class="grid g2 mt-l">
+      <div class="card bad-card">
+        <h4>FullReplace 的危险</h4>
+        <ul>
+          <li>缺失字段会被解释成删除</li>
+          <li>声明式输入和真实设备差异容易误伤</li>
+          <li>需要额外红线、审计和防误删机制</li>
+        </ul>
+      </div>
+      <div class="card good-card">
+        <h4>MergeUpsert + explicit delete</h4>
+        <ul>
+          <li>没提到的资源保持不变</li>
+          <li>删除必须写进 delete_* intent</li>
+          <li>diff、审计、回滚语义更清楚</li>
+        </ul>
+      </div>
+    </div>
+    <div class="terminal mt-l compact">
+      <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>intent shape</span></div>
+<pre>vlans:                  upsert VLAN
+interfaces:             upsert interface access/trunk/description
+delete_vlan_ids:         explicit delete VLAN
+delete_acl_ids:          explicit delete ACL
+delete_interface_names:  explicit delete interface config</pre>
+    </div>
+    <aside class="notes">
+      <p>这一页解释最近的设计收口。FullReplace 看起来方便，但本质上是隐式删除：用户只要漏写一个资源，系统就可能认为它应该被删除。</p>
+      <p>现在的方案是只保留 MergeUpsert。创建和更新写在对应 intent 里，删除写在 delete 字段里，比如 delete VLAN、delete ACL、delete interface config。</p>
+      <p>这样会让客户端多做一步 diff，但核心系统更安全。灾难恢复和 GitOps 仍然能做，只是删除必须由上层工具显式算出来，而不是让 Rust Core 猜。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="Vendor Adapter">
+    <p class="kicker">vendor_adapter.py</p>
+    <h2 class="h2">厂商适配不是拼字符串，而是三段闭环</h2>
+    <div class="adapter-flow mt-l">
+      <div class="adapter-box">
+        <h3>Renderer</h3>
+        <p>标准 desired state 转厂商 edit-config XML。</p>
+        <span class="tag">VLAN / interface / ACL / delete</span>
+      </div>
+      <div class="adapter-box">
+        <h3>NETCONF Backend</h3>
+        <p>lock、edit-config、validate、commit、discard、get-config。</p>
+        <span class="tag">candidate / confirmed commit</span>
+      </div>
+      <div class="adapter-box">
+        <h3>State Parser</h3>
+        <p>厂商 running XML 转标准 ObservedDeviceState。</p>
+        <span class="tag">fail closed</span>
+      </div>
+    </div>
+    <div class="callout mt-l">
+      <b>关键点</b>
+      <span>renderer 和 parser 必须互相校验：能写进去，也要能读回来；读不懂时必须结构化失败。</span>
+    </div>
+    <aside class="notes">
+      <p>厂商适配最容易被低估。不是把命令拼成 XML 就结束了，真正的闭环有三段：renderer、NETCONF backend、state parser。</p>
+      <p>Renderer 负责把标准模型翻译成 H3C Comware XML。Backend 负责执行 NETCONF 事务动作。Parser 负责把 running XML 读回来，重新变成标准状态，供 verify 和 drift 使用。</p>
+      <p>这也是为什么没有真实交换机时不能直接说 production ready。离线样本能证明代码边界和基础 XML 结构，但真实设备的 namespace、返回字段、candidate 行为和错误码都还需要验收。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="Offline Acceptance">
+    <p class="kicker">offline_h3c_acceptance</p>
+    <h2 class="h2">没有真实交换机时，靠离线验收守住主路径</h2>
+    <div class="grid g2 mt-l">
+      <div class="terminal compact">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>offline loop</span></div>
+<pre>render desired state
+→ mock dry-run / prepare / commit / final-confirm
+→ emit H3C-like running XML
+→ parse running XML
+→ verify desired vs observed
+→ report command surface and touched scope</pre>
+      </div>
+      <div class="card">
+        <h4>当前离线覆盖面</h4>
+        <div class="surface-grid">
+          <span>VLAN</span><span>access / trunk</span>
+          <span>description</span><span>advanced ACL</span>
+          <span>basic ACL</span><span>ACL binding</span>
+          <span>delete VLAN</span><span>delete ACL</span>
+          <span>unbind ACL</span><span>delete interface config</span>
+        </div>
+      </div>
+    </div>
+    <aside class="notes">
+      <p>这页讲没有真实交换机时我们怎么推进。offline H3C acceptance 是一个很重要的替代测试，但它不是最终验收。</p>
+      <p>它做的是完整逻辑闭环：renderer 生成 XML，mock backend 执行 dry-run、prepare、commit、final-confirm，然后吐出类似 H3C running XML，再由 parser 读回，最后 verify。</p>
+      <p>它的价值是能在 CI 里稳定覆盖命令面和边界，比如显式删除接口配置这次就已经进入 offline acceptance。它的限制也要讲清楚：mock 不能证明真实设备行为。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="Operations">
+    <p class="kicker">ops_runtime</p>
+    <h2 class="h2">运维闭环：日志优先，API 辅助</h2>
+    <div class="grid g3 mt-l">
+      <div class="card card-accent">
+        <h4>运行日志</h4>
+        <p class="dim">主日志落到 <code>/var/log/aria/aria-underlay.log</code>，用于现场查看错误和关键事件。</p>
+      </div>
+      <div class="card card-accent">
+        <h4>operation summary</h4>
+        <p class="dim">记录 apply、recovery、GC、drift、force-resolve 的结构化摘要。</p>
+      </div>
+      <div class="card card-accent">
+        <h4>worker daemon</h4>
+        <p class="dim">负责 GC、drift audit、summary compaction、hot reload status。</p>
+      </div>
+    </div>
+    <div class="callout mt-l">
+      <b>收敛原则</b>
+      <span>内部系统不做 UI、不做外部告警投递、不做 SSO/OIDC/JWT；静态 token 和本地日志满足当前边界。</span>
+    </div>
+    <aside class="notes">
+      <p>这里讲产品运维边界。前面我们讨论过，不要把系统过度开发成完整平台。当前是内部系统，所以重点是运行日志、结构化摘要和必要的管理入口。</p>
+      <p>主日志应该能直接在 /var/log/aria/aria-underlay.log 里看到错误、事务阶段、恢复结果和 worker 事件。operation summary 适合机器读取和后续排障，但不要求运维必须手动查一堆 CLI。</p>
+      <p>同样，外部 IM、PagerDuty、OIDC、复杂 RBAC 都不是当前需求。这个边界要守住，避免产品复杂度失控。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="Boundaries">
+    <p class="kicker">production_boundary</p>
+    <h2 class="h2">哪些已经闭环，哪些必须等真机</h2>
+    <div class="grid g2 mt-l">
+      <div class="card good-card">
+        <h4>已能离线证明</h4>
+        <ul>
+          <li>Rust 事务状态机、journal、shadow、recovery 测试</li>
+          <li>MergeUpsert + 显式删除语义</li>
+          <li>H3C renderer/parser/mock/offline acceptance</li>
+          <li>dry-run preflight、adapter pool、worker daemon 基础闭环</li>
+        </ul>
+      </div>
+      <div class="card warn-card">
+        <h4>必须真机验证</h4>
+        <ul>
+          <li>H3C 真实 NETCONF XML schema 和 namespace</li>
+          <li>candidate / confirmed-commit 行为</li>
+          <li>写入后 readback 是否和 parser 假设一致</li>
+          <li>非 H3C 厂商 production_ready 提升</li>
+        </ul>
+      </div>
+    </div>
+    <div class="decision mt-l">
+      <b>上线判断</b>
+      <span>真实交换机到位后，先采集 running XML、capabilities、YANG schema，再做写入 / readback / cleanup 验收。</span>
+    </div>
+    <aside class="notes">
+      <p>这一页是培训里非常重要的风险边界。现在很多东西已经可以离线证明：事务状态机、显式删除、H3C renderer 和 parser、offline acceptance、worker 和日志闭环。</p>
+      <p>但是厂商生产就绪不能靠 fixture 自封。真实交换机可能返回不同 namespace，某些字段可能缺失，candidate 支持也可能和能力声明不一致。</p>
+      <p>所以真实设备到位后的第一件事不是继续加功能，而是采集 evidence：running XML、capabilities、YANG schema、写入和 readback 结果。只有这些闭环通过，才能把相关 profile 标成 production ready。</p>
+    </aside>
+  </section>
+
+  <section class="slide" data-title="Takeaways">
+    <p class="kicker">// takeaways</p>
+    <h2 class="h2">最后记住 5 句话</h2>
+    <div class="takeaways mt-l">
+      <div><span>01</span><b>配置系统的核心不是下发，而是证明状态。</b></div>
+      <div><span>02</span><b>Rust Core 是事务权威，Python Adapter 只执行设备动作。</b></div>
+      <div><span>03</span><b>删除必须显式表达，不能靠 desired 缺失推断。</b></div>
+      <div><span>04</span><b>journal + shadow + verify 是恢复和审计的基础。</b></div>
+      <div><span>05</span><b>offline acceptance 能守住代码质量，但不能替代真实交换机验收。</b></div>
+    </div>
+    <p class="lede mt-l">建议会后阅读：<span class="mono">README.md</span>、<span class="mono">docs/implementation-plan.md</span>、<span class="mono">docs/runbooks/offline-h3c-acceptance.md</span></p>
+    <aside class="notes">
+      <p>最后用五句话收尾。第一，配置系统不能只追求“发出去了”，必须证明最终状态。第二，Rust Core 必须保持事务权威。</p>
+      <p>第三，删除语义要显式，FullReplace 这种隐式删除模式已经移除。第四，journal、shadow 和 verify 是系统能恢复、能审计的基础。第五，离线验收很有价值，但它不是生产就绪的充分条件。</p>
+      <p>如果大家后续要新增功能，比如新的 H3C 命令面或者新的厂商支持，就按这条链路补齐：intent、validation、planner、diff、renderer、mock、parser、verify、offline acceptance、最后真机验收。</p>
+    </aside>
+  </section>
+
+</div>
+<script src="../assets/runtime.js"></script>
+</body>
+</html>
