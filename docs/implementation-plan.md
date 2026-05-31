@@ -1389,9 +1389,9 @@ H3C acceptance runner 已经完成。当前不要再按 Sprint 0 初始化顺序
 4. PBR/BGP real-sample calibration harness 已接入 offline H3C acceptance：可加载脱敏 H3C running XML 样本输出 `real_sample_audits`；样本缺失时不让 CI 失败。
 5. 真实设备到位后做 model profile path-level read/write 验收，并归档 YANG schema library。
 6. 满足 profile 后再决定 OpenConfig 写、vendor native YANG 写、manual-gated，或 rejected。
-7. 如果短期需要继续扩命令面，H3C Basic IPv4 ACL 是低风险候选，但不能绕过 profile/ChangePlan 门禁。
+7. H3C Basic IPv4 ACL 离线初版已接入 domain/proto、renderer/parser/mock/offline acceptance；真实设备到位后补写入/readback/cleanup 验收。
 ```
 
-H3C Batch 2 Basic IPv4 ACL 仍是低风险命令面扩展，但它不能替代 PBR/BGP 的模型能力
-评估。PBR/BGP 写配置必须等标准模型评估、依赖顺序、blast-radius、readback verify
-和 rollback order 全部有真实设备 evidence 和测试闭环后再进入实现。
+H3C Batch 2 Basic IPv4 ACL 已完成离线初版，但它不能替代 PBR/BGP 的模型能力评估。
+PBR/BGP 写配置必须等标准模型评估、依赖顺序、blast-radius、readback verify 和 rollback
+order 全部有真实设备 evidence 和测试闭环后再进入实现。

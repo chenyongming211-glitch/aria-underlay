@@ -113,12 +113,15 @@ Not in Batch 1 implementation:
 
 ## Batch 2: ACL Family Expansion
 
-Add one ACL family at a time. Do not combine IPv6, basic ACL, and named ACL in a
-single implementation batch.
+Basic IPv4 ACL has an offline MVP: domain/proto kind, H3C renderer/parser,
+mock NETCONF apply/readback, and offline acceptance coverage are in place.
+Real-device write/readback/cleanup acceptance is still pending. Continue to add
+only one ACL family at a time; do not combine IPv6, named ACL, QoS, PBR, NQA,
+or BGP in one implementation batch.
 
 Recommended order:
 
-1. Basic IPv4 ACL, because it is simpler than IPv6 and reuses most rule parsing.
+1. Complete Basic IPv4 ACL real-device acceptance.
 2. Named IPv4 ACL only if real devices expose a stable NETCONF shape.
 3. IPv6 ACL after IPv4 variants have parser/renderer/cleanup parity.
 

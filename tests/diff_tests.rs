@@ -1,6 +1,6 @@
 use aria_underlay::engine::diff::{compute_diff, compute_merge_upsert_diff, ChangeOp, ChangeSet};
 use aria_underlay::model::{
-    AclAction, AclBinding, AclConfig, AclDirection, AclEndpoint, AclProtocol, AclRule,
+    AclAction, AclBinding, AclConfig, AclDirection, AclEndpoint, AclKind, AclProtocol, AclRule,
     AdminState, DeviceId, InterfaceConfig, PortMode, VlanConfig,
 };
 use aria_underlay::planner::device_plan::DeviceDesiredState;
@@ -434,6 +434,7 @@ fn trunk_interface(
 fn acl(acl_id: u16, description: &str) -> AclConfig {
     AclConfig {
         acl_id,
+        kind: AclKind::AdvancedIpv4,
         name: None,
         description: Some(description.into()),
         rules: vec![AclRule {

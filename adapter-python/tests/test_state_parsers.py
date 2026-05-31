@@ -226,6 +226,83 @@ def test_h3c_parser_reads_real_comware_ipv4_advanced_acl_shape():
     ]
 
 
+def test_h3c_parser_reads_real_comware_ipv4_basic_acl_shape():
+    state = H3cStateParser(model_hint="S5560-54C-EI").parse_running(
+        """
+        <data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+          <top xmlns="http://www.h3c.com/netconf/config:1.0">
+            <ACL>
+              <Groups>
+                <Group>
+                  <GroupType>1</GroupType>
+                  <GroupID>2001</GroupID>
+                  <Description>ARIA basic ACL</Description>
+                </Group>
+              </Groups>
+              <IPv4BasicRules>
+                <Rule>
+                  <GroupID>2001</GroupID>
+                  <RuleID>5</RuleID>
+                  <Action>2</Action>
+                  <Description>allow redacted source</Description>
+                  <SrcAny>false</SrcAny>
+                  <SrcIPv4>
+                    <SrcIPv4Addr>192.0.2.0</SrcIPv4Addr>
+                    <SrcIPv4Wildcard>0.0.0.255</SrcIPv4Wildcard>
+                  </SrcIPv4>
+                </Rule>
+              </IPv4BasicRules>
+            </ACL>
+          </top>
+        </data>
+        """,
+        scope=SimpleNamespace(full=False, vlan_ids=[], interface_names=[], acl_ids=[2001]),
+    )
+
+    assert state["acls"] == [
+        {
+            "acl_id": 2001,
+            "kind": "basic_ipv4",
+            "name": None,
+            "description": "ARIA basic ACL",
+            "rules": [
+                {
+                    "sequence": 5,
+                    "action": "permit",
+                    "protocol": "ip",
+                    "source": {"address": "192.0.2.0", "wildcard": "0.0.0.255"},
+                    "destination": None,
+                    "source_port_eq": None,
+                    "destination_port_eq": None,
+                    "description": "allow redacted source",
+                }
+            ],
+        }
+    ]
+
+
+def test_h3c_parser_rejects_basic_acl_rule_outside_basic_range():
+    with pytest.raises(AdapterError) as exc_info:
+        H3cStateParser(model_hint="S5560-54C-EI").parse_running(
+            """
+            <data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+              <top xmlns="http://www.h3c.com/netconf/config:1.0">
+                <ACL>
+                  <IPv4BasicRules>
+                    <Rule>
+                      <GroupID>3999</GroupID>
+                      <RuleID>5</RuleID>
+                      <Action>2</Action>
+                    </Rule>
+                  </IPv4BasicRules>
+                </ACL>
+              </top>
+            </data>
+            """
+        )
+    assert exc_info.value.raw_error_summary == "invalid IPv4 basic ACL ID 3999"
+
+
 def test_h3c_parser_reads_real_comware_acl_interface_bindings():
     state = H3cStateParser(model_hint="S5560-54C-EI").parse_running(
         """

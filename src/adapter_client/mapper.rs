@@ -5,8 +5,8 @@ use crate::device::{
 use crate::device::model_profile::YangModuleSummary;
 use crate::engine::diff::{ChangeOp, ChangeSet};
 use crate::model::{
-    AclAction, AclBinding, AclConfig, AclDirection, AclEndpoint, AclProtocol, AclRule, AdminState,
-    DeviceId, InterfaceConfig, PortMode, Vendor, VlanConfig,
+    AclAction, AclBinding, AclConfig, AclDirection, AclEndpoint, AclKind, AclProtocol, AclRule,
+    AdminState, DeviceId, InterfaceConfig, PortMode, Vendor, VlanConfig,
 };
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::proto::adapter;
@@ -413,6 +413,7 @@ fn acl_to_proto(acl: &AclConfig) -> adapter::AclConfig {
         name: acl.name.clone(),
         description: acl.description.clone(),
         rules: acl.rules.iter().map(acl_rule_to_proto).collect(),
+        kind: acl_kind_to_proto(&acl.kind) as i32,
     }
 }
 
@@ -448,6 +449,7 @@ fn acl_from_proto(proto: adapter::AclConfig) -> UnderlayResult<AclConfig> {
     let acl_id = acl_id_from_u32(proto.acl_id, "adapter returned invalid ACL id")?;
     Ok(AclConfig {
         acl_id,
+        kind: acl_kind_from_i32(proto.kind, acl_id)?,
         name: proto.name,
         description: proto.description,
         rules: proto
@@ -456,6 +458,36 @@ fn acl_from_proto(proto: adapter::AclConfig) -> UnderlayResult<AclConfig> {
             .map(acl_rule_from_proto)
             .collect::<UnderlayResult<Vec<_>>>()?,
     })
+}
+
+fn acl_kind_to_proto(kind: &AclKind) -> adapter::AclKind {
+    match kind {
+        AclKind::AdvancedIpv4 => adapter::AclKind::AdvancedIpv4,
+        AclKind::BasicIpv4 => adapter::AclKind::BasicIpv4,
+    }
+}
+
+fn acl_kind_from_i32(value: i32, acl_id: u16) -> UnderlayResult<AclKind> {
+    match adapter::AclKind::try_from(value).unwrap_or(adapter::AclKind::Unspecified) {
+        adapter::AclKind::AdvancedIpv4 if (3000..=3999).contains(&acl_id) => {
+            Ok(AclKind::AdvancedIpv4)
+        }
+        adapter::AclKind::BasicIpv4 if (2000..=2999).contains(&acl_id) => {
+            Ok(AclKind::BasicIpv4)
+        }
+        adapter::AclKind::Unspecified if (2000..=2999).contains(&acl_id) => {
+            Ok(AclKind::BasicIpv4)
+        }
+        adapter::AclKind::Unspecified if (3000..=3999).contains(&acl_id) => {
+            Ok(AclKind::AdvancedIpv4)
+        }
+        _ => Err(UnderlayError::AdapterOperation {
+            code: "INVALID_ACL_KIND".into(),
+            message: "adapter returned invalid ACL kind".into(),
+            retryable: false,
+            errors: Vec::new(),
+        }),
+    }
 }
 
 fn acl_binding_from_proto(proto: adapter::AclBinding) -> UnderlayResult<AclBinding> {
@@ -584,10 +616,10 @@ fn acl_id_from_u32(value: u32, message: &str) -> UnderlayResult<u16> {
         retryable: false,
         errors: Vec::new(),
     })?;
-    if !(3000..=3999).contains(&acl_id) {
+    if !(2000..=3999).contains(&acl_id) {
         return Err(UnderlayError::AdapterOperation {
             code: "INVALID_ACL_ID".into(),
-            message: format!("adapter returned out-of-range IPv4 advanced ACL id {acl_id}"),
+            message: format!("adapter returned out-of-range numeric IPv4 ACL id {acl_id}"),
             retryable: false,
             errors: Vec::new(),
         });

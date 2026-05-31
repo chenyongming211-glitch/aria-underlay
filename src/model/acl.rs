@@ -21,6 +21,18 @@ pub enum AclDirection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AclKind {
+    AdvancedIpv4,
+    BasicIpv4,
+}
+
+impl Default for AclKind {
+    fn default() -> Self {
+        Self::AdvancedIpv4
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AclEndpoint {
     pub address: String,
     pub wildcard: String,
@@ -41,6 +53,8 @@ pub struct AclRule {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AclConfig {
     pub acl_id: u16,
+    #[serde(default)]
+    pub kind: AclKind,
     pub name: Option<String>,
     pub description: Option<String>,
     pub rules: Vec<AclRule>,

@@ -72,6 +72,7 @@ class _AclRule:
 @dataclass
 class _Acl:
     acl_id: int
+    kind: str | int | None = None
     name: str | None = None
     description: str | None = None
     rules: list[_AclRule] | None = None
@@ -427,6 +428,51 @@ def test_h3c_renderer_builds_ipv4_advanced_acl_edit_config_document():
     assert rules[1].find(f"{{{ns}}}ProtocolType").text == "6"
     assert rules[1].find(f"{{{ns}}}DstPort/{{{ns}}}DstPortOp").text == "2"
     assert rules[1].find(f"{{{ns}}}DstPort/{{{ns}}}DstPortValue1").text == "443"
+
+
+def test_h3c_renderer_builds_ipv4_basic_acl_edit_config_document():
+    xml = H3cRenderer().render_edit_config(
+        _DesiredState(
+            vlans=[],
+            interfaces=[],
+            acls=[
+                _Acl(
+                    acl_id=2001,
+                    kind="basic_ipv4",
+                    description="ARIA basic ACL",
+                    rules=[
+                        _AclRule(
+                            sequence=5,
+                            action="permit",
+                            protocol="ip",
+                            source=_AclEndpoint("192.0.2.0", "0.0.0.255"),
+                            description="allow redacted source",
+                        )
+                    ],
+                )
+            ],
+        )
+    )
+    root = ElementTree.fromstring(xml)
+    ns = H3cRenderer().ACL_NAMESPACE
+
+    group = root.find(f".//{{{ns}}}ACL/{{{ns}}}Groups/{{{ns}}}Group")
+    assert group.find(f"{{{ns}}}GroupID").text == "2001"
+    assert group.find(f"{{{ns}}}Description").text == "ARIA basic ACL"
+
+    basic_rules = root.findall(f".//{{{ns}}}ACL/{{{ns}}}IPv4BasicRules/{{{ns}}}Rule")
+    advanced_rules = root.findall(f".//{{{ns}}}ACL/{{{ns}}}IPv4AdvanceRules/{{{ns}}}Rule")
+    assert len(basic_rules) == 1
+    assert advanced_rules == []
+    assert basic_rules[0].find(f"{{{ns}}}RuleID").text == "5"
+    assert basic_rules[0].find(f"{{{ns}}}Action").text == "2"
+    assert basic_rules[0].find(f"{{{ns}}}ProtocolType") is None
+    assert basic_rules[0].find(f"{{{ns}}}Description").text == "allow redacted source"
+    assert (
+        basic_rules[0].find(f"{{{ns}}}SrcIPv4/{{{ns}}}SrcIPv4Addr").text
+        == "192.0.2.0"
+    )
+    assert basic_rules[0].find(f"{{{ns}}}DstIPv4") is None
 
 
 def test_h3c_renderer_builds_interface_acl_binding_document():

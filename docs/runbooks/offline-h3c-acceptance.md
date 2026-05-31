@@ -16,6 +16,7 @@ surface end to end:
 - access interface mode and interface description
 - trunk allowed VLANs
 - IPv4 advanced ACL rules
+- IPv4 basic ACL rules
 - ACL rule description
 - ACL interface binding
 - explicit delete VLAN, delete ACL, and delete ACL binding cleanup intents

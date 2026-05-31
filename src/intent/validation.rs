@@ -5,7 +5,7 @@ use crate::intent::{
     acl::AclBindingIntent, SwitchPairIntent, UnderlayDomainIntent, UnderlayTopology,
 };
 use crate::model::{
-    acl_binding_key, is_canonical_identifier, AclConfig, AclProtocol, DeviceId, PortMode,
+    acl_binding_key, is_canonical_identifier, AclConfig, AclKind, AclProtocol, DeviceId, PortMode,
 };
 use crate::{UnderlayError, UnderlayResult};
 
@@ -141,6 +141,7 @@ pub fn validate_underlay_domain_intent(intent: &UnderlayDomainIntent) -> Underla
     validate_acls(
         intent.acls.iter().map(|acl| AclConfig {
             acl_id: acl.acl_id,
+            kind: acl.kind.clone(),
             name: acl.name.clone(),
             description: acl.description.clone(),
             rules: acl.rules.clone(),
@@ -257,12 +258,7 @@ where
 {
     let mut seen = BTreeSet::new();
     for acl in acls {
-        if !(3000..=3999).contains(&acl.acl_id) {
-            return Err(UnderlayError::InvalidIntent(format!(
-                "{context} has invalid IPv4 advanced acl_id {}; valid range is 3000..=3999",
-                acl.acl_id
-            )));
-        }
+        validate_acl_id_for_kind(context, acl.acl_id, &acl.kind)?;
         if !seen.insert(acl.acl_id) {
             return Err(UnderlayError::InvalidIntent(format!(
                 "{context} has duplicate acl_id {}",
@@ -301,6 +297,9 @@ where
                     acl.acl_id, rule.sequence
                 )));
             }
+            if matches!(acl.kind, AclKind::BasicIpv4) {
+                validate_basic_acl_rule(context, &acl, rule)?;
+            }
             if let Some(source) = &rule.source {
                 validate_acl_endpoint(context, acl.acl_id, rule.sequence, "source", source)?;
             }
@@ -318,15 +317,57 @@ where
     Ok(())
 }
 
+fn validate_acl_id_for_kind(context: &str, acl_id: u16, kind: &AclKind) -> UnderlayResult<()> {
+    match kind {
+        AclKind::AdvancedIpv4 if !(3000..=3999).contains(&acl_id) => {
+            Err(UnderlayError::InvalidIntent(format!(
+                "{context} has invalid IPv4 advanced acl_id {acl_id}; valid range is 3000..=3999"
+            )))
+        }
+        AclKind::BasicIpv4 if !(2000..=2999).contains(&acl_id) => {
+            Err(UnderlayError::InvalidIntent(format!(
+                "{context} has invalid IPv4 basic acl_id {acl_id}; valid range is 2000..=2999"
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_basic_acl_rule(
+    context: &str,
+    acl: &AclConfig,
+    rule: &crate::model::AclRule,
+) -> UnderlayResult<()> {
+    if !matches!(rule.protocol, AclProtocol::Ip) {
+        return Err(UnderlayError::InvalidIntent(format!(
+            "{context} basic IPv4 ACL {} rule {} must use ip protocol",
+            acl.acl_id, rule.sequence
+        )));
+    }
+    if rule.destination.is_some() {
+        return Err(UnderlayError::InvalidIntent(format!(
+            "{context} basic IPv4 ACL {} rule {} cannot match destination",
+            acl.acl_id, rule.sequence
+        )));
+    }
+    if rule.source_port_eq.is_some() || rule.destination_port_eq.is_some() {
+        return Err(UnderlayError::InvalidIntent(format!(
+            "{context} basic IPv4 ACL {} rule {} cannot match ports",
+            acl.acl_id, rule.sequence
+        )));
+    }
+    Ok(())
+}
+
 fn validate_acl_ids<I>(acl_ids: I, context: &str) -> UnderlayResult<()>
 where
     I: IntoIterator<Item = u16>,
 {
     let mut seen = BTreeSet::new();
     for acl_id in acl_ids {
-        if !(3000..=3999).contains(&acl_id) {
+        if !(2000..=3999).contains(&acl_id) {
             return Err(UnderlayError::InvalidIntent(format!(
-                "{context} has invalid IPv4 advanced acl_id {acl_id}; valid range is 3000..=3999"
+                "{context} has invalid numeric IPv4 acl_id {acl_id}; valid range is 2000..=3999"
             )));
         }
         if !seen.insert(acl_id) {
@@ -418,9 +459,9 @@ fn validate_acl_binding_deletes(
                 binding.interface_name, binding.device_id.0
             )));
         }
-        if !(3000..=3999).contains(&binding.acl_id) {
+        if !(2000..=3999).contains(&binding.acl_id) {
             return Err(UnderlayError::InvalidIntent(format!(
-                "{context} ACL binding delete on {} has invalid IPv4 advanced acl_id {}; valid range is 3000..=3999",
+                "{context} ACL binding delete on {} has invalid numeric IPv4 acl_id {}; valid range is 2000..=3999",
                 binding.interface_name, binding.acl_id
             )));
         }

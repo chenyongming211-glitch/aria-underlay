@@ -66,6 +66,13 @@ class H3cRenderer:
         acl_rule_nodes = [
             rule_node
             for acl in getattr(desired_state, "acls", [])
+            if _acl_kind(acl) == "advanced_ipv4"
+            for rule_node in self.render_acl_rules(acl)
+        ]
+        basic_acl_rule_nodes = [
+            rule_node
+            for acl in getattr(desired_state, "acls", [])
+            if _acl_kind(acl) == "basic_ipv4"
             for rule_node in self.render_acl_rules(acl)
         ]
         acl_binding_nodes = [
@@ -146,6 +153,14 @@ class H3cRenderer:
                     "Groups",
                     namespace=self.ACL_NAMESPACE,
                     children=acl_nodes + acl_delete_nodes,
+                )
+            )
+        if basic_acl_rule_nodes:
+            acl_children.append(
+                XmlElement(
+                    "IPv4BasicRules",
+                    namespace=self.ACL_NAMESPACE,
+                    children=basic_acl_rule_nodes,
                 )
             )
         if acl_rule_nodes:
@@ -280,9 +295,10 @@ class H3cRenderer:
         )
 
     def render_acl_group(self, acl) -> XmlElement:
-        acl_id = _validate_acl_id(_field(acl, "acl_id"), "acl.acl_id")
+        kind = _acl_kind(acl)
+        acl_id = _validate_acl_id(_field(acl, "acl_id"), "acl.acl_id", kind=kind)
         if _optional_text(acl, "name") is not None:
-            raise ValueError("H3C numeric IPv4 advanced ACL name is not supported")
+            raise ValueError("H3C numeric IPv4 ACL name is not supported")
         children = [
             XmlElement("GroupType", namespace=self.ACL_NAMESPACE, children=["1"]),
             XmlElement("GroupID", namespace=self.ACL_NAMESPACE, children=[str(acl_id)]),
@@ -307,7 +323,8 @@ class H3cRenderer:
         )
 
     def render_acl_rules(self, acl) -> list[XmlElement]:
-        acl_id = _validate_acl_id(_field(acl, "acl_id"), "acl.acl_id")
+        kind = _acl_kind(acl)
+        acl_id = _validate_acl_id(_field(acl, "acl_id"), "acl.acl_id", kind=kind)
         rules = []
         seen = set()
         for rule in _repeated_field(acl, "rules"):
@@ -315,10 +332,10 @@ class H3cRenderer:
             if sequence in seen:
                 raise ValueError(f"duplicate ACL rule sequence {sequence}")
             seen.add(sequence)
-            rules.append(self.render_acl_rule(acl_id, rule))
+            rules.append(self.render_acl_rule(acl_id, rule, kind=kind))
         return rules
 
-    def render_acl_rule(self, acl_id: int, rule) -> XmlElement:
+    def render_acl_rule(self, acl_id: int, rule, *, kind: str = "advanced_ipv4") -> XmlElement:
         action = _acl_action(_field(rule, "action"))
         protocol = _acl_protocol(_field(rule, "protocol"))
         children = [
@@ -333,12 +350,17 @@ class H3cRenderer:
                 namespace=self.ACL_NAMESPACE,
                 children=[str(_h3c_acl_action_code(action))],
             ),
-            XmlElement(
-                "ProtocolType",
-                namespace=self.ACL_NAMESPACE,
-                children=[str(_h3c_acl_protocol_code(protocol))],
-            ),
         ]
+        if kind == "advanced_ipv4":
+            children.append(
+                XmlElement(
+                    "ProtocolType",
+                    namespace=self.ACL_NAMESPACE,
+                    children=[str(_h3c_acl_protocol_code(protocol))],
+                )
+            )
+        elif protocol != "ip":
+            raise ValueError("H3C IPv4 basic ACL rules must use ip protocol")
         description = _optional_text(rule, "description")
         if description is not None:
             children.append(
@@ -348,13 +370,19 @@ class H3cRenderer:
         if source is not None:
             children.extend(_acl_endpoint_nodes("Src", source, self.ACL_NAMESPACE))
         destination = _optional_field(rule, "destination")
+        if kind == "basic_ipv4" and destination is not None:
+            raise ValueError("H3C IPv4 basic ACL rules cannot match destination")
         if destination is not None:
             children.extend(_acl_endpoint_nodes("Dst", destination, self.ACL_NAMESPACE))
 
         source_port = _optional_field(rule, "source_port_eq")
+        if kind == "basic_ipv4" and source_port is not None:
+            raise ValueError("H3C IPv4 basic ACL rules cannot match source_port_eq")
         if source_port is not None:
             children.append(_acl_port_node("Src", source_port, protocol, self.ACL_NAMESPACE))
         destination_port = _optional_field(rule, "destination_port_eq")
+        if kind == "basic_ipv4" and destination_port is not None:
+            raise ValueError("H3C IPv4 basic ACL rules cannot match destination_port_eq")
         if destination_port is not None:
             children.append(_acl_port_node("Dst", destination_port, protocol, self.ACL_NAMESPACE))
         return XmlElement("Rule", namespace=self.ACL_NAMESPACE, children=children)
@@ -467,15 +495,38 @@ def _validate_vlan_id(value, field: str) -> int:
     return vlan_id
 
 
-def _validate_acl_id(value, field: str) -> int:
+def _acl_kind(acl) -> str:
+    acl_id = _optional_field(acl, "acl_id")
+    raw = _optional_field(acl, "kind")
+    if raw is None or raw == 0:
+        if acl_id is not None and 2000 <= int(acl_id) <= 2999:
+            return "basic_ipv4"
+        return "advanced_ipv4"
+    normalized = raw.strip().lower() if isinstance(raw, str) else raw
+    if normalized in {"advanced_ipv4", "ipv4_advanced", "advanced", 1}:
+        return "advanced_ipv4"
+    if normalized in {"basic_ipv4", "ipv4_basic", "basic", 2}:
+        return "basic_ipv4"
+    raise ValueError(f"unknown ACL kind: {raw}")
+
+
+def _validate_acl_id(value, field: str, *, kind: str | None = None) -> int:
     if value is None:
         raise ValueError(f"{field} is required")
     try:
         acl_id = int(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field} must be an integer ACL ID") from exc
-    if acl_id < 3000 or acl_id > 3999:
-        raise ValueError(f"{field} must be in range 3000..3999")
+    if kind == "basic_ipv4":
+        if acl_id < 2000 or acl_id > 2999:
+            raise ValueError(f"{field} must be in range 2000..2999 for IPv4 basic ACL")
+        return acl_id
+    if kind == "advanced_ipv4":
+        if acl_id < 3000 or acl_id > 3999:
+            raise ValueError(f"{field} must be in range 3000..3999 for IPv4 advanced ACL")
+        return acl_id
+    if acl_id < 2000 or acl_id > 3999:
+        raise ValueError(f"{field} must be in range 2000..3999 for numeric IPv4 ACL")
     return acl_id
 
 

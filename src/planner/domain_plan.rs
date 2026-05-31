@@ -53,6 +53,7 @@ pub fn plan_underlay_domain(
                                 acl.acl_id,
                                 AclConfig {
                                     acl_id: acl.acl_id,
+                                    kind: acl.kind.clone(),
                                     name: acl.name.clone(),
                                     description: acl.description.clone(),
                                     rules: acl.rules.clone(),

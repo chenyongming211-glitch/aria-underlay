@@ -232,11 +232,11 @@ def _normalized_scope_acl_ids(scope) -> list[int]:
                 retryable=False,
             ) from exc
     acl_ids = sorted(normalized)
-    invalid = [acl_id for acl_id in acl_ids if acl_id < 3000 or acl_id > 3999]
+    invalid = [acl_id for acl_id in acl_ids if acl_id < 2000 or acl_id > 3999]
     if invalid:
         raise AdapterError(
             code="INVALID_STATE_SCOPE",
-            message="state scope contains invalid IPv4 advanced ACL IDs",
+            message="state scope contains invalid numeric IPv4 ACL IDs",
             normalized_error="invalid state scope",
             raw_error_summary=f"invalid_acl_ids={invalid}",
             retryable=False,
@@ -348,6 +348,13 @@ def verify_acls(desired_state, observed: dict, scope=None) -> None:
             raise _verify_mismatch(
                 f"ACL {acl_id} description mismatch: expected "
                 f"{expected_description!r}, got {observed_acl.get('description')!r}",
+            )
+        expected_kind = _acl_kind_text(_optional_field(desired_acl, "kind"), acl_id)
+        observed_kind = _acl_kind_text(observed_acl.get("kind"), acl_id)
+        if observed_kind != expected_kind:
+            raise _verify_mismatch(
+                f"ACL {acl_id} kind mismatch: expected {expected_kind!r}, "
+                f"got {observed_kind!r}",
             )
         if _normalize_acl_rules(observed_acl.get("rules", [])) != _normalize_acl_rules(
             _repeated_field(desired_acl, "rules")
@@ -576,6 +583,30 @@ def _acl_protocol_text(value) -> str:
     if numeric == 4:
         return "icmp"
     raise _verify_mismatch(f"unknown ACL protocol during verification: {value!r}")
+
+
+def _acl_kind_text(value, acl_id: int) -> str:
+    if isinstance(value, str):
+        kind = value.strip().lower()
+        if kind in {"ipv4_basic", "basic"}:
+            kind = "basic_ipv4"
+        elif kind in {"ipv4_advanced", "advanced"}:
+            kind = "advanced_ipv4"
+    else:
+        numeric = int(value or 0)
+        if numeric == 2:
+            kind = "basic_ipv4"
+        elif numeric in {0, 1}:
+            kind = "basic_ipv4" if 2000 <= int(acl_id) <= 2999 else "advanced_ipv4"
+        else:
+            raise _verify_mismatch(f"unknown ACL kind during verification: {value!r}")
+    if kind == "basic_ipv4" and not 2000 <= int(acl_id) <= 2999:
+        raise _verify_mismatch(f"basic IPv4 ACL ID out of range: {acl_id}")
+    if kind == "advanced_ipv4" and not 3000 <= int(acl_id) <= 3999:
+        raise _verify_mismatch(f"advanced IPv4 ACL ID out of range: {acl_id}")
+    if kind not in {"basic_ipv4", "advanced_ipv4"}:
+        raise _verify_mismatch(f"unknown ACL kind during verification: {value!r}")
+    return kind
 
 
 def _acl_direction_text(value) -> str:

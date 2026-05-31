@@ -492,6 +492,7 @@ class NetconfBackedDriver:
             raise _parsed_state_error(f"acls[{index}].rules must be a list")
         kwargs = {
             "acl_id": acl_id,
+            "kind": _acl_kind_to_proto(acl.get("kind"), acl_id),
             "rules": [
                 self._acl_rule_to_proto(rule, rule_index, path=f"acls[{index}].rules")
                 for rule_index, rule in enumerate(rules)
@@ -628,9 +629,40 @@ def _parsed_acl_id(value, path: str) -> int:
         acl_id = int(value)
     except (TypeError, ValueError) as exc:
         raise _parsed_state_error(f"{path} must be an integer: {value!r}") from exc
-    if acl_id < 3000 or acl_id > 3999:
-        raise _parsed_state_error(f"{path} out of IPv4 advanced ACL range: {acl_id}")
+    if acl_id < 2000 or acl_id > 3999:
+        raise _parsed_state_error(f"{path} out of numeric IPv4 ACL range: {acl_id}")
     return acl_id
+
+
+def _acl_kind_to_proto(value, acl_id: int) -> int:
+    if value is None:
+        kind = (
+            pb2.ACL_KIND_BASIC_IPV4
+            if 2000 <= acl_id <= 2999
+            else pb2.ACL_KIND_ADVANCED_IPV4
+        )
+    elif isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"basic_ipv4", "ipv4_basic", "basic"}:
+            kind = pb2.ACL_KIND_BASIC_IPV4
+        elif normalized in {"advanced_ipv4", "ipv4_advanced", "advanced"}:
+            kind = pb2.ACL_KIND_ADVANCED_IPV4
+        else:
+            raise _parsed_state_error(f"unsupported ACL kind: {value!r}")
+    else:
+        numeric = int(value or 0)
+        if numeric == getattr(pb2, "ACL_KIND_BASIC_IPV4", 2):
+            kind = pb2.ACL_KIND_BASIC_IPV4
+        elif numeric in {0, getattr(pb2, "ACL_KIND_ADVANCED_IPV4", 1)}:
+            kind = pb2.ACL_KIND_ADVANCED_IPV4
+        else:
+            raise _parsed_state_error(f"unsupported ACL kind: {value!r}")
+
+    if kind == pb2.ACL_KIND_BASIC_IPV4 and not 2000 <= acl_id <= 2999:
+        raise _parsed_state_error(f"basic IPv4 ACL ID out of range: {acl_id}")
+    if kind == pb2.ACL_KIND_ADVANCED_IPV4 and not 3000 <= acl_id <= 3999:
+        raise _parsed_state_error(f"advanced IPv4 ACL ID out of range: {acl_id}")
+    return kind
 
 
 def _parsed_rule_sequence(value, path: str) -> int:

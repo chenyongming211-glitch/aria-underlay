@@ -97,6 +97,12 @@ enum AclDirection {
   ACL_DIRECTION_OUTBOUND = 2;
 }
 
+enum AclKind {
+  ACL_KIND_UNSPECIFIED = 0;
+  ACL_KIND_ADVANCED_IPV4 = 1;
+  ACL_KIND_BASIC_IPV4 = 2;
+}
+
 message RequestContext {
   string request_id = 1;
   string tx_id = 2;
@@ -223,6 +229,7 @@ message AclConfig {
   optional string name = 2;
   optional string description = 3;
   repeated AclRule rules = 4;
+  AclKind kind = 5;
 }
 
 message AclBinding {

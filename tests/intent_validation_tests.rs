@@ -8,8 +8,8 @@ use aria_underlay::intent::{
     SwitchPairIntent, UnderlayDomainIntent, UnderlayTopology,
 };
 use aria_underlay::model::{
-    AclAction, AclDirection, AclEndpoint, AclProtocol, AclRule, AdminState, DeviceId, DeviceRole,
-    PortMode, Vendor,
+    AclAction, AclConfig, AclDirection, AclEndpoint, AclKind, AclProtocol, AclRule, AdminState,
+    DeviceId, DeviceRole, PortMode, Vendor,
 };
 
 #[test]
@@ -131,6 +131,63 @@ fn domain_rejects_acl_port_on_ip_protocol() {
     let err = validate_underlay_domain_intent(&intent).unwrap_err();
 
     assert!(format!("{err}").contains("destination_port_eq but protocol is not tcp/udp"));
+}
+
+#[test]
+fn domain_accepts_basic_ipv4_acl_kind_and_range() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    intent.acls = vec![basic_acl_intent(2001)];
+
+    validate_underlay_domain_intent(&intent).expect("basic IPv4 ACL should validate");
+}
+
+#[test]
+fn acl_kind_defaults_to_advanced_for_legacy_json_payloads() {
+    let acl_intent: AclIntent = serde_json::from_value(serde_json::json!({
+        "acl_id": 3999,
+        "name": null,
+        "description": null,
+        "rules": []
+    }))
+    .expect("legacy ACL intent should deserialize without kind");
+    let acl_config: AclConfig = serde_json::from_value(serde_json::json!({
+        "acl_id": 3999,
+        "name": null,
+        "description": null,
+        "rules": []
+    }))
+    .expect("legacy ACL config should deserialize without kind");
+
+    assert_eq!(acl_intent.kind, AclKind::AdvancedIpv4);
+    assert_eq!(acl_config.kind, AclKind::AdvancedIpv4);
+}
+
+#[test]
+fn domain_rejects_basic_ipv4_acl_destination_match() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    let mut acl = basic_acl_intent(2001);
+    acl.rules[0].destination = Some(AclEndpoint {
+        address: "198.51.100.10".into(),
+        wildcard: "0.0.0.0".into(),
+    });
+    intent.acls = vec![acl];
+
+    let err = validate_underlay_domain_intent(&intent).unwrap_err();
+
+    assert!(format!("{err}").contains("basic IPv4 ACL"));
+    assert!(format!("{err}").contains("destination"));
+}
+
+#[test]
+fn domain_rejects_advanced_ipv4_acl_in_basic_range() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    let mut acl = acl_intent(2001);
+    acl.kind = AclKind::AdvancedIpv4;
+    intent.acls = vec![acl];
+
+    let err = validate_underlay_domain_intent(&intent).unwrap_err();
+
+    assert!(format!("{err}").contains("valid range is 3000..=3999"));
 }
 
 #[test]
@@ -280,6 +337,7 @@ fn domain_intent(topology: UnderlayTopology) -> UnderlayDomainIntent {
 fn acl_intent(acl_id: u16) -> AclIntent {
     AclIntent {
         acl_id,
+        kind: AclKind::AdvancedIpv4,
         name: None,
         description: Some("temporary acl".into()),
         rules: vec![AclRule {
@@ -293,6 +351,28 @@ fn acl_intent(acl_id: u16) -> AclIntent {
             destination: None,
             source_port_eq: None,
             destination_port_eq: Some(443),
+            description: None,
+        }],
+    }
+}
+
+fn basic_acl_intent(acl_id: u16) -> AclIntent {
+    AclIntent {
+        acl_id,
+        kind: AclKind::BasicIpv4,
+        name: None,
+        description: Some("temporary basic acl".into()),
+        rules: vec![AclRule {
+            sequence: 5,
+            action: AclAction::Permit,
+            protocol: AclProtocol::Ip,
+            source: Some(AclEndpoint {
+                address: "192.0.2.0".into(),
+                wildcard: "0.0.0.255".into(),
+            }),
+            destination: None,
+            source_port_eq: None,
+            destination_port_eq: None,
             description: None,
         }],
     }

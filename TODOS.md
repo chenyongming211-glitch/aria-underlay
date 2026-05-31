@@ -118,21 +118,24 @@
 
 ---
 
-## P1/P2: 后续 — H3C Batch 2 Basic IPv4 ACL
+## P1/P2: 已完成离线初版 — H3C Batch 2 Basic IPv4 ACL
 
-**做什么**：按 H3C 命令适配路线图推进 Basic IPv4 ACL。一次只扩一个 ACL family，先做 Basic IPv4 ACL，不同时做 named ACL、IPv6 ACL、QoS、PBR、NQA 或 BGP。
+**已完成内容**：Basic IPv4 ACL 已作为独立 ACL family 接入 domain/proto、Rust intent validation/planner/adapter mapper、Python H3C renderer/parser、mock NETCONF backend 和 offline H3C acceptance runner。系统现在显式区分 `advanced_ipv4` 与 `basic_ipv4`，Basic ACL 使用 `2000..2999`，Advanced ACL 保持 `3000..3999`；旧 JSON/shadow payload 未携带 kind 时默认按 Advanced IPv4 兼容。
 
-**顺序修正**：Basic IPv4 ACL 仍然是 H3C Batch 2 中风险最低、复用现有 ACL renderer/parser/verify/offline acceptance 基础最多的一步，但它不是 PBR/BGP 方案的替代品。当前优先级低于 `DeviceModelProfile + SoT Snapshot + ChangePlan` 基础层；基础层落地后再推进 Basic ACL，可以让后续 ACL 被 PBR/QoS/BGP 引用时有统一依赖图和删除顺序。
+**为什么**：Basic IPv4 ACL 是 H3C Batch 2 中风险最低、复用现有 ACL renderer/parser/verify/offline acceptance 基础最多的一步。它不是 PBR/BGP 方案的替代品，但能先补齐后续 PBR/QoS/BGP 可能引用的 ACL family 表达和 readback 解析基础。
 
-**范围**：
+**已完成范围**：
 - 明确 Basic IPv4 ACL 的 domain/proto 表达方式，避免和已有 numeric IPv4 advanced ACL 混淆。
-- 增加 H3C renderer tests、parser tests、verify tests。
+- 增加 H3C renderer tests、parser tests、Rust intent validation / mapper tests。
 - 扩展 offline H3C acceptance runner，把 Basic IPv4 ACL 纳入 parser-in-the-loop 验收。
-- 更新 real-device acceptance checklist，但没有真实交换机前只记录待验收，不标记真机通过。
+- Basic ACL 只允许 `ip` 协议、source 匹配，不允许 destination 或端口匹配；kind 与 ACL ID 段不一致时 fail closed。
+- 更新 real-device acceptance checklist，明确没有真实交换机前只记录待验收，不标记真机通过。
+
+**仍不做**：
 - 不做 named ACL、IPv6 ACL、ACL 引用到 QoS/PBR/NQA/BGP。
 
 **工作量**：M/L
-**优先级**：P1/P2（基础层之后的低风险命令扩展）
+**优先级**：P1/P2（离线初版完成；真机验收待设备环境）
 **依赖**：Offline H3C Acceptance Runner 已完成；ChangePlan 基础层至少完成 dry-run/report 形态
 
 ---

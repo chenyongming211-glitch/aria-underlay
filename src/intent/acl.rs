@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-use crate::model::{AclDirection, AclRule, DeviceId};
+use crate::model::{AclDirection, AclKind, AclRule, DeviceId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AclIntent {
     pub acl_id: u16,
+    #[serde(default)]
+    pub kind: AclKind,
     pub name: Option<String>,
     pub description: Option<String>,
     pub rules: Vec<AclRule>,

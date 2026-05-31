@@ -11,6 +11,8 @@ acceptance procedure. The current supported acceptance surface is:
 - Trunk port allowed VLAN update.
 - Access/trunk interface description update.
 - Isolated numeric IPv4 advanced ACL create/read/verify.
+- Isolated numeric IPv4 basic ACL create/read/verify is implemented in offline
+  acceptance but still pending real-device validation.
 - IPv4 advanced ACL rule description.
 - Interface packet-filter binding for an isolated numeric IPv4 advanced ACL.
 - Scoped get-current-state readback and verify.
@@ -299,7 +301,7 @@ argument with `--clear-description`. On tested H3C Comware devices, clearing an
 interface description uses SSH CLI `undo description`; the cleanup tool prints
 the exact CLI sequence during dry-run and still requires `--yes` before writing.
 
-## ACL Acceptance
+## Advanced IPv4 ACL Acceptance
 
 The ACL MVP creates only a numeric IPv4 advanced ACL object. It must not bind
 the ACL to any interface, VLAN interface, PBR policy, QoS policy, or routing
@@ -383,6 +385,39 @@ python3 scripts/real_device_cleanup.py \
 ```
 
 Read back the ACL scope again. The test ACL must be absent.
+
+## Basic IPv4 ACL Acceptance
+
+Basic IPv4 ACL has offline renderer/parser/mock acceptance coverage, but it is
+not yet marked accepted on real H3C hardware. Use this case only on an approved
+lab switch and keep it isolated from all packet-filter, QoS, PBR, NQA, and BGP
+consumers.
+
+1. Choose an absent numeric Basic IPv4 ACL id.
+
+Use NETCONF `top/ACL` readback, `display acl all`, or both. Record existing ACL
+ids and choose only an absent id in `2000-2999`. The recommended temporary range
+is `2998-2999`, but the actual candidate must come from live readback.
+
+2. Configure only source-based `ip` rules.
+
+Basic IPv4 ACL rules must not set destination, source port, or destination port
+matches. Keep rule descriptions short and ASCII for first-device validation.
+
+3. Run the real apply probe, then read back `top/ACL`.
+
+Acceptance requires:
+
+- The test ACL exists under the Basic IPv4 rule family.
+- The ACL description matches when configured.
+- The test rule sequence, action, source, and rule description match.
+- No destination or port match is present in readback.
+- No ACL binding has been added.
+
+4. Clean up with explicit `--delete-acl`, then read back again.
+
+The Basic IPv4 ACL id must be absent after cleanup. If readback still shows the
+ACL, stop and clean it manually before reusing the id.
 
 ## ACL Binding Acceptance
 

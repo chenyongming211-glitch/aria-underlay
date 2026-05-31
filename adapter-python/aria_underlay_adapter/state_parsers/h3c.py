@@ -171,24 +171,33 @@ def _parse_real_acls(acl_node) -> list[dict]:
         acl_id = _parse_acl_id(_required_text(group, "GroupID", "ACL/Groups/Group/GroupID"))
         if acl_id in acl_by_id:
             raise _parse_error(f"duplicate ACL {acl_id}")
-        acl_by_id[acl_id] = {
+        acl_by_id[acl_id] = _acl_base(acl_id)
+        acl_by_id[acl_id].update({
             "acl_id": acl_id,
             "name": None,
             "description": _optional_text(group, "Description"),
             "rules": [],
-        }
+        })
 
     seen_rules = set()
+    for rule in _children(_first_child(acl_node, "IPv4BasicRules"), "Rule"):
+        acl_id = _parse_acl_id(_required_text(rule, "GroupID", "ACL/IPv4BasicRules/Rule/GroupID"))
+        _validate_acl_id_for_kind(acl_id, "basic_ipv4")
+        if acl_id not in acl_by_id:
+            acl_by_id[acl_id] = _acl_base(acl_id)
+        parsed_rule = _parse_acl_rule(rule, acl_id, kind="basic_ipv4")
+        key = (acl_id, parsed_rule["sequence"])
+        if key in seen_rules:
+            raise _parse_error(f"duplicate ACL {acl_id} rule {parsed_rule['sequence']}")
+        seen_rules.add(key)
+        acl_by_id[acl_id]["rules"].append(parsed_rule)
+
     for rule in _children(_first_child(acl_node, "IPv4AdvanceRules"), "Rule"):
         acl_id = _parse_acl_id(_required_text(rule, "GroupID", "ACL/IPv4AdvanceRules/Rule/GroupID"))
+        _validate_acl_id_for_kind(acl_id, "advanced_ipv4")
         if acl_id not in acl_by_id:
-            acl_by_id[acl_id] = {
-                "acl_id": acl_id,
-                "name": None,
-                "description": None,
-                "rules": [],
-            }
-        parsed_rule = _parse_acl_rule(rule, acl_id)
+            acl_by_id[acl_id] = _acl_base(acl_id, kind="advanced_ipv4")
+        parsed_rule = _parse_acl_rule(rule, acl_id, kind="advanced_ipv4")
         key = (acl_id, parsed_rule["sequence"])
         if key in seen_rules:
             raise _parse_error(f"duplicate ACL {acl_id} rule {parsed_rule['sequence']}")
@@ -200,19 +209,35 @@ def _parse_real_acls(acl_node) -> list[dict]:
     return [acl_by_id[acl_id] for acl_id in sorted(acl_by_id)]
 
 
-def _parse_acl_rule(rule, acl_id: int) -> dict:
+def _acl_base(acl_id: int, *, kind: str | None = None) -> dict:
+    kind = kind or _acl_kind_from_id(acl_id)
+    acl = {
+        "acl_id": acl_id,
+        "name": None,
+        "description": None,
+        "rules": [],
+    }
+    if kind == "basic_ipv4":
+        acl["kind"] = kind
+    return acl
+
+
+def _parse_acl_rule(rule, acl_id: int, *, kind: str = "advanced_ipv4") -> dict:
+    protocol = "ip"
+    if kind == "advanced_ipv4":
+        protocol = _parse_acl_protocol(
+            _required_text(rule, "ProtocolType", f"ACL {acl_id}/ProtocolType")
+        )
     return {
         "sequence": _parse_rule_sequence(
             _required_text(rule, "RuleID", f"ACL {acl_id}/RuleID")
         ),
         "action": _parse_acl_action(_required_text(rule, "Action", f"ACL {acl_id}/Action")),
-        "protocol": _parse_acl_protocol(
-            _required_text(rule, "ProtocolType", f"ACL {acl_id}/ProtocolType")
-        ),
+        "protocol": protocol,
         "source": _parse_acl_endpoint(rule, "Src"),
-        "destination": _parse_acl_endpoint(rule, "Dst"),
-        "source_port_eq": _parse_acl_port(rule, "Src"),
-        "destination_port_eq": _parse_acl_port(rule, "Dst"),
+        "destination": None if kind == "basic_ipv4" else _parse_acl_endpoint(rule, "Dst"),
+        "source_port_eq": None if kind == "basic_ipv4" else _parse_acl_port(rule, "Src"),
+        "destination_port_eq": None if kind == "basic_ipv4" else _parse_acl_port(rule, "Dst"),
         "description": _optional_text(rule, "Description"),
     }
 
@@ -333,9 +358,22 @@ def _parse_acl_id(value: str) -> int:
         acl_id = int(value)
     except ValueError as exc:
         raise _parse_error(f"invalid ACL ID {value}") from exc
-    if acl_id < 3000 or acl_id > 3999:
-        raise _parse_error(f"invalid IPv4 advanced ACL ID {acl_id}")
+    if acl_id < 2000 or acl_id > 3999:
+        raise _parse_error(f"invalid numeric IPv4 ACL ID {acl_id}")
     return acl_id
+
+
+def _acl_kind_from_id(acl_id: int) -> str:
+    if 2000 <= acl_id <= 2999:
+        return "basic_ipv4"
+    return "advanced_ipv4"
+
+
+def _validate_acl_id_for_kind(acl_id: int, kind: str) -> None:
+    if kind == "basic_ipv4" and not 2000 <= acl_id <= 2999:
+        raise _parse_error(f"invalid IPv4 basic ACL ID {acl_id}")
+    if kind == "advanced_ipv4" and not 3000 <= acl_id <= 3999:
+        raise _parse_error(f"invalid IPv4 advanced ACL ID {acl_id}")
 
 
 def _parse_rule_sequence(value: str) -> int:

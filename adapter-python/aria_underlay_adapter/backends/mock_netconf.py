@@ -399,13 +399,8 @@ def _merge_desired_state(running: dict, desired_state) -> dict:
     ]
     acls_by_id = {acl["acl_id"]: acl for acl in merged["acls"]}
     for desired_acl in getattr(desired_state, "acls", []):
-        acl_id = _field(desired_acl, "acl_id")
-        acls_by_id[acl_id] = {
-            "acl_id": acl_id,
-            "name": _optional_field(desired_acl, "name"),
-            "description": _optional_field(desired_acl, "description"),
-            "rules": [_acl_rule_to_dict(rule) for rule in getattr(desired_acl, "rules", [])],
-        }
+        acl = _acl_to_dict(desired_acl)
+        acls_by_id[acl["acl_id"]] = acl
     for acl_id in getattr(desired_state, "delete_acl_ids", []):
         acls_by_id.pop(int(acl_id), None)
     merged["acls"] = [
@@ -713,6 +708,44 @@ def _acl_rule_to_dict(rule) -> dict:
         "destination_port_eq": _optional_field(rule, "destination_port_eq"),
         "description": _optional_field(rule, "description"),
     }
+
+
+def _acl_to_dict(acl) -> dict:
+    acl_id = _field(acl, "acl_id")
+    result = {
+        "acl_id": acl_id,
+        "name": _optional_field(acl, "name"),
+        "description": _optional_field(acl, "description"),
+        "rules": [_acl_rule_to_dict(rule) for rule in getattr(acl, "rules", [])],
+    }
+    kind = _acl_kind_text(_optional_field(acl, "kind"), acl_id)
+    if kind == "basic_ipv4":
+        result["kind"] = kind
+    return result
+
+
+def _acl_kind_text(value, acl_id: int) -> str:
+    if isinstance(value, str):
+        kind = value.strip().lower()
+        if kind in {"ipv4_basic", "basic"}:
+            kind = "basic_ipv4"
+        elif kind in {"ipv4_advanced", "advanced"}:
+            kind = "advanced_ipv4"
+    else:
+        numeric = int(value or 0)
+        if numeric == 2:
+            kind = "basic_ipv4"
+        elif numeric in {0, 1}:
+            kind = "basic_ipv4" if 2000 <= int(acl_id) <= 2999 else "advanced_ipv4"
+        else:
+            raise ValueError(f"unknown ACL kind: {value}")
+    if kind == "basic_ipv4" and not 2000 <= int(acl_id) <= 2999:
+        raise ValueError(f"basic IPv4 ACL ID out of range: {acl_id}")
+    if kind == "advanced_ipv4" and not 3000 <= int(acl_id) <= 3999:
+        raise ValueError(f"advanced IPv4 ACL ID out of range: {acl_id}")
+    if kind not in {"basic_ipv4", "advanced_ipv4"}:
+        raise ValueError(f"unknown ACL kind: {value}")
+    return kind
 
 
 def _acl_action_text(value) -> str:

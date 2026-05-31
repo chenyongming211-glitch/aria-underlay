@@ -34,8 +34,8 @@ Not production-ready yet:
 - Huawei state parsers are fixture-verified only. They need real-device running
   XML samples before production use.
 - H3C renderer/parser support is production-ready only for the documented
-  VLAN, interface, description, IPv4 ACL, ACL binding, and explicit cleanup
-  command surface.
+  VLAN, interface, description, IPv4 advanced ACL, IPv4 basic ACL, ACL binding,
+  and explicit cleanup command surface.
 - Cisco/Ruijie renderers and state parsers are not implemented.
 - NAPALM and Netmiko backends are not implemented, and this package no longer
   ships empty placeholder modules for them.

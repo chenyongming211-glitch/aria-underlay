@@ -517,7 +517,7 @@ def _change_plan_report(scenario: Scenario) -> dict[str, Any]:
             stages.append("unbind_references")
         stages.append("delete_base_objects")
     else:
-        if {"vlan_create", "ipv4_advanced_acl"} & surface:
+        if {"vlan_create", "ipv4_advanced_acl", "ipv4_basic_acl"} & surface:
             stages.append("create_base_objects")
         if {
             "vlan_description",
@@ -561,7 +561,7 @@ def _rollback_order_for_surface(surface: set[str]) -> list[str]:
     rollback_order: list[str] = []
     if "acl_interface_binding" in surface:
         rollback_order.append("remove acl interface binding")
-    if "ipv4_advanced_acl" in surface:
+    if "ipv4_advanced_acl" in surface or "ipv4_basic_acl" in surface:
         rollback_order.append("restore or delete acl")
     if "trunk_interface" in surface or "access_interface" in surface:
         rollback_order.append("restore interface mode")
@@ -657,6 +657,43 @@ def _scenarios() -> tuple[Scenario, ...]:
                 "vlan_ids": [],
                 "interface_names": ["Ten-GigabitEthernet1/0/21"],
                 "acl_ids": [],
+            },
+        ),
+        Scenario(
+            name="ipv4_basic_acl_rules",
+            surface=("ipv4_basic_acl", "acl_rule_description"),
+            desired={
+                "vlans": [],
+                "interfaces": [],
+                "acls": [
+                    {
+                        "acl_id": 2001,
+                        "kind": "basic_ipv4",
+                        "name": None,
+                        "description": "offline acceptance basic acl",
+                        "rules": [
+                            {
+                                "sequence": 5,
+                                "action": "permit",
+                                "protocol": "ip",
+                                "source": {
+                                    "address": "192.0.2.0",
+                                    "wildcard": "0.0.0.255",
+                                },
+                                "destination": None,
+                                "source_port_eq": None,
+                                "destination_port_eq": None,
+                                "description": "allow offline source",
+                            }
+                        ],
+                    }
+                ],
+            },
+            scope={
+                "full": False,
+                "vlan_ids": [],
+                "interface_names": [],
+                "acl_ids": [2001],
             },
         ),
         Scenario(
@@ -1001,7 +1038,8 @@ def _vlan_node(state: dict[str, Any]) -> XmlElement:
 def _acl_node(state: dict[str, Any]) -> XmlElement:
     acl_children = []
     group_nodes = []
-    rule_nodes = []
+    advanced_rule_nodes = []
+    basic_rule_nodes = []
     for acl in state.get("acls", []):
         group_nodes.append(
             XmlElement(
@@ -1023,7 +1061,12 @@ def _acl_node(state: dict[str, Any]) -> XmlElement:
             )
         )
         for rule in acl.get("rules", []):
-            rule_nodes.append(_acl_rule_node(acl["acl_id"], rule))
+            if acl.get("kind") == "basic_ipv4":
+                basic_rule_nodes.append(_acl_rule_node(acl["acl_id"], rule, kind="basic_ipv4"))
+            else:
+                advanced_rule_nodes.append(
+                    _acl_rule_node(acl["acl_id"], rule, kind="advanced_ipv4")
+                )
     if group_nodes:
         acl_children.append(
             XmlElement(
@@ -1032,12 +1075,20 @@ def _acl_node(state: dict[str, Any]) -> XmlElement:
                 children=group_nodes,
             )
         )
-    if rule_nodes:
+    if basic_rule_nodes:
+        acl_children.append(
+            XmlElement(
+                "IPv4BasicRules",
+                namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                children=basic_rule_nodes,
+            )
+        )
+    if advanced_rule_nodes:
         acl_children.append(
             XmlElement(
                 "IPv4AdvanceRules",
                 namespace=H3C_COMWARE_CONFIG_NAMESPACE,
-                children=rule_nodes,
+                children=advanced_rule_nodes,
             )
         )
 
@@ -1086,7 +1137,7 @@ def _acl_node(state: dict[str, Any]) -> XmlElement:
     return XmlElement("ACL", namespace=H3C_COMWARE_CONFIG_NAMESPACE, children=acl_children)
 
 
-def _acl_rule_node(acl_id: int, rule: dict[str, Any]) -> XmlElement:
+def _acl_rule_node(acl_id: int, rule: dict[str, Any], *, kind: str) -> XmlElement:
     children = [
         XmlElement("GroupID", namespace=H3C_COMWARE_CONFIG_NAMESPACE, children=[str(acl_id)]),
         XmlElement(
@@ -1099,20 +1150,23 @@ def _acl_rule_node(acl_id: int, rule: dict[str, Any]) -> XmlElement:
             namespace=H3C_COMWARE_CONFIG_NAMESPACE,
             children=[str(_acl_action_code(rule["action"]))],
         ),
-        XmlElement(
-            "ProtocolType",
-            namespace=H3C_COMWARE_CONFIG_NAMESPACE,
-            children=[str(_acl_protocol_code(rule["protocol"]))],
-        ),
         *_optional_xml_text("Description", rule.get("description")),
     ]
+    if kind == "advanced_ipv4":
+        children.append(
+            XmlElement(
+                "ProtocolType",
+                namespace=H3C_COMWARE_CONFIG_NAMESPACE,
+                children=[str(_acl_protocol_code(rule["protocol"]))],
+            )
+        )
     if rule.get("source") is not None:
         children.extend(_acl_endpoint_nodes("Src", rule["source"]))
-    if rule.get("destination") is not None:
+    if kind == "advanced_ipv4" and rule.get("destination") is not None:
         children.extend(_acl_endpoint_nodes("Dst", rule["destination"]))
-    if rule.get("source_port_eq") is not None:
+    if kind == "advanced_ipv4" and rule.get("source_port_eq") is not None:
         children.append(_acl_port_node("Src", rule["source_port_eq"]))
-    if rule.get("destination_port_eq") is not None:
+    if kind == "advanced_ipv4" and rule.get("destination_port_eq") is not None:
         children.append(_acl_port_node("Dst", rule["destination_port_eq"]))
     return XmlElement("Rule", namespace=H3C_COMWARE_CONFIG_NAMESPACE, children=children)
 
@@ -1198,15 +1252,16 @@ def _h3c_comparable_state(state: dict[str, Any]) -> dict[str, Any]:
         ),
         "acls": sorted(
             [
-                {
+                _without_none_fields({
                     "acl_id": int(acl["acl_id"]),
+                    "kind": acl.get("kind"),
                     "name": acl.get("name"),
                     "description": acl.get("description"),
                     "rules": sorted(
                         [_comparable_acl_rule(rule) for rule in acl.get("rules", [])],
                         key=lambda rule: rule["sequence"],
                     ),
-                }
+                })
                 for acl in state.get("acls", [])
             ],
             key=lambda acl: acl["acl_id"],
@@ -1222,7 +1277,11 @@ def _h3c_comparable_state(state: dict[str, Any]) -> dict[str, Any]:
             ],
             key=lambda binding: (binding["interface_name"], binding["direction"]),
         ),
-    }
+}
+
+
+def _without_none_fields(value: dict[str, Any]) -> dict[str, Any]:
+    return {key: item for key, item in value.items() if item is not None}
 
 
 def _comparable_mode(mode: dict[str, Any]) -> dict[str, Any]:

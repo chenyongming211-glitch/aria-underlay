@@ -9,7 +9,7 @@ use aria_underlay::engine::change_plan::{
 use aria_underlay::engine::diff::{ChangeOp, ChangeSet};
 use aria_underlay::engine::dry_run::build_dry_run_plan;
 use aria_underlay::model::{
-    AclAction, AclBinding, AclConfig, AclDirection, AclProtocol, AclRule, DeviceId, Vendor,
+    AclAction, AclBinding, AclConfig, AclDirection, AclKind, AclProtocol, AclRule, DeviceId, Vendor,
     VlanConfig,
 };
 use aria_underlay::planner::device_plan::DeviceDesiredState;
@@ -123,6 +123,7 @@ fn acl_binding() -> AclBinding {
 fn acl_config() -> AclConfig {
     AclConfig {
         acl_id: 3001,
+        kind: AclKind::AdvancedIpv4,
         name: None,
         description: Some("tenant guard".to_string()),
         rules: vec![AclRule {

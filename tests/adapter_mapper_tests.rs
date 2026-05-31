@@ -6,7 +6,7 @@ use aria_underlay::adapter_client::mapper::{
 use aria_underlay::device::{DeviceInfo, DeviceLifecycleState, HostKeyPolicy};
 use aria_underlay::engine::diff::{ChangeOp, ChangeSet};
 use aria_underlay::model::{
-    AclAction, AclBinding, AclConfig, AclDirection, AclEndpoint, AclProtocol, AclRule,
+    AclAction, AclBinding, AclConfig, AclDirection, AclEndpoint, AclKind, AclProtocol, AclRule,
     AdminState, DeviceId, DeviceRole, InterfaceConfig, PortMode, Vendor, VlanConfig,
 };
 use aria_underlay::planner::device_plan::DeviceDesiredState;
@@ -192,6 +192,7 @@ fn maps_observed_state_to_shadow_state() {
             }],
             acls: vec![adapter::AclConfig {
                 acl_id: 3999,
+                kind: adapter::AclKind::AdvancedIpv4 as i32,
                 name: None,
                 description: Some("temporary acl".into()),
                 rules: vec![adapter::AclRule {
@@ -226,6 +227,7 @@ fn maps_observed_state_to_shadow_state() {
         PortMode::Access { vlan_id: 100 }
     ));
     assert_eq!(shadow.acls[&3999].description.as_deref(), Some("temporary acl"));
+    assert_eq!(shadow.acls[&3999].kind, AclKind::AdvancedIpv4);
     assert_eq!(shadow.acls[&3999].rules[0].action, AclAction::Permit);
     assert_eq!(
         shadow.acl_bindings["GE1/0/1|inbound"],
@@ -235,6 +237,29 @@ fn maps_observed_state_to_shadow_state() {
             acl_id: 3999,
         }
     );
+}
+
+#[test]
+fn rejects_observed_acl_kind_outside_its_numeric_range() {
+    let error = shadow_state_from_proto(
+        adapter::ObservedDeviceState {
+            device_id: "leaf-a".into(),
+            vlans: vec![],
+            interfaces: vec![],
+            acls: vec![adapter::AclConfig {
+                acl_id: 2001,
+                kind: adapter::AclKind::AdvancedIpv4 as i32,
+                name: None,
+                description: None,
+                rules: vec![],
+            }],
+            acl_bindings: vec![],
+        },
+        vec![],
+    )
+    .expect_err("advanced ACL kind must not be accepted in the basic ACL range");
+
+    assert!(format!("{error}").contains("INVALID_ACL_KIND"));
 }
 
 #[test]
@@ -280,6 +305,7 @@ fn maps_desired_state_to_proto() {
     assert_eq!(proto.vlans[0].vlan_id, 100);
     assert_eq!(proto.interfaces[0].mode.as_ref().unwrap().allowed_vlans, vec![100, 200]);
     assert_eq!(proto.acls[0].acl_id, 3999);
+    assert_eq!(proto.acls[0].kind, adapter::AclKind::AdvancedIpv4 as i32);
     assert_eq!(proto.acls[0].rules[0].protocol, adapter::AclProtocol::Tcp as i32);
     assert_eq!(proto.acls[0].rules[0].destination_port_eq, Some(443));
     assert_eq!(proto.acl_bindings[0].interface_name, "GE1/0/1");
@@ -467,6 +493,7 @@ fn desired_state() -> DeviceDesiredState {
 fn acl(acl_id: u16) -> AclConfig {
     AclConfig {
         acl_id,
+        kind: AclKind::AdvancedIpv4,
         name: None,
         description: Some("temporary acl".into()),
         rules: vec![AclRule {

@@ -5,8 +5,8 @@ use aria_underlay::intent::{
     UnderlayTopology,
 };
 use aria_underlay::model::{
-    AclAction, AclDirection, AclProtocol, AclRule, AdminState, DeviceId, DeviceRole, PortMode,
-    Vendor,
+    AclAction, AclDirection, AclKind, AclProtocol, AclRule, AdminState, DeviceId, DeviceRole,
+    PortMode, Vendor,
 };
 use aria_underlay::planner::domain_plan::plan_underlay_domain;
 
@@ -258,6 +258,7 @@ fn access_interface(member_id: &str, name: &str) -> InterfaceIntent {
 fn acl_intent(acl_id: u16) -> AclIntent {
     AclIntent {
         acl_id,
+        kind: AclKind::AdvancedIpv4,
         name: None,
         description: Some("temporary acl".into()),
         rules: vec![AclRule {

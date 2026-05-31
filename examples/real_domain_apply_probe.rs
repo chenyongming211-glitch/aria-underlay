@@ -14,8 +14,8 @@ use aria_underlay::intent::{
     UnderlayTopology,
 };
 use aria_underlay::model::{
-    AclAction, AclDirection, AclEndpoint, AclProtocol, AclRule, AdminState, DeviceId, DeviceRole,
-    PortMode, Vendor,
+    AclAction, AclDirection, AclEndpoint, AclKind, AclProtocol, AclRule, AdminState, DeviceId,
+    DeviceRole, PortMode, Vendor,
 };
 use aria_underlay::state::drift::DriftPolicy;
 
@@ -195,6 +195,7 @@ fn desired_acls() -> Result<Vec<AclIntent>, Box<dyn std::error::Error>> {
 
     Ok(vec![AclIntent {
         acl_id,
+        kind: AclKind::AdvancedIpv4,
         name: None,
         description: optional_env("ARIA_UNDERLAY_TEST_ACL_DESCRIPTION"),
         rules: vec![rule],

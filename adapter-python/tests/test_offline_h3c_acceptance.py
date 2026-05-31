@@ -25,12 +25,13 @@ def test_offline_h3c_acceptance_reports_supported_surface(tmp_path, capsys):
     assert report["vendor"] == "h3c"
     assert report["profile_name"] == "comware7-vlan-real"
     assert report["status"] == "passed"
-    assert report["scenario_count"] == 5
-    assert report["passed"] == 5
+    assert report["scenario_count"] == 6
+    assert report["passed"] == 6
     assert report["failed"] == 0
     assert {scenario["name"] for scenario in report["scenarios"]} == {
         "vlan_access_description",
         "trunk_allowed_vlans",
+        "ipv4_basic_acl_rules",
         "ipv4_acl_rules",
         "acl_interface_binding",
         "explicit_delete_cleanup",
@@ -48,6 +49,7 @@ def test_offline_h3c_acceptance_reports_supported_surface(tmp_path, capsys):
         "access_interface",
         "interface_description",
         "trunk_interface",
+        "ipv4_basic_acl",
         "ipv4_advanced_acl",
         "acl_rule_description",
         "acl_interface_binding",
@@ -57,7 +59,7 @@ def test_offline_h3c_acceptance_reports_supported_surface(tmp_path, capsys):
     }
 
     assert json.loads(json_report.read_text()) == report
-    assert "Offline H3C acceptance: passed (5/5)" in captured.err
+    assert "Offline H3C acceptance: passed (6/6)" in captured.err
     assert summary.read_text() == captured.err
 
 

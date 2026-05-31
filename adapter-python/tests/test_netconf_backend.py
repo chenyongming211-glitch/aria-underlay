@@ -1791,6 +1791,38 @@ def test_verify_running_fails_with_parsed_acl_mismatch():
         raise AssertionError("parsed ACL mismatch should fail verification")
 
 
+def test_verify_running_fails_with_acl_kind_range_mismatch():
+    session = _RecordingSession()
+    parser = _StaticStateParser(
+        state={
+            "vlans": [],
+            "interfaces": [],
+            "acls": [
+                {
+                    "acl_id": 2001,
+                    "kind": "advanced_ipv4",
+                    "name": None,
+                    "description": None,
+                    "rules": [],
+                }
+            ],
+        }
+    )
+    backend = _BackendWithSession(session, state_parser=parser)
+    desired = pb2.DesiredDeviceState(
+        device_id="leaf-a",
+        acls=[pb2.AclConfig(acl_id=2001, kind=pb2.ACL_KIND_BASIC_IPV4)],
+    )
+
+    try:
+        backend.verify_running(desired, scope=_Scope(False, [], [], [2001]))
+    except AdapterError as error:
+        assert error.code == "VERIFY_FAILED"
+        assert "advanced IPv4 ACL ID out of range" in error.raw_error_summary
+    else:
+        raise AssertionError("ACL kind/range mismatch should fail verification")
+
+
 class _BackendWithSession(NcclientNetconfBackend):
     def __init__(
         self,
