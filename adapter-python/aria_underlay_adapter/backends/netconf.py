@@ -36,6 +36,9 @@ from aria_underlay_adapter.backends.netconf_hostkey import (
 from aria_underlay_adapter.backends.netconf_hostkey import (
     validate_known_hosts_path as _validate_known_hosts_path,
 )
+from aria_underlay_adapter.backends.netconf_model_profile import (
+    probe_openconfig_netconf_paths as _probe_openconfig_netconf_paths,
+)
 from aria_underlay_adapter.backends.netconf_state import build_state_filter
 from aria_underlay_adapter.backends.netconf_state import (
     desired_state_is_empty as _desired_state_is_empty,
@@ -112,12 +115,17 @@ class NcclientNetconfBackend:
         try:
             with self._connect() as session:
                 raw = [str(capability) for capability in session.server_capabilities]
+                module_only_capability = capability_from_raw(raw)
+                verified_paths = _probe_openconfig_netconf_paths(
+                    session,
+                    module_only_capability,
+                )
         except AdapterError:
             raise
         except Exception as exc:
             raise _adapter_error_from_ncclient_exception(exc) from exc
 
-        return capability_from_raw(raw)
+        return capability_from_raw(raw, verified_paths=verified_paths)
 
     def _connect(self):
         if self.pinned_host_key_fingerprint:
@@ -722,7 +730,11 @@ def _force_unlock_session_id(lock_owner: str | None) -> str:
 NetconfBackend = NcclientNetconfBackend
 
 
-def capability_from_raw(raw_capabilities: Iterable[str]) -> BackendCapability:
+def capability_from_raw(
+    raw_capabilities: Iterable[str],
+    *,
+    verified_paths: dict[str, dict] | None = None,
+) -> BackendCapability:
     raw = list(raw_capabilities)
     raw_set = set(raw)
     supports_netconf = BASE_10 in raw_set or BASE_11 in raw_set
@@ -754,6 +766,6 @@ def capability_from_raw(raw_capabilities: Iterable[str]) -> BackendCapability:
             supports_candidate=supports_candidate,
             supports_validate=supports_validate,
             supported_modules=yang_modules,
-            verified_paths={},
+            verified_paths=verified_paths or {},
         ),
     )

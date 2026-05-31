@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from urllib.parse import parse_qs, urlparse
 
 BGP_REQUIRED_MODULES = {
@@ -21,6 +22,70 @@ PBR_REQUIRED_PATHS = {
     "/network-instances/network-instance/policy-forwarding",
     "/interfaces",
 }
+OPENCONFIG_NETWORK_INSTANCE_NS = "http://openconfig.net/yang/network-instance"
+OPENCONFIG_BGP_NS = "http://openconfig.net/yang/bgp"
+OPENCONFIG_ROUTING_POLICY_NS = "http://openconfig.net/yang/routing-policy"
+OPENCONFIG_POLICY_FORWARDING_NS = "http://openconfig.net/yang/policy-forwarding"
+OPENCONFIG_INTERFACES_NS = "http://openconfig.net/yang/interfaces"
+
+
+@dataclass(frozen=True)
+class NetconfPathProbeTarget:
+    path: str
+    model: str
+    revision: str
+    read_filter_xml: str
+    test_config_xml: str
+
+
+_OPENCONFIG_NETCONF_PROBE_TEMPLATES = (
+    {
+        "path": "/network-instances/network-instance/protocols/protocol/bgp",
+        "model": "openconfig-bgp",
+        "required_modules": {
+            "openconfig-network-instance",
+            "openconfig-bgp",
+        },
+        "filter_xml": (
+            f'<network-instances xmlns="{OPENCONFIG_NETWORK_INSTANCE_NS}">'
+            "<network-instance>"
+            "<protocols>"
+            "<protocol>"
+            f'<bgp xmlns="{OPENCONFIG_BGP_NS}"/>'
+            "</protocol>"
+            "</protocols>"
+            "</network-instance>"
+            "</network-instances>"
+        ),
+    },
+    {
+        "path": "/network-instances/network-instance/policy-forwarding",
+        "model": "openconfig-policy-forwarding",
+        "required_modules": {
+            "openconfig-network-instance",
+            "openconfig-policy-forwarding",
+        },
+        "filter_xml": (
+            f'<network-instances xmlns="{OPENCONFIG_NETWORK_INSTANCE_NS}">'
+            "<network-instance>"
+            f'<policy-forwarding xmlns="{OPENCONFIG_POLICY_FORWARDING_NS}"/>'
+            "</network-instance>"
+            "</network-instances>"
+        ),
+    },
+    {
+        "path": "/routing-policy",
+        "model": "openconfig-routing-policy",
+        "required_modules": {"openconfig-routing-policy"},
+        "filter_xml": f'<routing-policy xmlns="{OPENCONFIG_ROUTING_POLICY_NS}"/>',
+    },
+    {
+        "path": "/interfaces",
+        "model": "openconfig-interfaces",
+        "required_modules": {"openconfig-interfaces"},
+        "filter_xml": f'<interfaces xmlns="{OPENCONFIG_INTERFACES_NS}"/>',
+    },
+)
 
 
 def extract_yang_modules_from_capabilities(capabilities: list[str]) -> dict[str, str]:
@@ -35,6 +100,31 @@ def extract_yang_modules_from_capabilities(capabilities: list[str]) -> dict[str,
     return modules
 
 
+def openconfig_netconf_probe_targets(
+    supported_modules: dict[str, str],
+) -> list[NetconfPathProbeTarget]:
+    targets: list[NetconfPathProbeTarget] = []
+    module_names = set(supported_modules.keys())
+    for template in sorted(
+        _OPENCONFIG_NETCONF_PROBE_TEMPLATES,
+        key=lambda item: item["path"],
+    ):
+        if not template["required_modules"].issubset(module_names):
+            continue
+        model = str(template["model"])
+        read_filter_xml = str(template["filter_xml"])
+        targets.append(
+            NetconfPathProbeTarget(
+                path=str(template["path"]),
+                model=model,
+                revision=supported_modules.get(model, ""),
+                read_filter_xml=read_filter_xml,
+                test_config_xml=f"<config>{read_filter_xml}</config>",
+            )
+        )
+    return targets
+
+
 def classify_model_profile(
     *,
     vendor: str,
@@ -43,7 +133,7 @@ def classify_model_profile(
     supports_candidate: bool,
     supports_validate: bool,
     supported_modules: dict[str, str],
-    verified_paths: dict[str, dict[str, bool]],
+    verified_paths: dict[str, dict],
 ) -> dict:
     rejection_reasons: list[str] = []
     bgp_ready = _classify_feature(
@@ -86,7 +176,7 @@ def _classify_feature(
     supports_candidate: bool,
     supports_validate: bool,
     supported_modules: dict[str, str],
-    verified_paths: dict[str, dict[str, bool]],
+    verified_paths: dict[str, dict],
     rejection_reasons: list[str],
 ) -> str:
     if not supports_candidate or not supports_validate:
@@ -113,21 +203,25 @@ def _classify_feature(
 def _profile_paths(
     *,
     supported_modules: dict[str, str],
-    verified_paths: dict[str, dict[str, bool]],
+    verified_paths: dict[str, dict],
 ) -> list[dict]:
     paths: list[dict] = []
     for path, result in sorted(verified_paths.items()):
         paths.append(
             {
                 "protocol": "openconfig_netconf",
-                "model": _best_matching_model(path, supported_modules),
-                "revision": "",
+                "model": result.get("model")
+                or _best_matching_model(path, supported_modules),
+                "revision": result.get("revision")
+                or supported_modules.get(
+                    result.get("model") or _best_matching_model(path, supported_modules), ""
+                ),
                 "path": path,
                 "readable": result.get("readable", False),
                 "writable": result.get("writable", False),
                 "verified_on_device": True,
-                "deviations": [],
-                "notes": [],
+                "deviations": result.get("deviations", []),
+                "notes": result.get("notes", []),
             }
         )
     return paths

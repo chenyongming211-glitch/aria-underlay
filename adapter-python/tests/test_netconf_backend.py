@@ -61,6 +61,78 @@ def test_capability_from_raw_detects_running_rollback_profile():
     assert capability.supports_rollback_on_error is True
 
 
+def test_get_capabilities_probes_openconfig_paths_with_netconf_read_and_test_only_write():
+    session = _RecordingSession(
+        reply=_Reply("<data/>"),
+        server_capabilities=[
+            BASE_10,
+            CANDIDATE,
+            VALIDATE_11,
+            "http://openconfig.net/yang/network-instance?module=openconfig-network-instance&revision=2024-10-30",
+            "http://openconfig.net/yang/bgp?module=openconfig-bgp&revision=2024-10-30",
+            "http://openconfig.net/yang/routing-policy?module=openconfig-routing-policy&revision=2024-10-30",
+        ],
+    )
+    backend = _BackendWithSession(session)
+
+    capability = backend.get_capabilities()
+
+    paths = {path["path"]: path for path in capability.model_profile["paths"]}
+    assert paths["/network-instances/network-instance/protocols/protocol/bgp"] == {
+        "protocol": "openconfig_netconf",
+        "model": "openconfig-bgp",
+        "revision": "2024-10-30",
+        "path": "/network-instances/network-instance/protocols/protocol/bgp",
+        "readable": True,
+        "writable": True,
+        "verified_on_device": True,
+        "deviations": [],
+        "notes": [
+            "netconf get-config read probe succeeded",
+            "netconf test-only write probe succeeded",
+        ],
+    }
+    assert paths["/routing-policy"]["readable"] is True
+    assert paths["/routing-policy"]["writable"] is True
+    assert capability.model_profile["bgp_write_readiness"] == "write_safe"
+    assert [
+        call[0]
+        for call in session.calls
+        if call[0] in {"get_config", "edit_config"}
+    ] == ["get_config", "edit_config", "get_config", "edit_config"]
+    assert session.calls[0][1]["source"] == "running"
+    assert session.calls[0][1]["filter"][0] == "subtree"
+    assert "openconfig.net/yang/network-instance" in session.calls[0][1]["filter"][1]
+    assert session.calls[1][1]["target"] == "candidate"
+    assert session.calls[1][1]["test_option"] == "test-only"
+    assert session.calls[1][1]["error_option"] == "rollback-on-error"
+
+
+def test_get_capabilities_does_not_claim_writable_without_validate_11_test_only():
+    session = _RecordingSession(
+        reply=_Reply("<data/>"),
+        server_capabilities=[
+            BASE_10,
+            CANDIDATE,
+            VALIDATE_10,
+            "http://openconfig.net/yang/network-instance?module=openconfig-network-instance&revision=2024-10-30",
+            "http://openconfig.net/yang/bgp?module=openconfig-bgp&revision=2024-10-30",
+            "http://openconfig.net/yang/routing-policy?module=openconfig-routing-policy&revision=2024-10-30",
+        ],
+    )
+    backend = _BackendWithSession(session)
+
+    capability = backend.get_capabilities()
+
+    paths = {path["path"]: path for path in capability.model_profile["paths"]}
+    bgp_path = paths["/network-instances/network-instance/protocols/protocol/bgp"]
+    assert bgp_path["readable"] is True
+    assert bgp_path["writable"] is False
+    assert capability.model_profile["bgp_write_readiness"] == "read_only"
+    assert "missing safe NETCONF test-only support" in bgp_path["notes"]
+    assert [call[0] for call in session.calls] == ["get_config", "get_config"]
+
+
 def test_legacy_netconf_backend_name_points_to_ncclient_backend():
     assert NetconfBackend is NcclientNetconfBackend
 
