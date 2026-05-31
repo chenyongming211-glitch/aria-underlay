@@ -339,3 +339,37 @@ def _yang_filename(name: str, revision: str) -> str:
     if revision:
         return f"{name}@{revision}.yang"
     return f"{name}.yang"
+
+
+def collect_and_save_yang_schemas(
+    session,
+    raw_capabilities: list[str],
+    *,
+    yang_library_dir: str | None = None,
+    vendor: str = "unknown",
+    model: str = "unknown",
+    os_version: str = "unknown",
+) -> list[dict]:
+    """Collect YANG schemas from a live NETCONF session and optionally save.
+
+    Schema collection failures are non-fatal: any exception is caught and
+    reported as an empty result. Always returns the per-module summary list.
+    """
+    try:
+        collection = collect_yang_schemas(session, raw_capabilities)
+    except Exception:
+        return []
+
+    if yang_library_dir:
+        try:
+            save_yang_library(
+                collection,
+                vendor=vendor,
+                model=model,
+                os_version=os_version,
+                base_dir=yang_library_dir,
+            )
+        except Exception:
+            pass
+
+    return collection.to_summary_dicts()

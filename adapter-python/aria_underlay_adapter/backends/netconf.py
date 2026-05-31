@@ -46,8 +46,7 @@ from aria_underlay_adapter.backends.netconf_model_profile import (
     probe_openconfig_netconf_paths as _probe_openconfig_netconf_paths,
 )
 from aria_underlay_adapter.backends.yang_schema import (
-    collect_yang_schemas as _collect_yang_schemas,
-    save_yang_library as _save_yang_library,
+    collect_and_save_yang_schemas as _collect_and_save_yang_schemas,
 )
 from aria_underlay_adapter.backends.netconf_state import build_state_filter
 from aria_underlay_adapter.backends.netconf_state import (
@@ -765,38 +764,6 @@ def _force_unlock_session_id(lock_owner: str | None) -> str:
 
 
 NetconfBackend = NcclientNetconfBackend
-
-
-def _collect_and_save_yang_schemas(
-    session,
-    raw_capabilities: list[str],
-    *,
-    yang_library_dir: str | None = None,
-) -> list[dict]:
-    """Collect YANG schemas from a live NETCONF session and optionally save to disk.
-
-    Schema collection failures are non-fatal: any exception is caught and
-    reported as a warning. The function always returns the per-module
-    summary list so the capability response can include it.
-    """
-    try:
-        collection = _collect_yang_schemas(session, raw_capabilities)
-    except Exception:
-        return []
-
-    if yang_library_dir:
-        try:
-            _save_yang_library(
-                collection,
-                vendor="unknown",
-                model="unknown",
-                os_version="unknown",
-                base_dir=yang_library_dir,
-            )
-        except Exception:
-            pass
-
-    return collection.to_summary_dicts()
 
 
 def capability_from_raw(
