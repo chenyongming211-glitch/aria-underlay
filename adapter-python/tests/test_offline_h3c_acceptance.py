@@ -169,3 +169,98 @@ def test_offline_h3c_acceptance_summary_marks_parser_loop(capsys):
     assert "pbr_policies=pbr-tenant-a" in captured.err
     assert "acl_refs=3999" in captured.err
     assert "interfaces=GigabitEthernet1/0/13" in captured.err
+
+
+def test_offline_h3c_acceptance_loads_pbr_bgp_real_samples(tmp_path):
+    sample_dir = tmp_path / "real_samples"
+    sample_dir.mkdir()
+    sample = sample_dir / "20260531-s5560-comware7-pbr-bgp.redacted.xml"
+    sample.write_text(_pbr_bgp_real_sample_xml())
+
+    report = offline_h3c.run_acceptance(pbr_bgp_sample_dir=sample_dir)
+
+    assert report["status"] == "passed"
+    assert report["real_sample_audit_count"] == 1
+    assert report["real_sample_audit_failed"] == 0
+
+    sample_audit = report["real_sample_audits"][0]
+    assert sample_audit["name"] == "real_sample:20260531-s5560-comware7-pbr-bgp.redacted.xml"
+    assert sample_audit["status"] == "passed"
+    assert sample_audit["sample_path"] == str(sample)
+    assert sample_audit["sample_source"] == "real_sample"
+    assert sample_audit["surface"] == ["pbr", "bgp"]
+    assert sample_audit["write_decision"] == "read_only"
+    assert sample_audit["features_present"] == ["bgp", "pbr"]
+    assert sample_audit["touched_scope"] == {
+        "affected_vrfs": ["tenant-b"],
+        "bgp_as_numbers": [65010],
+        "bgp_neighbors": ["203.0.113.10"],
+        "route_policy_refs": ["rp-redacted-in"],
+        "pbr_policy_refs": ["pbr-redacted"],
+        "acl_refs": [3998],
+        "interfaces": ["GigabitEthernet1/0/24"],
+        "raw_paths": ["/data/top/BGP", "/data/top/PBR"],
+    }
+    assert sample_audit["unsupported_paths"] == [
+        "bgp: no path-level write evidence",
+        "pbr: no path-level write evidence",
+    ]
+
+
+def test_offline_h3c_acceptance_missing_real_sample_dir_is_nonfatal(tmp_path):
+    report = offline_h3c.run_acceptance(pbr_bgp_sample_dir=tmp_path / "missing")
+
+    assert report["status"] == "passed"
+    assert report["real_sample_audit_count"] == 0
+    assert report["real_sample_audit_failed"] == 0
+    assert report["real_sample_audits"] == []
+
+
+def test_offline_h3c_acceptance_cli_reports_real_sample_scope(tmp_path, capsys):
+    sample_dir = tmp_path / "real_samples"
+    sample_dir.mkdir()
+    sample = sample_dir / "20260531-s5560-comware7-pbr-bgp.redacted.xml"
+    sample.write_text(_pbr_bgp_real_sample_xml())
+
+    result = offline_h3c.main(["--pbr-bgp-sample-dir", str(sample_dir)])
+
+    captured = capsys.readouterr()
+
+    assert result == 0
+    assert "real_sample:20260531-s5560-comware7-pbr-bgp.redacted.xml" in captured.err
+    assert f"sample={sample}" in captured.err
+    assert "vrfs=tenant-b" in captured.err
+    assert "bgp_neighbors=203.0.113.10" in captured.err
+    assert "pbr_policies=pbr-redacted" in captured.err
+
+
+def _pbr_bgp_real_sample_xml() -> str:
+    return """
+    <data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+      <top xmlns="http://www.h3c.com/netconf/config:1.0">
+        <PBR>
+          <Policies>
+            <Policy>
+              <PolicyName>pbr-redacted</PolicyName>
+              <AclNumber>3998</AclNumber>
+              <ApplyInterface>GigabitEthernet1/0/24</ApplyInterface>
+            </Policy>
+          </Policies>
+        </PBR>
+        <BGP>
+          <Instances>
+            <Instance>
+              <ASNumber>65010</ASNumber>
+              <VRF>tenant-b</VRF>
+              <Peers>
+                <Peer>
+                  <PeerAddress>203.0.113.10</PeerAddress>
+                  <ImportPolicy>rp-redacted-in</ImportPolicy>
+                </Peer>
+              </Peers>
+            </Instance>
+          </Instances>
+        </BGP>
+      </top>
+    </data>
+    """

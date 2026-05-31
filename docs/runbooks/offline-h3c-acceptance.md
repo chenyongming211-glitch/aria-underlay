@@ -61,3 +61,32 @@ affected VRFs, BGP AS numbers, neighbors, route-policy references, PBR policy
 references, ACL references, interfaces, raw XML paths, and warnings, and returns
 `write_decision=read_only` with unsupported paths until real path-level write
 evidence exists.
+
+## PBR/BGP Real-Sample Calibration
+
+When there is no live switch environment, the runner can still calibrate the
+PBR/BGP parser against redacted real running XML samples:
+
+```bash
+cd adapter-python
+python -m aria_underlay_adapter.acceptance.offline_h3c \
+  --pbr-bgp-sample-dir tests/fixtures/state_parsers/real_samples/h3c/comware7 \
+  --pretty
+```
+
+The default sample directory is
+`adapter-python/tests/fixtures/state_parsers/real_samples/h3c/comware7`. Missing
+directories and empty directories are non-fatal, so CI stays green until real
+samples are available. Once `*.xml` files exist, each sample is parsed and
+reported under `real_sample_audits` with:
+
+- `sample_path` and `sample_source`.
+- `features_present`.
+- `write_decision`.
+- structured `touched_scope`.
+- `unsupported_paths`.
+- `warnings`.
+
+Invalid XML or parser errors fail the report for that sample. Passing sample
+audits are parser calibration evidence only; they do not enable PBR/BGP writes
+and do not replace real-device path-level profile verification.

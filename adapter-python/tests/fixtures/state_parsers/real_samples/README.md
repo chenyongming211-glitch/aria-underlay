@@ -121,6 +121,33 @@ aria-underlay-state-parse --manifest samples.json --pretty
 Keep manifest XML paths relative to the manifest file when possible so the
 redacted sample set remains portable inside this fixture tree.
 
+## PBR/BGP Calibration Samples
+
+For H3C PBR/BGP read-only calibration, place redacted running XML samples under:
+
+```text
+real_samples/h3c/comware7/
+```
+
+Then run:
+
+```bash
+cd adapter-python
+python -m aria_underlay_adapter.acceptance.offline_h3c \
+  --pbr-bgp-sample-dir tests/fixtures/state_parsers/real_samples/h3c/comware7 \
+  --pretty
+```
+
+The offline runner reports each XML file under `real_sample_audits`. It extracts
+PBR/BGP `features_present`, `write_decision`, `unsupported_paths`, warnings, and
+structured `touched_scope` fields such as affected VRFs, BGP AS numbers,
+neighbors, route-policy references, PBR policy references, ACL references,
+interfaces, and raw XML paths.
+
+No sample or missing sample directory is non-fatal. A committed malformed XML
+sample or a parser failure is fatal, because that means the parser calibration
+fixture is invalid or the parser has a real gap.
+
 ## Production Readiness Rule
 
 A sample that passes validator checks is evidence, not approval. Keep parser profiles `production_ready=False` until the real sample set, tests, and parser profile have been reviewed together.

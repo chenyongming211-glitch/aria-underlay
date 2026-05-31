@@ -21,6 +21,15 @@ from aria_underlay_adapter.state_parsers.h3c import H3cStateParser
 
 RUNNER_NAME = "offline-h3c-acceptance"
 VENDOR = "h3c"
+DEFAULT_PBR_BGP_SAMPLE_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "tests"
+    / "fixtures"
+    / "state_parsers"
+    / "real_samples"
+    / "h3c"
+    / "comware7"
+)
 
 
 @dataclass(frozen=True)
@@ -32,7 +41,11 @@ class Scenario:
     seed: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
 
-def run_acceptance(*, backend_profile: str = "confirmed") -> dict[str, Any]:
+def run_acceptance(
+    *,
+    backend_profile: str = "confirmed",
+    pbr_bgp_sample_dir: str | Path | None = None,
+) -> dict[str, Any]:
     renderer = H3cRenderer()
     parser = H3cStateParser(model_hint="S5560-54C-EI")
     scenario_reports = []
@@ -50,10 +63,23 @@ def run_acceptance(*, backend_profile: str = "confirmed") -> dict[str, Any]:
             scenario_reports.append(_failed_scenario_report(scenario, exc))
 
     read_only_audits = [_run_pbr_bgp_read_only_audit(parser)]
+    real_sample_audits = _run_pbr_bgp_real_sample_audits(
+        parser,
+        sample_dir=Path(pbr_bgp_sample_dir)
+        if pbr_bgp_sample_dir is not None
+        else DEFAULT_PBR_BGP_SAMPLE_DIR,
+    )
     passed = sum(1 for scenario in scenario_reports if scenario["status"] == "passed")
     failed = len(scenario_reports) - passed
     audit_failed = sum(1 for audit in read_only_audits if audit["status"] != "passed")
-    status = "passed" if failed == 0 and audit_failed == 0 else "failed"
+    real_sample_audit_failed = sum(
+        1 for audit in real_sample_audits if audit["status"] != "passed"
+    )
+    status = (
+        "passed"
+        if failed == 0 and audit_failed == 0 and real_sample_audit_failed == 0
+        else "failed"
+    )
     return {
         "runner": RUNNER_NAME,
         "vendor": VENDOR,
@@ -68,6 +94,9 @@ def run_acceptance(*, backend_profile: str = "confirmed") -> dict[str, Any]:
         "read_only_audit_count": len(read_only_audits),
         "read_only_audit_failed": audit_failed,
         "read_only_audits": read_only_audits,
+        "real_sample_audit_count": len(real_sample_audits),
+        "real_sample_audit_failed": real_sample_audit_failed,
+        "real_sample_audits": real_sample_audits,
     }
 
 
@@ -134,6 +163,39 @@ def format_summary(report: dict[str, Any]) -> str:
                     error.get("message", ""),
                 )
             )
+    for audit in report.get("real_sample_audits", []):
+        if audit["status"] == "passed":
+            touched_scope = audit.get("touched_scope", {})
+            lines.append(
+                "- {}: passed [{}], sample={}, changed={}, "
+                "write_decision={}, blast_radius={}, vrfs={}, "
+                "bgp_neighbors={}, route_policies={}, pbr_policies={}, "
+                "acl_refs={}, interfaces={}".format(
+                    audit["name"],
+                    ", ".join(audit["surface"]),
+                    audit["sample_path"],
+                    str(audit["changed"]).lower(),
+                    audit["write_decision"],
+                    audit["blast_radius"],
+                    _format_summary_values(touched_scope.get("affected_vrfs", [])),
+                    _format_summary_values(touched_scope.get("bgp_neighbors", [])),
+                    _format_summary_values(touched_scope.get("route_policy_refs", [])),
+                    _format_summary_values(touched_scope.get("pbr_policy_refs", [])),
+                    _format_summary_values(touched_scope.get("acl_refs", [])),
+                    _format_summary_values(touched_scope.get("interfaces", [])),
+                )
+            )
+        else:
+            error = audit.get("error", {})
+            lines.append(
+                "- {}: failed [{}], sample={}, {}: {}".format(
+                    audit["name"],
+                    ", ".join(audit["surface"]),
+                    audit.get("sample_path", ""),
+                    error.get("code", "ERROR"),
+                    error.get("message", ""),
+                )
+            )
     return "\n".join(lines) + "\n"
 
 
@@ -143,7 +205,10 @@ def _format_summary_values(values: list[Any]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    report = run_acceptance(backend_profile=args.backend_profile)
+    report = run_acceptance(
+        backend_profile=args.backend_profile,
+        pbr_bgp_sample_dir=args.pbr_bgp_sample_dir,
+    )
     json_output = _to_json(report, pretty=args.pretty)
     summary = format_summary(report)
 
@@ -317,6 +382,114 @@ def _run_pbr_bgp_read_only_audit(parser: H3cStateParser) -> dict[str, Any]:
         "pbr": audit["pbr"],
         "bgp": audit["bgp"],
         "warnings": audit["warnings"],
+    }
+
+
+def _run_pbr_bgp_real_sample_audits(
+    parser: H3cStateParser,
+    *,
+    sample_dir: Path,
+) -> list[dict[str, Any]]:
+    if not sample_dir.exists():
+        return []
+    if not sample_dir.is_dir():
+        return [
+            _failed_real_sample_audit(
+                sample_dir,
+                ValueError(f"PBR/BGP sample path is not a directory: {sample_dir}"),
+            )
+        ]
+
+    audits = []
+    for sample in sorted(sample_dir.rglob("*.xml")):
+        try:
+            audits.append(_run_pbr_bgp_real_sample_audit(parser, sample))
+        except Exception as exc:  # pragma: no cover - exercised through reports
+            audits.append(_failed_real_sample_audit(sample, exc))
+    return audits
+
+
+def _run_pbr_bgp_real_sample_audit(
+    parser: H3cStateParser,
+    sample: Path,
+) -> dict[str, Any]:
+    parsed = parser.parse_running(sample.read_text())
+    audit = parsed.get("high_risk_audit")
+    if audit is None:
+        audit = _empty_high_risk_audit()
+
+    unsupported_paths = []
+    if "bgp" in audit["features_present"]:
+        unsupported_paths.append("bgp: no path-level write evidence")
+    if "pbr" in audit["features_present"]:
+        unsupported_paths.append("pbr: no path-level write evidence")
+
+    return {
+        "name": f"real_sample:{sample.name}",
+        "status": "passed",
+        "sample_source": "real_sample",
+        "sample_path": str(sample),
+        "surface": ["pbr", "bgp"],
+        "stages": ["parse", "audit"],
+        "changed": False,
+        "write_decision": audit["write_decision"],
+        "features_present": audit["features_present"],
+        "blast_radius": "routing_control_plane",
+        "unsupported_paths": unsupported_paths,
+        "touched_scope": audit["touched_scope"],
+        "pbr": audit["pbr"],
+        "bgp": audit["bgp"],
+        "warnings": audit["warnings"],
+    }
+
+
+def _failed_real_sample_audit(sample: Path, exc: Exception) -> dict[str, Any]:
+    return {
+        "name": f"real_sample:{sample.name}",
+        "status": "failed",
+        "sample_source": "real_sample",
+        "sample_path": str(sample),
+        "surface": ["pbr", "bgp"],
+        "stages": ["parse", "audit"],
+        "changed": False,
+        "write_decision": "rejected",
+        "features_present": [],
+        "blast_radius": "routing_control_plane",
+        "unsupported_paths": [
+            "bgp: parser audit failed",
+            "pbr: parser audit failed",
+        ],
+        "warnings": [],
+        "pbr": {},
+        "bgp": {},
+        "touched_scope": _empty_high_risk_touched_scope(),
+        "error": _error_payload(exc),
+    }
+
+
+def _empty_high_risk_audit() -> dict[str, Any]:
+    return {
+        "features_present": [],
+        "write_decision": "no_high_risk_features",
+        "touched_scope": _empty_high_risk_touched_scope(),
+        "pbr": {
+            "present": False,
+            "blast_radius": "policy_reference",
+            "policies": [],
+            "acl_references": [],
+            "interfaces": [],
+            "raw_paths": [],
+        },
+        "bgp": {
+            "present": False,
+            "blast_radius": "routing_control_plane",
+            "as_numbers": [],
+            "vrfs": [],
+            "neighbors": [],
+            "policy_references": [],
+            "raw_paths": [],
+        },
+        "warnings": ["no PBR/BGP config detected in sample"],
     }
 
 
@@ -1157,6 +1330,15 @@ def _parser() -> argparse.ArgumentParser:
         "--summary",
         type=Path,
         help="Optional path for the human-readable summary.",
+    )
+    parser.add_argument(
+        "--pbr-bgp-sample-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional directory of redacted H3C running XML samples for "
+            "PBR/BGP read-only calibration. Missing directories are ignored."
+        ),
     )
     parser.add_argument(
         "--pretty",
