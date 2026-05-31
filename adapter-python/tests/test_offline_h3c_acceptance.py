@@ -80,6 +80,30 @@ def test_offline_h3c_acceptance_includes_rendered_xml_and_state_counts():
         assert scenario["parsed_counts"] == scenario["observed_counts"]
 
 
+def test_offline_h3c_acceptance_reports_change_plan_metadata():
+    report = offline_h3c.run_acceptance()
+
+    for scenario in report["scenarios"]:
+        assert "change_plan" in scenario
+        assert scenario["change_plan"]["stages"]
+        assert scenario["change_plan"]["blast_radius"] in {
+            "local_interface_or_vlan",
+            "policy_reference",
+        }
+        assert "dependency_edges" in scenario["change_plan"]
+        assert "rollback_order" in scenario["change_plan"]
+
+    by_name = {scenario["name"]: scenario for scenario in report["scenarios"]}
+    assert (
+        by_name["vlan_access_description"]["change_plan"]["blast_radius"]
+        == "local_interface_or_vlan"
+    )
+    assert (
+        by_name["explicit_delete_cleanup"]["change_plan"]["blast_radius"]
+        == "policy_reference"
+    )
+
+
 def test_offline_h3c_acceptance_summary_marks_parser_loop(capsys):
     result = offline_h3c.main([])
 

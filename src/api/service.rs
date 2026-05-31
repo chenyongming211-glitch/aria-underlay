@@ -358,6 +358,7 @@ impl AriaUnderlayService {
             device_results: device_results_from_plan(&plan),
             noop: plan.is_noop(),
             change_sets: plan.change_sets,
+            change_plans: plan.change_plans,
         })
     }
 
@@ -487,6 +488,7 @@ impl UnderlayService for AriaUnderlayService {
             device_results: device_results_from_plan(&plan),
             noop: plan.is_noop(),
             change_sets: plan.change_sets,
+            change_plans: plan.change_plans,
         })
     }
 

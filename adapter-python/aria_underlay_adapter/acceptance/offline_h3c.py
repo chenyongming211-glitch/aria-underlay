@@ -77,14 +77,16 @@ def format_summary(report: dict[str, Any]) -> str:
     for scenario in report["scenarios"]:
         surface = ", ".join(scenario["surface"])
         if scenario["status"] == "passed":
+            change_plan = scenario["change_plan"]
             lines.append(
                 "- {}: passed [{}], changed={}, xml_bytes={}, "
-                "readback_xml_bytes={}, parser_loop=true".format(
+                "readback_xml_bytes={}, blast_radius={}, parser_loop=true".format(
                     scenario["name"],
                     surface,
                     str(scenario["changed"]).lower(),
                     scenario["xml_bytes"],
                     scenario["readback_xml_bytes"],
+                    change_plan["blast_radius"],
                 )
             )
         else:
@@ -146,6 +148,7 @@ def _run_scenario(
         "name": scenario.name,
         "status": "passed",
         "surface": list(scenario.surface),
+        "change_plan": _change_plan_report(scenario),
         **result,
     }
 
@@ -209,6 +212,7 @@ def _failed_scenario_report(scenario: Scenario, exc: Exception) -> dict[str, Any
         "name": scenario.name,
         "status": "failed",
         "surface": list(scenario.surface),
+        "change_plan": _change_plan_report(scenario),
         "changed": False,
         "warnings": [],
         "candidate_checksum": "",
@@ -230,6 +234,76 @@ def _failed_scenario_report(scenario: Scenario, exc: Exception) -> dict[str, Any
         },
         "error": _error_payload(exc),
     }
+
+
+def _change_plan_report(scenario: Scenario) -> dict[str, Any]:
+    surface = set(scenario.surface)
+    is_policy = any("acl" in item for item in surface)
+    has_delete = any(item.startswith("delete_") for item in surface)
+
+    stages: list[str] = []
+    if has_delete:
+        if "delete_acl_binding" in surface:
+            stages.append("unbind_references")
+        stages.append("delete_base_objects")
+    else:
+        if {"vlan_create", "ipv4_advanced_acl"} & surface:
+            stages.append("create_base_objects")
+        if {
+            "vlan_description",
+            "access_interface",
+            "interface_description",
+            "trunk_interface",
+        } & surface:
+            stages.append("update_base_objects")
+        if "acl_interface_binding" in surface:
+            stages.append("bind_references")
+
+    if not stages:
+        stages.append("update_base_objects")
+
+    dependency_edges: list[dict[str, str]] = []
+    if "acl_interface_binding" in surface:
+        dependency_edges.append(
+            {
+                "from": "acl-binding interface inbound",
+                "to": "acl object",
+            }
+        )
+    if "delete_acl" in surface:
+        dependency_edges.append(
+            {
+                "from": "acl delete",
+                "to": "all acl bindings unbound",
+            }
+        )
+
+    rollback_order = _rollback_order_for_surface(surface)
+    return {
+        "stages": stages,
+        "dependency_edges": dependency_edges,
+        "blast_radius": "policy_reference" if is_policy else "local_interface_or_vlan",
+        "rollback_order": rollback_order,
+    }
+
+
+def _rollback_order_for_surface(surface: set[str]) -> list[str]:
+    rollback_order: list[str] = []
+    if "acl_interface_binding" in surface:
+        rollback_order.append("remove acl interface binding")
+    if "ipv4_advanced_acl" in surface:
+        rollback_order.append("restore or delete acl")
+    if "trunk_interface" in surface or "access_interface" in surface:
+        rollback_order.append("restore interface mode")
+    if "vlan_create" in surface or "delete_vlan" in surface:
+        rollback_order.append("restore vlan state")
+    if "delete_acl_binding" in surface:
+        rollback_order.append("restore acl interface binding")
+    if "delete_acl" in surface:
+        rollback_order.append("restore acl")
+    if not rollback_order:
+        rollback_order.append("restore touched resources")
+    return rollback_order
 
 
 def _error_payload(exc: Exception) -> dict[str, Any]:

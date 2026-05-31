@@ -8,6 +8,7 @@ use aria_underlay::api::request::{
 use aria_underlay::api::response::ApplyStatus;
 use aria_underlay::api::{AriaUnderlayService, UnderlayService};
 use aria_underlay::device::{DeviceInfo, DeviceInventory, DeviceLifecycleState, HostKeyPolicy};
+use aria_underlay::engine::change_plan::BlastRadius;
 use aria_underlay::intent::interface::InterfaceIntent;
 use aria_underlay::intent::vlan::VlanIntent;
 use aria_underlay::intent::{
@@ -352,6 +353,18 @@ async fn preflight_fetches_only_desired_scope_to_avoid_unrelated_delete_ops() {
         "merge-upsert preflight should not plan deletes for unrelated observed state: {:?}",
         dry_run.change_sets
     );
+    assert_eq!(dry_run.change_plans.len(), dry_run.change_sets.len());
+    assert_eq!(dry_run.change_plans[0].device_id, "stack-mgmt");
+    assert_eq!(dry_run.change_plans[0].blast_radius, BlastRadius::LocalInterfaceOrVlan);
+    assert!(!dry_run.change_plans[0].stages.is_empty());
+    assert!(!dry_run.change_plans[0].rollback_order.is_empty());
+    let json = serde_json::to_value(&dry_run).expect("dry-run response should serialize");
+    assert!(json["change_plans"].is_array());
+    assert_eq!(
+        json["change_plans"][0]["blast_radius"],
+        "local_interface_or_vlan"
+    );
+
     let response = service
         .apply_domain_intent(request)
         .await
