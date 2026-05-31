@@ -45,6 +45,9 @@ from aria_underlay_adapter.backends.netconf_hostkey import (
 from aria_underlay_adapter.backends.netconf_model_profile import (
     probe_openconfig_netconf_paths as _probe_openconfig_netconf_paths,
 )
+from aria_underlay_adapter.backends.yang_schema import (
+    collect_and_save_yang_schemas as _collect_and_save_yang_schemas,
+)
 from aria_underlay_adapter.backends.netconf_state import build_state_filter
 from aria_underlay_adapter.backends.netconf_state import (
     desired_state_is_empty as _desired_state_is_empty,
@@ -117,8 +120,11 @@ class NcclientNetconfBackend:
     state_parser: RunningStateParser | None = None
     allow_fixture_verified_state_parser: bool = False
     gnmi_capability_probe: _GnmiCapabilityProbe | None = None
+    yang_schema_collection_enabled: bool = False
+    yang_library_dir: str | None = None
 
     def get_capabilities(self) -> BackendCapability:
+        yang_modules: list[dict] = []
         try:
             with self._connect() as session:
                 raw = [str(capability) for capability in session.server_capabilities]
@@ -127,6 +133,12 @@ class NcclientNetconfBackend:
                     session,
                     module_only_capability,
                 )
+                if self.yang_schema_collection_enabled:
+                    yang_modules = _collect_and_save_yang_schemas(
+                        session,
+                        raw,
+                        yang_library_dir=self.yang_library_dir,
+                    )
             gnmi_supported_models: list[dict[str, str]] = []
             warnings: list[str] = []
             if self.gnmi_capability_probe is not None:
@@ -148,6 +160,7 @@ class NcclientNetconfBackend:
             verified_paths=verified_paths,
             gnmi_supported_models=gnmi_supported_models,
             warnings=warnings,
+            yang_modules=yang_modules,
         )
 
     def _connect(self):
@@ -759,6 +772,7 @@ def capability_from_raw(
     verified_paths: dict[str, dict] | None = None,
     gnmi_supported_models: list[dict[str, str]] | None = None,
     warnings: list[str] | None = None,
+    yang_modules: list[dict] | None = None,
 ) -> BackendCapability:
     raw = list(raw_capabilities)
     raw_set = set(raw)
@@ -770,7 +784,20 @@ def capability_from_raw(
     )
     supports_rollback_on_error = ROLLBACK_ON_ERROR in raw_set
     supports_writable_running = WRITABLE_RUNNING in raw_set
-    yang_modules = extract_yang_modules_from_capabilities(raw)
+    parsed_yang_modules = extract_yang_modules_from_capabilities(raw)
+
+    model_profile = classify_model_profile(
+        vendor="unknown",
+        model="unknown",
+        os_version="unknown",
+        supports_candidate=supports_candidate,
+        supports_validate=supports_validate,
+        supported_modules=parsed_yang_modules,
+        verified_paths=verified_paths or {},
+        gnmi_supported_models=gnmi_supported_models or [],
+    )
+    if yang_modules is not None:
+        model_profile["yang_module_count"] = len(yang_modules)
 
     return BackendCapability(
         model="",
@@ -784,15 +811,7 @@ def capability_from_raw(
         supports_rollback_on_error=supports_rollback_on_error,
         supports_writable_running=supports_writable_running,
         supported_backends=["netconf"] if supports_netconf else [],
-        model_profile=classify_model_profile(
-            vendor="unknown",
-            model="unknown",
-            os_version="unknown",
-            supports_candidate=supports_candidate,
-            supports_validate=supports_validate,
-            supported_modules=yang_modules,
-            verified_paths=verified_paths or {},
-            gnmi_supported_models=gnmi_supported_models or [],
-        ),
+        model_profile=model_profile,
         warnings=warnings or [],
+        yang_modules=yang_modules or [],
     )

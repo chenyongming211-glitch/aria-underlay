@@ -173,6 +173,7 @@ fn change_plan_with_write_rejected_profile_reports_unsupported_paths() {
             "pbr: no path-level write evidence".to_string(),
             "bgp: no path-level writing evidence".to_string(),
         ],
+        yang_module_count: 0,
     };
     let change_set = ChangeSet {
         device_id: DeviceId("leaf-1".to_string()),
@@ -208,6 +209,7 @@ fn change_plan_with_write_safe_profile_reports_standard_model_decision() {
         pbr_write_readiness: WriteReadiness::WriteSafe,
         bgp_write_readiness: WriteReadiness::WriteSafe,
         rejection_reasons: vec![],
+        yang_module_count: 0,
     };
     let change_set = ChangeSet {
         device_id: DeviceId("leaf-1".to_string()),
@@ -231,6 +233,7 @@ fn change_plan_with_read_only_profile_reports_read_only_for_policy_changes() {
         pbr_write_readiness: WriteReadiness::ReadOnly,
         bgp_write_readiness: WriteReadiness::ReadOnly,
         rejection_reasons: vec![],
+        yang_module_count: 0,
     };
     let change_set = ChangeSet {
         device_id: DeviceId("leaf-1".to_string()),

@@ -62,6 +62,42 @@ def test_capability_from_raw_detects_running_rollback_profile():
     assert capability.supports_rollback_on_error is True
 
 
+def test_capability_from_raw_includes_yang_modules_when_provided():
+    yang_modules = [
+        {
+            "name": "h3c-vlan",
+            "revision": "2021-07-15",
+            "namespace": "http://www.h3c.com/yang/vlan",
+            "schema_size_bytes": 1024,
+            "schema_downloaded": True,
+            "format": "yang",
+        },
+        {
+            "name": "ietf-interfaces",
+            "revision": "2014-05-08",
+            "namespace": "urn:ietf:params:xml:ns:yang:ietf-interfaces",
+            "schema_size_bytes": 0,
+            "schema_downloaded": False,
+            "format": "yang",
+        },
+    ]
+
+    capability = capability_from_raw(
+        [BASE_10, CANDIDATE, VALIDATE_11],
+        yang_modules=yang_modules,
+    )
+
+    assert capability.yang_modules == yang_modules
+    assert capability.model_profile["yang_module_count"] == 2
+
+
+def test_capability_from_raw_defaults_yang_modules_to_empty():
+    capability = capability_from_raw([BASE_10])
+
+    assert capability.yang_modules == []
+    assert capability.model_profile.get("yang_module_count", 0) == 0
+
+
 def test_get_capabilities_probes_openconfig_paths_with_netconf_read_and_test_only_write():
     session = _RecordingSession(
         reply=_Reply("<data/>"),

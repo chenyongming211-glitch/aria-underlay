@@ -1,6 +1,6 @@
 use aria_underlay::device::model_profile::{
     DeviceModelProfile, FeatureSupport, ModelPathSupport, ModelProtocol, WriteDecision,
-    WriteReadiness,
+    WriteReadiness, YangModuleSummary,
 };
 use aria_underlay::model::Vendor;
 use aria_underlay::proto::adapter;
@@ -107,6 +107,7 @@ fn maps_proto_device_model_profile_into_rust_profile() {
         pbr_write_readiness: adapter::WriteReadiness::WriteRejected as i32,
         bgp_write_readiness: adapter::WriteReadiness::ReadOnly as i32,
         rejection_reasons: vec!["BGP path is not writable".to_string()],
+        yang_module_count: 42,
     };
 
     let profile = DeviceModelProfile::from_proto(proto_profile);
@@ -118,4 +119,26 @@ fn maps_proto_device_model_profile_into_rust_profile() {
     assert_eq!(profile.paths[0].protocol, ModelProtocol::OpenConfigGnmi);
     assert_eq!(profile.paths[0].revision.as_deref(), Some("2024-10-30"));
     assert_eq!(profile.rejection_reasons, vec!["BGP path is not writable"]);
+    assert_eq!(profile.yang_module_count, 42);
+}
+
+#[test]
+fn maps_proto_yang_module_summary_into_rust_type() {
+    let proto_module = adapter::YangModuleSummary {
+        name: "h3c-vlan".to_string(),
+        revision: "2021-07-15".to_string(),
+        namespace: "http://www.h3c.com/yang/vlan".to_string(),
+        schema_size_bytes: 4096,
+        schema_downloaded: true,
+        format: "yang".to_string(),
+    };
+
+    let module = YangModuleSummary::from_proto(proto_module);
+
+    assert_eq!(module.name, "h3c-vlan");
+    assert_eq!(module.revision, "2021-07-15");
+    assert_eq!(module.namespace, "http://www.h3c.com/yang/vlan");
+    assert_eq!(module.schema_size_bytes, 4096);
+    assert!(module.schema_downloaded);
+    assert_eq!(module.format, "yang");
 }

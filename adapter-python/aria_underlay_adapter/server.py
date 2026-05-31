@@ -203,6 +203,8 @@ def serve() -> None:
                 gnmi_tls_ca_cert_file=config.gnmi_tls_ca_cert_file,
                 gnmi_tls_cert_file=config.gnmi_tls_cert_file,
                 gnmi_tls_key_file=config.gnmi_tls_key_file,
+                yang_schema_collection_enabled=config.yang_schema_collection_enabled,
+                yang_library_dir=config.yang_library_dir,
             )
         )
     server = build_server(config, registry)
@@ -228,6 +230,8 @@ def _netconf_driver_from_device(
     gnmi_tls_ca_cert_file: str | None = None,
     gnmi_tls_cert_file: str | None = None,
     gnmi_tls_key_file: str | None = None,
+    yang_schema_collection_enabled: bool = False,
+    yang_library_dir: str | None = None,
 ) -> NetconfBackedDriver | AdapterErrorDriver:
     try:
         secret = secret_provider.resolve(device.secret_ref)
@@ -263,6 +267,8 @@ def _netconf_driver_from_device(
             key_path=secret.key_path,
             passphrase=secret.passphrase,
             gnmi_capability_probe=gnmi_probe,
+            yang_schema_collection_enabled=yang_schema_collection_enabled,
+            yang_library_dir=yang_library_dir,
             **host_key_kwargs,
         )
     )

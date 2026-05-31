@@ -14,6 +14,8 @@ def test_config_from_env_defaults(monkeypatch):
     monkeypatch.delenv("ARIA_UNDERLAY_GNMI_TLS_CA_CERT_FILE", raising=False)
     monkeypatch.delenv("ARIA_UNDERLAY_GNMI_TLS_CERT_FILE", raising=False)
     monkeypatch.delenv("ARIA_UNDERLAY_GNMI_TLS_KEY_FILE", raising=False)
+    monkeypatch.delenv("ARIA_UNDERLAY_YANG_SCHEMA_COLLECTION_ENABLED", raising=False)
+    monkeypatch.delenv("ARIA_UNDERLAY_YANG_LIBRARY_DIR", raising=False)
 
     config = AdapterConfig.from_env()
 
@@ -25,6 +27,8 @@ def test_config_from_env_defaults(monkeypatch):
     assert config.gnmi_probe_enabled is False
     assert config.gnmi_port == 57400
     assert config.gnmi_tls_enabled is True
+    assert config.yang_schema_collection_enabled is False
+    assert config.yang_library_dir is None
 
 
 def test_config_reads_fake_profile(monkeypatch):
@@ -70,3 +74,13 @@ def test_config_reads_gnmi_probe_settings(monkeypatch):
     assert config.gnmi_tls_ca_cert_file == "/etc/aria/gnmi-ca.pem"
     assert config.gnmi_tls_cert_file == "/etc/aria/gnmi-client.pem"
     assert config.gnmi_tls_key_file == "/etc/aria/gnmi-client.key"
+
+
+def test_config_reads_yang_schema_collection_settings(monkeypatch):
+    monkeypatch.setenv("ARIA_UNDERLAY_YANG_SCHEMA_COLLECTION_ENABLED", "1")
+    monkeypatch.setenv("ARIA_UNDERLAY_YANG_LIBRARY_DIR", "/var/lib/aria-underlay/yang-library")
+
+    config = AdapterConfig.from_env()
+
+    assert config.yang_schema_collection_enabled is True
+    assert config.yang_library_dir == "/var/lib/aria-underlay/yang-library"

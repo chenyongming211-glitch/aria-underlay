@@ -19,6 +19,7 @@ class BackendCapability:
     supported_backends: list[str]
     model_profile: dict | None = None
     warnings: list[str] = field(default_factory=list)
+    yang_modules: list[dict] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
