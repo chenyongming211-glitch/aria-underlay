@@ -207,6 +207,12 @@ model profile reference
 从哪里来可以替换；事务正确性、diff、ChangePlan、下发和 verify 不随外部 SoT 产品
 变化。
 
+当前代码中的 `src/sot::snapshot::SotSnapshot` 只承担内部归一化边界职责。它可以表达
+device、interface、VLAN、ACL、policy intent 和 BGP neighbor 的来源、归属与
+`model_profile_ref`，并在进入 planner 前做重复对象和未知设备引用校验。NetBox、
+Nautobot、文件或外部 API connector 后续都只能输出该结构，不能把自身 schema 泄漏
+进核心事务路径。
+
 ### 3.5 幂等
 
 同一个 intent 连续 apply 多次，只有第一次真正改设备。

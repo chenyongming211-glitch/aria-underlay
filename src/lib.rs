@@ -10,6 +10,7 @@ pub mod model;
 pub mod ops_cli;
 pub mod planner;
 pub mod proto;
+pub mod sot;
 pub mod state;
 pub mod telemetry;
 pub mod tx;
