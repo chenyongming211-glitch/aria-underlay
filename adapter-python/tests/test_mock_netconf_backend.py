@@ -128,6 +128,18 @@ def test_commit_candidate_applies_explicit_vlan_delete():
     assert state["vlans"] == []
 
 
+def test_commit_candidate_applies_explicit_interface_config_delete():
+    backend = MockNetconfBackend("candidate_only")
+    desired = _desired_state_without_interface()
+    desired.delete_interface_names = ["GE1/0/1"]
+
+    backend.prepare_candidate(desired)
+    backend.commit_candidate(strategy=2, tx_id="tx-1")
+
+    state = backend.get_current_state()
+    assert state["interfaces"] == []
+
+
 def test_rollback_confirmed_commit_restores_previous_running_state():
     backend = MockNetconfBackend("confirmed")
     desired = _desired_state(vlan_name="tenant-100")

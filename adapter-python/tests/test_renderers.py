@@ -37,6 +37,7 @@ class _DesiredState:
     delete_vlan_ids: list | None = None
     delete_acl_ids: list | None = None
     delete_acl_bindings: list | None = None
+    delete_interface_names: list | None = None
 
     def __post_init__(self):
         if self.acls is None:
@@ -49,6 +50,8 @@ class _DesiredState:
             self.delete_acl_ids = []
         if self.delete_acl_bindings is None:
             self.delete_acl_bindings = []
+        if self.delete_interface_names is None:
+            self.delete_interface_names = []
 
 
 @dataclass
@@ -509,6 +512,7 @@ def test_h3c_renderer_builds_explicit_delete_document():
             interfaces=[],
             acls=[],
             acl_bindings=[],
+            delete_interface_names=["GigabitEthernet1/0/13"],
             delete_vlan_ids=[144],
             delete_acl_ids=[3999],
             delete_acl_bindings=[
@@ -538,6 +542,16 @@ def test_h3c_renderer_builds_explicit_delete_document():
     assert binding is not None
     assert binding.attrib[operation_attr] == "delete"
     assert binding.find(f"{{{ns}}}AppObjIndex").text == "13"
+
+    access = root.find(f".//{{{ns}}}VLAN/{{{ns}}}AccessInterfaces/{{{ns}}}Interface")
+    assert access is not None
+    assert access.attrib[operation_attr] == "delete"
+    assert access.find(f"{{{ns}}}IfIndex").text == "13"
+
+    trunk = root.find(f".//{{{ns}}}VLAN/{{{ns}}}TrunkInterfaces/{{{ns}}}Interface")
+    assert trunk is not None
+    assert trunk.attrib[operation_attr] == "delete"
+    assert trunk.find(f"{{{ns}}}IfIndex").text == "13"
     assert binding.find(f"{{{ns}}}AppAclGroup").text == "3999"
 
 

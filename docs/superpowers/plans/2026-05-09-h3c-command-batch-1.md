@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Complete H3C ACL rule description support and implement explicit delete-intent boundaries for isolated VLAN, ACL, and ACL binding targets.
+**Goal:** Complete H3C ACL rule description support and implement explicit delete-intent boundaries for isolated VLAN, interface config, ACL, and ACL binding targets.
 
 **Architecture:** Keep ACL rule description on the existing `AclRule.description` field. Add explicit delete fields to the domain/device/protobuf contract so merge/upsert never infers deletes from omitted desired objects.
 
@@ -68,7 +68,7 @@
 - Modify: `adapter-python/aria_underlay_adapter/backends/netconf_state.py`
 - Modify: `adapter-python/aria_underlay_adapter/backends/mock_netconf.py`
 
-- [x] Add explicit delete fields for VLAN ids, ACL ids, and ACL bindings.
+- [x] Add explicit delete fields for VLAN ids, interface configs, ACL ids, and ACL bindings.
 - [x] Keep merge/upsert from inferring delete from absence.
 - [x] Preserve full-replace delete semantics.
 - [x] Render H3C NETCONF delete XML for supported explicit delete targets.

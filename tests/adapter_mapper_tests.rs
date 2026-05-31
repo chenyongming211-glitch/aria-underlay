@@ -292,6 +292,7 @@ fn maps_desired_state_to_proto() {
             acl_binding("GE1/0/1", AclDirection::Inbound, 3999),
         )]),
         delete_vlan_ids: BTreeSet::from([300]),
+        delete_interface_names: BTreeSet::from(["GE1/0/3".into()]),
         delete_acl_ids: BTreeSet::from([3998]),
         delete_acl_bindings: BTreeMap::from([(
             "GE1/0/2|outbound".into(),
@@ -315,6 +316,7 @@ fn maps_desired_state_to_proto() {
     );
     assert_eq!(proto.acl_bindings[0].acl_id, 3999);
     assert_eq!(proto.delete_vlan_ids, vec![300]);
+    assert_eq!(proto.delete_interface_names, vec!["GE1/0/3"]);
     assert_eq!(proto.delete_acl_ids, vec![3998]);
     assert_eq!(proto.delete_acl_bindings[0].interface_name, "GE1/0/2");
     assert_eq!(proto.delete_acl_bindings[0].acl_id, 3998);
@@ -340,6 +342,7 @@ fn maps_recovery_actions_to_proto() {
 fn derives_state_scope_from_desired_state() {
     let mut desired = desired_state();
     desired.delete_vlan_ids.insert(200);
+    desired.delete_interface_names.insert("GE1/0/3".into());
     desired.delete_acl_ids.insert(3998);
     let delete_binding = acl_binding("GE1/0/2", AclDirection::Outbound, 3998);
     desired
@@ -350,7 +353,7 @@ fn derives_state_scope_from_desired_state() {
 
     assert!(!scope.full);
     assert_eq!(scope.vlan_ids, vec![100, 200]);
-    assert_eq!(scope.interface_names, vec!["GE1/0/1", "GE1/0/2"]);
+    assert_eq!(scope.interface_names, vec!["GE1/0/1", "GE1/0/2", "GE1/0/3"]);
     assert_eq!(scope.acl_ids, vec![3998, 3999]);
 }
 
@@ -386,6 +389,9 @@ fn derives_state_scope_from_change_set_including_deletes() {
                     mode: PortMode::Access { vlan_id: 100 },
                 },
             },
+            ChangeOp::DeleteInterfaceConfig {
+                interface_name: "GE1/0/2".into(),
+            },
             ChangeOp::CreateAcl(acl(3999)),
             ChangeOp::DeleteAcl { acl_id: 3998 },
             ChangeOp::CreateAclBinding(acl_binding(
@@ -407,7 +413,7 @@ fn derives_state_scope_from_change_set_including_deletes() {
     assert_eq!(scope.vlan_ids, vec![100, 200]);
     assert_eq!(
         scope.interface_names,
-        vec!["GE1/0/1", "GE1/0/3", "GE1/0/4"]
+        vec!["GE1/0/1", "GE1/0/2", "GE1/0/3", "GE1/0/4"]
     );
     assert_eq!(scope.acl_ids, vec![3998, 3999]);
 }
@@ -482,6 +488,7 @@ fn desired_state() -> DeviceDesiredState {
             acl_binding("GE1/0/1", AclDirection::Inbound, 3999),
         )]),
         delete_vlan_ids: Default::default(),
+        delete_interface_names: Default::default(),
         delete_acl_ids: Default::default(),
         delete_acl_bindings: Default::default(),
     }

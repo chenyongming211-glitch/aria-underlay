@@ -10,8 +10,8 @@ BGP.
 Batch 1 has two parts:
 
 - Implement ACL rule description closure.
-- Implement explicit delete-intent boundaries for isolated VLAN, ACL, and ACL
-  binding targets.
+- Implement explicit delete-intent boundaries for isolated VLAN, interface
+  config, ACL, and ACL binding targets.
 
 ## ACL Rule Description
 
@@ -46,10 +46,12 @@ Initial delete candidates:
 - ACL binding delete by interface, direction, and ACL id.
 - ACL delete by id.
 - VLAN delete by id.
+- Interface VLAN mode config delete by interface name.
 
 Schema:
 
 - `UnderlayDomainIntent.delete_vlan_ids`
+- `UnderlayDomainIntent.delete_interfaces`
 - `UnderlayDomainIntent.delete_acl_ids`
 - `UnderlayDomainIntent.delete_acl_bindings`
 - Matching `DeviceDesiredState` and protobuf fields for adapter handoff.

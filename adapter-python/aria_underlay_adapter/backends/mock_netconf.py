@@ -393,6 +393,8 @@ def _merge_desired_state(running: dict, desired_state) -> dict:
             "description": _optional_field(desired_interface, "description"),
             "mode": _mode_to_dict(_field(desired_interface, "mode")),
         }
+    for interface_name in getattr(desired_state, "delete_interface_names", []):
+        interfaces_by_name.pop(str(interface_name), None)
     merged["interfaces"] = [
         interfaces_by_name[name]
         for name in sorted(interfaces_by_name)
@@ -433,6 +435,7 @@ def _desired_state_is_empty(desired_state) -> bool:
         and not list(getattr(desired_state, "acls", []))
         and not list(getattr(desired_state, "acl_bindings", []))
         and not list(getattr(desired_state, "delete_vlan_ids", []))
+        and not list(getattr(desired_state, "delete_interface_names", []))
         and not list(getattr(desired_state, "delete_acl_ids", []))
         and not list(getattr(desired_state, "delete_acl_bindings", []))
     )
@@ -482,6 +485,11 @@ def _verify_interfaces(desired_state, observed: dict, scope=None) -> None:
         _field(interface, "name"): interface
         for interface in getattr(desired_state, "interfaces", [])
     }
+    for interface_name in getattr(desired_state, "delete_interface_names", []):
+        if str(interface_name) in observed_by_name:
+            raise _verify_mismatch(
+                f"interface {interface_name} should be absent but exists in observed state",
+            )
     for name in _scoped_interface_names(scope, observed):
         if name not in desired_by_name and name in observed_by_name:
             raise _verify_mismatch(

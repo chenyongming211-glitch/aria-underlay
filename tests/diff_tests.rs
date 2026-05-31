@@ -242,6 +242,19 @@ fn absent_acl_binding_is_preserved_without_explicit_delete() {
 }
 
 #[test]
+fn absent_interface_is_preserved_without_explicit_delete() {
+    let desired = desired_state(vec![], vec![]);
+    let current = shadow_state(
+        vec![],
+        vec![access_interface("GE1/0/13", Some("server"), 100)],
+    );
+
+    let change_set = compute_diff(&desired, &current);
+
+    assert!(change_set.is_empty());
+}
+
+#[test]
 fn absence_does_not_infer_deletes() {
     let desired = desired_state_with_acl_bindings(vec![], vec![], vec![], vec![]);
     let current = shadow_state_with_acl_bindings(
@@ -254,6 +267,32 @@ fn absence_does_not_infer_deletes() {
     let change_set = compute_diff(&desired, &current);
 
     assert!(change_set.is_empty());
+}
+
+#[test]
+fn explicit_interface_config_delete_removes_interface_from_shadow() {
+    let mut desired = desired_state(vec![], vec![]);
+    desired.delete_interface_names.insert("GE1/0/13".into());
+    let current = shadow_state(
+        vec![],
+        vec![
+            access_interface("GE1/0/13", Some("delete me"), 100),
+            access_interface("GE1/0/14", Some("keep me"), 100),
+        ],
+    );
+
+    let change_set = compute_diff(&desired, &current);
+
+    assert_eq!(
+        change_set.ops,
+        vec![ChangeOp::DeleteInterfaceConfig {
+            interface_name: "GE1/0/13".into(),
+        }]
+    );
+
+    let updated = change_set.apply_to_shadow(Some(&current), &desired, 0);
+    assert!(!updated.interfaces.contains_key("GE1/0/13"));
+    assert!(updated.interfaces.contains_key("GE1/0/14"));
 }
 
 #[test]
@@ -346,6 +385,7 @@ fn desired_state_with_acl_bindings(
             .map(|binding| (binding.key(), binding))
             .collect(),
         delete_vlan_ids: Default::default(),
+        delete_interface_names: Default::default(),
         delete_acl_ids: Default::default(),
         delete_acl_bindings: Default::default(),
     }

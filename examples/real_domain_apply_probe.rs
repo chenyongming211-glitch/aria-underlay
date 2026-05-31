@@ -106,6 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             acls,
             acl_bindings,
             delete_vlan_ids: vec![],
+            delete_interfaces: vec![],
             delete_acl_ids: vec![],
             delete_acl_bindings: vec![],
         },
@@ -127,6 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             matches!(
                 op,
                 ChangeOp::DeleteVlan { .. }
+                    | ChangeOp::DeleteInterfaceConfig { .. }
                     | ChangeOp::DeleteAcl { .. }
                     | ChangeOp::UpdateAcl { .. }
                     | ChangeOp::UpdateAclBinding { .. }

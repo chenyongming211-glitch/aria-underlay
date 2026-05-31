@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::intent::{
     acl::{AclBindingIntent, AclIntent},
-    interface::InterfaceIntent,
+    interface::{InterfaceDeleteIntent, InterfaceIntent},
     vlan::VlanIntent,
 };
 use crate::model::{DeviceRole, Vendor};
@@ -21,6 +21,8 @@ pub struct UnderlayDomainIntent {
     pub acl_bindings: Vec<AclBindingIntent>,
     #[serde(default)]
     pub delete_vlan_ids: Vec<u16>,
+    #[serde(default)]
+    pub delete_interfaces: Vec<InterfaceDeleteIntent>,
     #[serde(default)]
     pub delete_acl_ids: Vec<u16>,
     #[serde(default)]

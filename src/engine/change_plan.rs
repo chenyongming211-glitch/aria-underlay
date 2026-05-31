@@ -87,9 +87,9 @@ pub fn build_change_plan_with_profile(
     for op in &change_set.ops {
         match op {
             ChangeOp::DeleteAclBinding { .. } => unbind.push(op.clone()),
-            ChangeOp::DeleteAcl { .. } | ChangeOp::DeleteVlan { .. } => {
-                delete_base.push(op.clone())
-            }
+            ChangeOp::DeleteAcl { .. }
+            | ChangeOp::DeleteVlan { .. }
+            | ChangeOp::DeleteInterfaceConfig { .. } => delete_base.push(op.clone()),
             ChangeOp::CreateAcl(_) | ChangeOp::CreateVlan(_) => create_base.push(op.clone()),
             ChangeOp::UpdateAcl { .. }
             | ChangeOp::UpdateVlan { .. }
@@ -307,6 +307,9 @@ fn rollback_action_for_op(op: &ChangeOp) -> String {
         ChangeOp::UpdateVlan { before, .. } => format!("restore vlan {}", before.vlan_id),
         ChangeOp::DeleteVlan { vlan_id } => format!("restore vlan {vlan_id}"),
         ChangeOp::UpdateInterface { after, .. } => format!("restore interface {}", after.name),
+        ChangeOp::DeleteInterfaceConfig { interface_name } => {
+            format!("restore interface {interface_name}")
+        }
         ChangeOp::CreateAcl(acl) => format!("delete acl {}", acl.acl_id),
         ChangeOp::UpdateAcl { before, .. } => format!("restore acl {}", before.acl_id),
         ChangeOp::DeleteAcl { acl_id } => format!("restore acl {acl_id}"),

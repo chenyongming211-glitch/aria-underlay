@@ -9,4 +9,5 @@ pub use acl::{AclBindingIntent, AclIntent};
 pub use domain::{
     ManagementEndpointIntent, SwitchMemberIntent, UnderlayDomainIntent, UnderlayTopology,
 };
+pub use interface::{InterfaceDeleteIntent, InterfaceIntent};
 pub use switch_pair::{SwitchIntent, SwitchPairIntent};

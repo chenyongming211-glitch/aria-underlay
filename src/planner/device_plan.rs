@@ -17,6 +17,8 @@ pub struct DeviceDesiredState {
     #[serde(default)]
     pub delete_vlan_ids: BTreeSet<u16>,
     #[serde(default)]
+    pub delete_interface_names: BTreeSet<String>,
+    #[serde(default)]
     pub delete_acl_ids: BTreeSet<u16>,
     #[serde(default)]
     pub delete_acl_bindings: BTreeMap<String, AclBinding>,
@@ -66,10 +68,10 @@ pub fn plan_switch_pair(intent: &SwitchPairIntent) -> Vec<DeviceDesiredState> {
                 acls: BTreeMap::new(),
                 acl_bindings: BTreeMap::new(),
                 delete_vlan_ids: BTreeSet::new(),
+                delete_interface_names: BTreeSet::new(),
                 delete_acl_ids: BTreeSet::new(),
                 delete_acl_bindings: BTreeMap::new(),
             }
         })
         .collect()
 }
-

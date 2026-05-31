@@ -63,6 +63,7 @@ pub fn plan_underlay_domain(
                         .collect(),
                     acl_bindings: BTreeMap::new(),
                     delete_vlan_ids: intent.delete_vlan_ids.iter().copied().collect(),
+                    delete_interface_names: Default::default(),
                     delete_acl_ids: intent.delete_acl_ids.iter().copied().collect(),
                     delete_acl_bindings: BTreeMap::new(),
                 },
@@ -92,6 +93,22 @@ pub fn plan_underlay_domain(
                 mode: interface.mode.clone(),
             },
         );
+    }
+
+    for interface in &intent.delete_interfaces {
+        let endpoint_id = member_to_endpoint.get(&interface.device_id).ok_or_else(|| {
+            UnderlayError::InvalidIntent(format!(
+                "interface delete references unknown switch member {}",
+                interface.device_id.0
+            ))
+        })?;
+        let state = states.get_mut(endpoint_id).ok_or_else(|| {
+            UnderlayError::InvalidIntent(format!(
+                "member references unknown management endpoint {}",
+                endpoint_id.0
+            ))
+        })?;
+        state.delete_interface_names.insert(interface.name.clone());
     }
 
     for binding in &intent.acl_bindings {

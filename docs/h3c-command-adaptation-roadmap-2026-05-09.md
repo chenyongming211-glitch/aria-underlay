@@ -92,12 +92,13 @@ First supported delete candidates:
 
 - Delete isolated test ACL by id.
 - Delete ACL binding by interface/direction/ACL id.
+- Delete isolated interface VLAN mode config by interface name.
 - Delete isolated test VLAN by id.
 
 Implemented boundary:
 
-- `UnderlayDomainIntent` carries explicit `delete_vlan_ids`, `delete_acl_ids`,
-  and `delete_acl_bindings`.
+- `UnderlayDomainIntent` carries explicit `delete_vlan_ids`,
+  `delete_interfaces`, `delete_acl_ids`, and `delete_acl_bindings`.
 - `DeviceDesiredState` carries the same explicit delete targets through
   dry-run, journal, recovery, adapter protobuf, renderer, and verify paths.
 - Apply reconciliation uses one explicit merge/upsert semantic: deletes are
@@ -109,7 +110,8 @@ Implemented boundary:
 Not in Batch 1 implementation:
 
 - Delete PBR, QoS, NQA, or BGP objects.
-- Interface config delete.
+- Interface description clearing still requires real-device validation before
+  it is marked production-ready.
 - Infer delete from missing desired state in merge/upsert mode.
 
 ## Batch 2: ACL Family Expansion

@@ -14,7 +14,7 @@ from aria_underlay_adapter.renderers.xml import render_xml
 
 H3C_COMWARE_CONFIG_NAMESPACE = "http://www.h3c.com/netconf/config:1.0"
 _H3C_INTERFACE_RE = re.compile(
-    r"^(?:GigabitEthernet|Ten-GigabitEthernet|FortyGigE)1/0/([1-9][0-9]*)(?:\.\d+)?$"
+    r"^(?:GigabitEthernet|Ten-GigabitEthernet|FortyGigE|GE|XGE|FGE)1/0/([1-9][0-9]*)(?:\.\d+)?$"
 )
 
 
@@ -83,6 +83,14 @@ class H3cRenderer:
             self.render_acl_binding_delete(binding)
             for binding in getattr(desired_state, "delete_acl_bindings", [])
         ]
+        access_delete_nodes = [
+            self.render_interface_delete(interface_name)
+            for interface_name in getattr(desired_state, "delete_interface_names", [])
+        ]
+        trunk_delete_nodes = [
+            self.render_interface_delete(interface_name)
+            for interface_name in getattr(desired_state, "delete_interface_names", [])
+        ]
         ifmgr_nodes = []
         access_nodes = []
         trunk_nodes = []
@@ -122,20 +130,20 @@ class H3cRenderer:
                     children=vlan_nodes + vlan_delete_nodes,
                 )
             )
-        if access_nodes:
+        if access_nodes or access_delete_nodes:
             vlan_children.append(
                 XmlElement(
                     "AccessInterfaces",
                     namespace=self.VLAN_NAMESPACE,
-                    children=access_nodes,
+                    children=access_nodes + access_delete_nodes,
                 )
             )
-        if trunk_nodes:
+        if trunk_nodes or trunk_delete_nodes:
             vlan_children.append(
                 XmlElement(
                     "TrunkInterfaces",
                     namespace=self.VLAN_NAMESPACE,
-                    children=trunk_nodes,
+                    children=trunk_nodes + trunk_delete_nodes,
                 )
             )
         if vlan_children:
@@ -274,6 +282,18 @@ class H3cRenderer:
             )
 
         return XmlElement("Interface", namespace=self.IFACE_NAMESPACE, children=children)
+
+    def render_interface_delete(self, interface_name: str) -> XmlElement:
+        name = _required_text({"name": interface_name}, "name")
+        ifindex = _interface_ifindex(name)
+        return XmlElement(
+            "Interface",
+            namespace=self.IFACE_NAMESPACE,
+            attributes={qualified_attr("operation", NETCONF_BASE_NAMESPACE): "delete"},
+            children=[
+                XmlElement("IfIndex", namespace=self.IFACE_NAMESPACE, children=[str(ifindex)]),
+            ],
+        )
 
     def render_interface_description(self, interface) -> XmlElement | None:
         description = _optional_text(interface, "description")

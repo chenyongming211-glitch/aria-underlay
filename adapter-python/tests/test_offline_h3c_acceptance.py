@@ -54,6 +54,7 @@ def test_offline_h3c_acceptance_reports_supported_surface(tmp_path, capsys):
         "acl_rule_description",
         "acl_interface_binding",
         "delete_vlan",
+        "delete_interface_config",
         "delete_acl",
         "delete_acl_binding",
     }

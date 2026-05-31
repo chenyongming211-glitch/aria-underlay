@@ -11,3 +11,8 @@ pub struct InterfaceIntent {
     pub mode: PortMode,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterfaceDeleteIntent {
+    pub device_id: DeviceId,
+    pub name: String,
+}

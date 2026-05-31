@@ -27,6 +27,9 @@ pub enum ChangeOp {
         before: Option<InterfaceConfig>,
         after: InterfaceConfig,
     },
+    DeleteInterfaceConfig {
+        interface_name: String,
+    },
     CreateAcl(AclConfig),
     UpdateAcl {
         before: AclConfig,
@@ -76,6 +79,14 @@ pub fn compute_diff(desired: &DeviceDesiredState, current: &DeviceShadowState) -
                 before: None,
                 after: desired_interface.clone(),
             }),
+        }
+    }
+
+    for interface_name in &desired.delete_interface_names {
+        if current.interfaces.contains_key(interface_name) {
+            change_set.ops.push(ChangeOp::DeleteInterfaceConfig {
+                interface_name: interface_name.clone(),
+            });
         }
     }
 
@@ -176,6 +187,9 @@ impl ChangeSet {
                 }
                 ChangeOp::UpdateInterface { after, .. } => {
                     state.interfaces.insert(after.name.clone(), after.clone());
+                }
+                ChangeOp::DeleteInterfaceConfig { interface_name } => {
+                    state.interfaces.remove(interface_name);
                 }
                 ChangeOp::CreateAcl(acl) => {
                     state.acls.insert(acl.acl_id, acl.clone());

@@ -1,4 +1,4 @@
-use aria_underlay::intent::interface::InterfaceIntent;
+use aria_underlay::intent::interface::{InterfaceDeleteIntent, InterfaceIntent};
 use aria_underlay::intent::vlan::VlanIntent;
 use aria_underlay::intent::{
     AclBindingIntent, AclIntent, ManagementEndpointIntent, SwitchMemberIntent, UnderlayDomainIntent,
@@ -161,6 +161,10 @@ fn explicit_delete_intents_are_planned_to_target_management_endpoint() {
         vec![],
     );
     intent.delete_vlan_ids = vec![144];
+    intent.delete_interfaces = vec![InterfaceDeleteIntent {
+        device_id: DeviceId("leaf-b".into()),
+        name: "GE1/0/14".into(),
+    }];
     intent.delete_acl_ids = vec![3999];
     intent.delete_acl_bindings = vec![AclBindingIntent {
         device_id: DeviceId("leaf-b".into()),
@@ -173,6 +177,8 @@ fn explicit_delete_intents_are_planned_to_target_management_endpoint() {
 
     assert!(states.iter().all(|state| state.delete_vlan_ids.contains(&144)));
     assert!(states.iter().all(|state| state.delete_acl_ids.contains(&3999)));
+    assert!(states[0].delete_interface_names.is_empty());
+    assert!(states[1].delete_interface_names.contains("GE1/0/14"));
     assert!(states[0].delete_acl_bindings.is_empty());
     assert_eq!(
         states[1].delete_acl_bindings["GE1/0/13|inbound"].acl_id,
@@ -217,6 +223,7 @@ fn domain_intent(
         acls: vec![],
         acl_bindings: vec![],
         delete_vlan_ids: vec![],
+        delete_interfaces: vec![],
         delete_acl_ids: vec![],
         delete_acl_bindings: vec![],
     }

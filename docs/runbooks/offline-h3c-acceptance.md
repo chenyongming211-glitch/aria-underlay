@@ -19,7 +19,7 @@ surface end to end:
 - IPv4 basic ACL rules
 - ACL rule description
 - ACL interface binding
-- explicit delete VLAN, delete ACL, and delete ACL binding cleanup intents
+- explicit delete VLAN, interface config, ACL, and ACL binding cleanup intents
 
 Run locally from the repository root after installing the adapter package:
 

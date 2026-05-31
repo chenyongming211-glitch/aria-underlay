@@ -565,6 +565,8 @@ def _rollback_order_for_surface(surface: set[str]) -> list[str]:
         rollback_order.append("restore or delete acl")
     if "trunk_interface" in surface or "access_interface" in surface:
         rollback_order.append("restore interface mode")
+    if "delete_interface_config" in surface:
+        rollback_order.append("restore interface config")
     if "vlan_create" in surface or "delete_vlan" in surface:
         rollback_order.append("restore vlan state")
     if "delete_acl_binding" in surface:
@@ -782,7 +784,12 @@ def _scenarios() -> tuple[Scenario, ...]:
         ),
         Scenario(
             name="explicit_delete_cleanup",
-            surface=("delete_vlan", "delete_acl", "delete_acl_binding"),
+            surface=(
+                "delete_vlan",
+                "delete_interface_config",
+                "delete_acl",
+                "delete_acl_binding",
+            ),
             seed=(
                 {
                     "vlans": [
@@ -792,7 +799,19 @@ def _scenarios() -> tuple[Scenario, ...]:
                             "description": "offline acceptance vlan",
                         }
                     ],
-                    "interfaces": [],
+                    "interfaces": [
+                        {
+                            "name": "GigabitEthernet1/0/14",
+                            "admin_state": "up",
+                            "description": None,
+                            "mode": {
+                                "kind": "access",
+                                "access_vlan": 144,
+                                "native_vlan": None,
+                                "allowed_vlans": [],
+                            },
+                        }
+                    ],
                     "acls": [
                         {
                             "acl_id": 3998,
@@ -827,6 +846,7 @@ def _scenarios() -> tuple[Scenario, ...]:
                 "acls": [],
                 "acl_bindings": [],
                 "delete_vlan_ids": [144],
+                "delete_interface_names": ["GigabitEthernet1/0/14"],
                 "delete_acl_ids": [3998],
                 "delete_acl_bindings": [
                     {
@@ -839,7 +859,7 @@ def _scenarios() -> tuple[Scenario, ...]:
             scope={
                 "full": False,
                 "vlan_ids": [144],
-                "interface_names": [],
+                "interface_names": ["GigabitEthernet1/0/14"],
                 "acl_ids": [3998],
             },
         ),

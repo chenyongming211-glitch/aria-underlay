@@ -138,6 +138,18 @@ pub fn validate_underlay_domain_intent(intent: &UnderlayDomainIntent) -> Underla
         "underlay domain",
         "switch member",
     )?;
+    validate_interface_deletes(
+        intent
+            .delete_interfaces
+            .iter()
+            .map(|iface| (&iface.device_id, iface.name.as_str())),
+        intent
+            .interfaces
+            .iter()
+            .map(|iface| (&iface.device_id, iface.name.as_str())),
+        &member_ids,
+        "underlay domain",
+    )?;
     validate_acls(
         intent.acls.iter().map(|acl| AclConfig {
             acl_id: acl.acl_id,
@@ -512,6 +524,46 @@ where
             )));
         }
         validate_port_mode(mode, declared_vlans, context, device_id, name)?;
+    }
+    Ok(())
+}
+
+fn validate_interface_deletes<'a, D, U>(
+    deletes: D,
+    upserts: U,
+    valid_device_ids: &BTreeSet<DeviceId>,
+    context: &str,
+) -> UnderlayResult<()>
+where
+    D: IntoIterator<Item = (&'a DeviceId, &'a str)>,
+    U: IntoIterator<Item = (&'a DeviceId, &'a str)>,
+{
+    let upsert_keys = upserts
+        .into_iter()
+        .map(|(device_id, name)| (device_id.clone(), name.to_string()))
+        .collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    for (device_id, name) in deletes {
+        validate_non_empty("interface delete name", name)?;
+        if !valid_device_ids.contains(device_id) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} interface delete {} references unknown switch member {}",
+                name, device_id.0
+            )));
+        }
+        let key = (device_id.clone(), name.to_string());
+        if upsert_keys.contains(&key) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} cannot upsert and delete interface {} on {} in the same request",
+                name, device_id.0
+            )));
+        }
+        if !seen.insert(key) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} has duplicate interface delete {} on {}",
+                name, device_id.0
+            )));
+        }
     }
     Ok(())
 }

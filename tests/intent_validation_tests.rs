@@ -1,4 +1,4 @@
-use aria_underlay::intent::interface::InterfaceIntent;
+use aria_underlay::intent::interface::{InterfaceDeleteIntent, InterfaceIntent};
 use aria_underlay::intent::validation::{
     validate_switch_pair_intent, validate_underlay_domain_intent,
 };
@@ -260,9 +260,26 @@ fn domain_rejects_upsert_and_delete_of_same_acl_binding() {
 }
 
 #[test]
+fn domain_rejects_upsert_and_delete_of_same_interface() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    intent.delete_interfaces = vec![InterfaceDeleteIntent {
+        device_id: DeviceId("member-a".into()),
+        name: "GE1/0/1".into(),
+    }];
+
+    let err = validate_underlay_domain_intent(&intent).unwrap_err();
+
+    assert!(format!("{err}").contains("cannot upsert and delete interface"));
+}
+
+#[test]
 fn domain_accepts_explicit_delete_intents_for_isolated_targets() {
     let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
     intent.delete_vlan_ids = vec![200];
+    intent.delete_interfaces = vec![InterfaceDeleteIntent {
+        device_id: DeviceId("member-a".into()),
+        name: "GE1/0/2".into(),
+    }];
     intent.delete_acl_ids = vec![3999];
     intent.delete_acl_bindings = vec![acl_binding_intent(3999)];
 
@@ -329,6 +346,7 @@ fn domain_intent(topology: UnderlayTopology) -> UnderlayDomainIntent {
         acls: vec![],
         acl_bindings: vec![],
         delete_vlan_ids: vec![],
+        delete_interfaces: vec![],
         delete_acl_ids: vec![],
         delete_acl_bindings: vec![],
     }

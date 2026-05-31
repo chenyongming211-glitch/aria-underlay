@@ -77,6 +77,22 @@ fn change_plan_orders_unbind_before_acl_delete() {
 }
 
 #[test]
+fn change_plan_treats_interface_config_delete_as_local_delete() {
+    let change_set = ChangeSet {
+        device_id: DeviceId("leaf-1".to_string()),
+        ops: vec![ChangeOp::DeleteInterfaceConfig {
+            interface_name: "GE1/0/13".to_string(),
+        }],
+    };
+
+    let plan = build_change_plan(&change_set);
+
+    assert_eq!(plan.stages[0].kind, ChangePlanStageKind::DeleteBaseObjects);
+    assert_eq!(plan.rollback_order, vec!["restore interface GE1/0/13"]);
+    assert_eq!(plan.blast_radius, BlastRadius::LocalInterfaceOrVlan);
+}
+
+#[test]
 fn dry_run_builds_change_plan_alongside_change_set() {
     let desired = vec![DeviceDesiredState {
         device_id: DeviceId("leaf-1".to_string()),
@@ -85,6 +101,7 @@ fn dry_run_builds_change_plan_alongside_change_set() {
         acls: Default::default(),
         acl_bindings: Default::default(),
         delete_vlan_ids: Default::default(),
+        delete_interface_names: Default::default(),
         delete_acl_ids: Default::default(),
         delete_acl_bindings: Default::default(),
     }];

@@ -149,6 +149,7 @@ pub fn desired_state_to_proto(desired: &DeviceDesiredState) -> adapter::DesiredD
             .iter()
             .map(|vlan_id| u32::from(*vlan_id))
             .collect(),
+        delete_interface_names: desired.delete_interface_names.iter().cloned().collect(),
         delete_acl_ids: desired
             .delete_acl_ids
             .iter()
@@ -173,6 +174,7 @@ pub fn state_scope_from_desired(desired: &DeviceDesiredState) -> adapter::StateS
                 .values()
                 .map(|binding| binding.interface_name.clone()),
         )
+        .chain(desired.delete_interface_names.iter().cloned())
         .chain(
             desired
                 .delete_acl_bindings
@@ -231,6 +233,9 @@ pub fn state_scope_from_change_set(change_set: &ChangeSet) -> adapter::StateScop
                     interface_names.insert(before.name.clone());
                 }
                 interface_names.insert(after.name.clone());
+            }
+            ChangeOp::DeleteInterfaceConfig { interface_name } => {
+                interface_names.insert(interface_name.clone());
             }
             ChangeOp::CreateAcl(acl) => {
                 acl_ids.insert(u32::from(acl.acl_id));

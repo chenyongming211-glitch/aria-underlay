@@ -122,6 +122,7 @@ fn stack_single_management_ip_intent() -> UnderlayDomainIntent {
         acls: vec![],
         acl_bindings: vec![],
         delete_vlan_ids: vec![],
+        delete_interfaces: vec![],
         delete_acl_ids: vec![],
         delete_acl_bindings: vec![],
     }

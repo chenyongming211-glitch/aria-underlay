@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::model::{
     AclBinding, AclConfig, AclRule, InterfaceConfig, PortMode, VlanConfig,
@@ -105,6 +105,12 @@ pub fn normalize_desired_state(mut state: DeviceDesiredState) -> DeviceDesiredSt
             (interface.name.clone(), interface)
         })
         .collect::<BTreeMap<_, _>>();
+
+    state.delete_interface_names = state
+        .delete_interface_names
+        .into_iter()
+        .map(|name| canonical_interface_name(&name))
+        .collect::<BTreeSet<_>>();
 
     state.acls = state
         .acls
