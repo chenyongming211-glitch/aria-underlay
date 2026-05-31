@@ -207,6 +207,26 @@ model profile reference
 从哪里来可以替换；事务正确性、diff、ChangePlan、下发和 verify 不随外部 SoT 产品
 变化。
 
+### 3.4.3 适配加速战略
+
+多厂商 × 多功能 × 多固件的 O(V × F × S) 适配工作量是长期挑战。当前模式是每接入
+一个新厂商手写 renderer + parser + fixtures + acceptance，约 1700 行代码/厂商。
+
+三个互补的技术方向用于加速适配，详见
+[适配加速战略](./adapter-acceleration-strategy.md)：
+
+1. **YANG 驱动自动生成**：从 YANG schema 自动生成 renderer/parser（中长期，需要
+   YANG conformance 数据积累）
+2. **LLM 辅助适配**：用 LLM 加速新厂商的初始代码生成，人工只修失败 case（短期，
+   预计新厂商接入时间减半）
+3. **Runtime YANG Validation**：运行时用 YANG schema 验证 renderer 输出（中期，
+   作为安全网）
+
+三个方案共享 YANG library 数据基础，不替代现有的事务安全和验收标准。生成的代码
+必须过同一套 offline acceptance runner，renderer 来源不影响 ACID 事务语义。
+
+**短期优先**：LLM 辅助适配 MVP + YANG Schema 采集（只读，零风险）。
+
 ### 3.5 幂等
 
 同一个 intent 连续 apply 多次，只有第一次真正改设备。

@@ -140,6 +140,157 @@
 
 ---
 
+## P2: LLM 辅助适配 MVP
+
+**做什么**：用 LLM 加速新厂商 renderer/parser 的初始代码生成。以现有 H3C renderer（1193 行）和 state parser（1188 行）作为 golden reference，结合新厂商 running-config 样本和 YANG modules，由 LLM 生成 renderer/parser 骨架、fixtures 和 acceptance scenario。人工只修 offline acceptance 中失败的 case。
+
+**为什么**：当前每接入一个新厂商需要手写 ~1700 行代码（renderer ~400 + parser ~400 + fixtures ~600 + acceptance ~100 + tests ~200）。不同厂商的 renderer 结构高度相似，只是 namespace 和 element name 不同，LLM 擅长这种 pattern matching + 转换。
+
+**工作流**：
+1. **Phase 1（只读采集）**：采集新设备的 running-config 样本、NETCONF capabilities、YANG modules。不写设备。
+2. **Phase 2（LLM 生成）**：用 H3C reference + 新厂商样本作为 prompt，生成 renderer/parser/fixtures/acceptance。最多 3 轮迭代（失败 → 喂回 LLM → 重新生成）。
+3. **Phase 3（自动验证）**：跑 offline acceptance runner。这是现有基础设施的天然复用。
+4. **Phase 4（人工修复）**：只修失败的 3-5 个 case，不需要从零写 1000 行。
+5. **Phase 5（真机验收）**：和现有 `real-device-acceptance.md` runbook 完全一致，不降低标准。
+
+**代码结构**：
+```text
+renderers/
+  ├── generated/          # LLM 生成且通过 acceptance
+  ├── handwritten/        # 现有手写（h3c.py, huawei.py 迁入）
+  └── overrides/          # 对生成代码的人工 override（最高优先级）
+```
+
+**安全约束**：
+- 生成的代码不过 acceptance 就不进生产
+- 生成代码头部标注 `AUTO-GENERATED` + `UNVERIFIED` / `VERIFIED` 状态
+- Renderer 来源进入 journal 和审计日志
+- 不让 LLM 生成事务/恢复/审计相关代码
+- 不让 LLM 决定写路径准入（仍由 `DeviceModelProfile` + `WriteDecision` 决定）
+
+**ROI**：新厂商接入时间从 ~4 周降至 ~1.5 周（~60% 节省）。后续每新增一个厂商边际成本更低。
+
+**详细方案**：`docs/adapter-acceleration-strategy.md` §3
+
+**工作量**：M（1-2 周）
+**优先级**：P2（标准模型计划合入 main 之后）
+**依赖**：至少一个新厂商设备的 running-config 样本（采集可在 LLM 生成前独立完成）
+
+---
+
+## P2/P3: YANG Schema 采集
+
+**做什么**：把所有接入设备的 YANG modules 通过 NETCONF `get-schema`（RFC 6022）采集并归档，建立 YANG library。结果存入 `data/yang-library/{vendor}/{model}/{os_version}/` 并写入 `DeviceModelProfile.yang_modules`。
+
+**为什么**：YANG library 是三个适配加速方案的共同数据基础。即使后续不走 YANG 驱动方向，采集数据也有独立价值（设备能力归档、firmware 变更追踪）。
+
+**范围**：
+- 只读操作：`get-schema` + `get-config(source="running", filter=yang-library)`
+- 不影响设备配置
+- 扩展 `netconf_model_profile.py` 的 `extract_yang_modules_from_capabilities` 为完整 module 下载
+- Proto 增加 `repeated YangModuleSummary yang_modules` 字段
+
+**不做**：
+- 不做 YANG schema diff（需要真实设备 candidate 探测，是独立工作项）
+- 不做 renderer/parser 自动生成
+
+**详细方案**：`docs/adapter-acceleration-strategy.md` §2.3 阶段 A
+
+**工作量**：S（2-3 天）
+**优先级**：P2/P3（零风险，可与 LLM 辅助适配并行启动）
+**依赖**：无
+
+---
+
+## P3: Runtime YANG Validator
+
+**做什么**：在 renderer 输出发送到设备之前，用 YANG schema 验证 XML 结构是否符合 schema。验证失败 fail-closed，不发送 edit-config。
+
+**为什么**：作为 renderer 的运行时安全网，在 edit-config 发送到设备之前捕获 XML 结构错误（namespace 不匹配、缺少必填 leaf、类型越界）。减少设备侧 rpc-error 和可能的配置污染。
+
+**范围**：
+- 验证 namespace 匹配、必填 leaf 存在、类型约束（uint16 range、string length、enumeration）
+- YANG schema 加载失败 → fail-closed 降级为不验证 + 结构化 warning
+- 验证结果进入 journal 和审计日志
+- 在 `drivers/netconf_backed.py` 的 `prepare()` 方法中，`edit_config` 调用之前插入验证
+- 可以通过配置关闭（`yang_runtime_validation: false`），但默认开启
+
+**不做**：
+- 不做完整的 runtime discovery（自动生成配置）
+- 不用 runtime validation 替代 offline acceptance
+- 不让验证结果影响 `WriteDecision`
+
+**前置条件**：YANG Schema 采集完成，有可用的 YANG library。
+
+**详细方案**：`docs/adapter-acceleration-strategy.md` §4.2
+
+**工作量**：M（1 周）
+**优先级**：P3
+**依赖**：YANG Schema 采集完成
+
+---
+
+## P3/P4: YANG Schema Diff 和 Deviation 发现
+
+**做什么**：对比设备实际行为和 YANG schema，自动发现 deviation。对每个 YANG path（目标功能面），在 candidate 上尝试无害写探测，记录 schema-conformant vs deviated 结果。
+
+**为什么**：H3C Comware7、Huawei VRP8 的 YANG 实现经常和 schema 不一致。在走 YANG 驱动自动生成之前，必须先知道哪些 path 是 schema-conformant 的。
+
+**范围**：
+- 在 candidate 上操作，validate 后立即 discard-changes
+- 使用隔离测试对象（VLAN ID 4090、ACL ID 3999）
+- 每个 probe 必须有 cleanup
+- 默认 dry-run only；实际探测需显式 `--probe-mode=active`
+- 结果写入 `DeviceModelProfile.yang_conformance`
+
+**不做**：
+- 不在 production VLAN/ACL 上做探测
+- 不实际提交 candidate 配置
+
+**详细方案**：`docs/adapter-acceleration-strategy.md` §2.3 阶段 B
+
+**工作量**：M（1-2 周）
+**优先级**：P3/P4
+**依赖**：YANG Schema 采集完成；真实设备可用
+
+---
+
+## P4/条件项: Schema-Driven Renderer 自动生成
+
+**做什么**：对 YANG conformance report 中标记为 schema-conformant 的 paths，从 YANG schema 自动生成 renderer/parser。Deviated paths 仍走手写 renderer。
+
+**为什么**：如果设备 YANG 实现足够规范，可以从 schema 自动生成 renderer/parser，不需要手写 XML 模板。长期看可以大幅减少 O(V × F) 的适配工作量。
+
+**前提条件**：
+- YANG Schema Diff 已积累足够的 conformance 数据
+- 已知哪些 path 是 schema-conformant 的
+- 有 offline acceptance 作为生成代码的质量门禁
+
+**代码结构**：
+```text
+renderers/
+  ├── generated/          # YANG-driven 自动生成
+  ├── handwritten/        # 手写（deviated paths）
+  └── overrides/          # 人工 override（最高优先级）
+```
+
+优先级：override > generated > handwritten。
+
+**安全约束**：
+- 生成的代码必须通过 offline acceptance
+- Deviated paths 永远不自动生成
+- 生成代码头部标注来源和 conformance 比例
+
+**当前现实约束**：H3C Comware7 / Huawei VRP8 的 YANG 实现碎片化严重，短期不具备全面自动生成的条件。
+
+**详细方案**：`docs/adapter-acceleration-strategy.md` §2.3 阶段 C
+
+**工作量**：L（1-2 月）
+**优先级**：P4/条件项
+**依赖**：YANG Schema Diff 完成；有足够的 schema-conformant paths
+
+---
+
 ## P3: Active-Passive HA Journal 复制
 
 **做什么**：设计并实现 active/passive 节点之间的 journal 复制，使 HA 故障转移时保留进行中的事务。
