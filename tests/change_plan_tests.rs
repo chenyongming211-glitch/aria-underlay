@@ -1,11 +1,15 @@
 use aria_underlay::api::request::ApplyReconcileMode;
+use aria_underlay::device::model_profile::{
+    DeviceModelProfile, ModelPathSupport, ModelProtocol, WriteReadiness,
+};
 use aria_underlay::engine::change_plan::{
-    build_change_plan, BlastRadius, ChangePlanStageKind,
+    build_change_plan, build_change_plan_with_profile, BlastRadius, ChangePlanStageKind,
+    DryRunWriteDecision,
 };
 use aria_underlay::engine::diff::{ChangeOp, ChangeSet};
 use aria_underlay::engine::dry_run::build_dry_run_plan;
 use aria_underlay::model::{
-    AclAction, AclBinding, AclConfig, AclDirection, AclProtocol, AclRule, DeviceId,
+    AclAction, AclBinding, AclConfig, AclDirection, AclProtocol, AclRule, DeviceId, Vendor,
     VlanConfig,
 };
 use aria_underlay::planner::device_plan::DeviceDesiredState;
@@ -140,4 +144,101 @@ fn vlan(vlan_id: u16) -> VlanConfig {
         name: Some("tenant".to_string()),
         description: None,
     }
+}
+
+#[test]
+fn change_plan_without_profile_defaults_to_vendor_private_and_empty_unsupported() {
+    let change_set = ChangeSet {
+        device_id: DeviceId("leaf-1".to_string()),
+        ops: vec![ChangeOp::CreateVlan(vlan(100))],
+    };
+
+    let plan = build_change_plan(&change_set);
+
+    assert_eq!(plan.write_decision, DryRunWriteDecision::AllowedVendorPrivate);
+    assert!(plan.unsupported_paths.is_empty());
+}
+
+#[test]
+fn change_plan_with_write_rejected_profile_reports_unsupported_paths() {
+    let profile = DeviceModelProfile {
+        profile_id: "h3c:S5560:Comware7".to_string(),
+        vendor: Vendor::H3c,
+        model: "S5560".to_string(),
+        os_version: "Comware7".to_string(),
+        paths: vec![],
+        pbr_write_readiness: WriteReadiness::WriteRejected,
+        bgp_write_readiness: WriteReadiness::WriteRejected,
+        rejection_reasons: vec![
+            "pbr: no path-level write evidence".to_string(),
+            "bgp: no path-level writing evidence".to_string(),
+        ],
+    };
+    let change_set = ChangeSet {
+        device_id: DeviceId("leaf-1".to_string()),
+        ops: vec![ChangeOp::CreateAcl(acl_config())],
+    };
+
+    let plan = build_change_plan_with_profile(&change_set, Some(&profile));
+
+    assert_eq!(plan.unsupported_paths.len(), 2);
+    assert!(plan.unsupported_paths[0].starts_with("pbr:"));
+    assert!(plan.unsupported_paths[1].starts_with("bgp:"));
+    assert_eq!(plan.write_decision, DryRunWriteDecision::Rejected);
+}
+
+#[test]
+fn change_plan_with_write_safe_profile_reports_standard_model_decision() {
+    let profile = DeviceModelProfile {
+        profile_id: "h3c:S6800:Comware7".to_string(),
+        vendor: Vendor::H3c,
+        model: "S6800".to_string(),
+        os_version: "Comware7".to_string(),
+        paths: vec![ModelPathSupport {
+            protocol: ModelProtocol::OpenConfigNetconf,
+            model: "openconfig-vlan".to_string(),
+            revision: Some("2024-01-15".to_string()),
+            path: "/vlans".to_string(),
+            readable: true,
+            writable: true,
+            verified_on_device: true,
+            deviations: vec![],
+            notes: vec![],
+        }],
+        pbr_write_readiness: WriteReadiness::WriteSafe,
+        bgp_write_readiness: WriteReadiness::WriteSafe,
+        rejection_reasons: vec![],
+    };
+    let change_set = ChangeSet {
+        device_id: DeviceId("leaf-1".to_string()),
+        ops: vec![ChangeOp::CreateVlan(vlan(100))],
+    };
+
+    let plan = build_change_plan_with_profile(&change_set, Some(&profile));
+
+    assert!(plan.unsupported_paths.is_empty());
+    assert_eq!(plan.write_decision, DryRunWriteDecision::AllowedStandardModel);
+}
+
+#[test]
+fn change_plan_with_read_only_profile_reports_read_only_for_policy_changes() {
+    let profile = DeviceModelProfile {
+        profile_id: "h3c:S5560:Comware7".to_string(),
+        vendor: Vendor::H3c,
+        model: "S5560".to_string(),
+        os_version: "Comware7".to_string(),
+        paths: vec![],
+        pbr_write_readiness: WriteReadiness::ReadOnly,
+        bgp_write_readiness: WriteReadiness::ReadOnly,
+        rejection_reasons: vec![],
+    };
+    let change_set = ChangeSet {
+        device_id: DeviceId("leaf-1".to_string()),
+        ops: vec![ChangeOp::CreateAcl(acl_config())],
+    };
+
+    let plan = build_change_plan_with_profile(&change_set, Some(&profile));
+
+    assert_eq!(plan.write_decision, DryRunWriteDecision::ReadOnly);
+    assert!(plan.unsupported_paths.is_empty());
 }
