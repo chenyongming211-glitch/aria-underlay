@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Collect and sanitize device configuration samples.
+
+This tool connects to network devices via NETCONF, retrieves the running
+configuration, and automatically sanitizes sensitive information while
+preserving XML structure for parser validation.
+
+Usage:
+    collect-device-sample --device 10.0.0.1 --user admin --output sample.xml
+    collect-device-sample --from-file raw.xml --output sanitized.xml
+"""
+import sys
+from aria_underlay_adapter.tools.sample_collector import main
+
+if __name__ == "__main__":
+    sys.exit(main())

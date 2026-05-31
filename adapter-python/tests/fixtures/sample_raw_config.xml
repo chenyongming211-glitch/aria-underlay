@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+    <top xmlns="http://www.h3c.com/netconf/config:1.0">
+        <Device>
+            <Hostname>core-switch-beijing-01</Hostname>
+            <ManagementIP>10.1.2.3</ManagementIP>
+        </Device>
+        <VLAN>
+            <VLANs>
+                <VLANID>
+                    <ID>100</ID>
+                    <Name>production</Name>
+                </VLANID>
+            </VLANs>
+        </VLAN>
+        <BGP>
+            <Instances>
+                <Instance>
+                    <ASNumber>65001</ASNumber>
+                    <VRF>tenant-a</VRF>
+                    <Peers>
+                        <Peer>
+                            <PeerAddress>10.1.2.4</PeerAddress>
+                            <RemoteAS>65002</RemoteAS>
+                            <Password>bgp_secret_password</Password>
+                        </Peer>
+                    </Peers>
+                </Instance>
+            </Instances>
+        </BGP>
+        <SNMP>
+            <Community>public</Community>
+            <TrapServer>192.168.1.100</TrapServer>
+        </SNMP>
+    </top>
+</data>
