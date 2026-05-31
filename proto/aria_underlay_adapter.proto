@@ -131,6 +131,7 @@ message DeviceCapability {
   bool supports_writable_running = 11;
   repeated BackendKind supported_backends = 12;
   DeviceModelProfile model_profile = 13;
+  repeated YangModuleSummary yang_modules = 14;
 }
 
 enum ModelProtocol {
@@ -160,6 +161,15 @@ message ModelPathSupport {
   repeated string notes = 9;
 }
 
+message YangModuleSummary {
+  string name = 1;
+  string revision = 2;
+  string namespace = 3;
+  uint64 schema_size_bytes = 4;
+  bool schema_downloaded = 5;
+  string format = 6;
+}
+
 message DeviceModelProfile {
   string profile_id = 1;
   Vendor vendor = 2;
@@ -169,6 +179,7 @@ message DeviceModelProfile {
   WriteReadiness pbr_write_readiness = 6;
   WriteReadiness bgp_write_readiness = 7;
   repeated string rejection_reasons = 8;
+  uint32 yang_module_count = 9;
 }
 
 message VlanConfig {

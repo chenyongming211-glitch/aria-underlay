@@ -21,6 +21,8 @@ class AdapterConfig:
     gnmi_tls_ca_cert_file: str | None = None
     gnmi_tls_cert_file: str | None = None
     gnmi_tls_key_file: str | None = None
+    yang_schema_collection_enabled: bool = False
+    yang_library_dir: str | None = None
 
     @property
     def tls_enabled(self) -> bool:
@@ -67,6 +69,11 @@ class AdapterConfig:
             gnmi_tls_ca_cert_file=os.getenv("ARIA_UNDERLAY_GNMI_TLS_CA_CERT_FILE"),
             gnmi_tls_cert_file=os.getenv("ARIA_UNDERLAY_GNMI_TLS_CERT_FILE"),
             gnmi_tls_key_file=os.getenv("ARIA_UNDERLAY_GNMI_TLS_KEY_FILE"),
+            yang_schema_collection_enabled=_env_bool(
+                "ARIA_UNDERLAY_YANG_SCHEMA_COLLECTION_ENABLED",
+                default=False,
+            ),
+            yang_library_dir=os.getenv("ARIA_UNDERLAY_YANG_LIBRARY_DIR"),
         )
         config.validate()
         return config

@@ -14,7 +14,7 @@ pub use bootstrap::{
 pub use capability::DeviceCapabilityProfile;
 pub use info::{DeviceInfo, DeviceLifecycleState, HostKeyPolicy};
 pub use inventory::DeviceInventory;
-pub use model_profile::DeviceModelProfile;
+pub use model_profile::{DeviceModelProfile, YangModuleSummary};
 pub use onboarding::DeviceOnboardingService;
 pub use registration::{DeviceRegistrationService, RegisterDeviceRequest, RegisterDeviceResponse};
 pub use secret::{

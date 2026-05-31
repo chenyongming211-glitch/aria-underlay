@@ -77,6 +77,7 @@ fn maps_capability_warnings() {
             supports_writable_running: false,
             supported_backends: vec![adapter::BackendKind::Netconf as i32],
             model_profile: None,
+            yang_modules: vec![],
         },
         vec!["capability warning".into()],
     );
@@ -109,7 +110,9 @@ fn maps_capability_model_profile() {
                 pbr_write_readiness: adapter::WriteReadiness::WriteRejected as i32,
                 bgp_write_readiness: adapter::WriteReadiness::ReadOnly as i32,
                 rejection_reasons: vec!["bgp path is read-only".into()],
+                yang_module_count: 0,
             }),
+            yang_modules: vec![],
         },
         vec![],
     );

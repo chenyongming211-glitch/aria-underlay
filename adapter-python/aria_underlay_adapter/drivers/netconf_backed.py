@@ -53,6 +53,10 @@ class NetconfBackedDriver:
             capability_fields["model_profile"] = _model_profile_to_proto(
                 capability.model_profile
             )
+        if capability.yang_modules:
+            capability_fields["yang_modules"] = [
+                _yang_module_to_proto(module) for module in capability.yang_modules
+            ]
 
         return pb2.GetCapabilitiesResponse(
             capability=pb2.DeviceCapability(**capability_fields),
@@ -747,6 +751,18 @@ def _model_profile_to_proto(profile: dict):
             profile.get("bgp_write_readiness", "write_rejected")
         ),
         rejection_reasons=profile.get("rejection_reasons", []),
+        yang_module_count=profile.get("yang_module_count", 0),
+    )
+
+
+def _yang_module_to_proto(module: dict):
+    return pb2.YangModuleSummary(
+        name=module.get("name", ""),
+        revision=module.get("revision", ""),
+        namespace=module.get("namespace", ""),
+        schema_size_bytes=module.get("schema_size_bytes", 0),
+        schema_downloaded=module.get("schema_downloaded", False),
+        format=module.get("format", "yang"),
     )
 
 

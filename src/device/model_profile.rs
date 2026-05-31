@@ -41,6 +41,16 @@ pub struct ModelPathSupport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct YangModuleSummary {
+    pub name: String,
+    pub revision: String,
+    pub namespace: String,
+    pub schema_size_bytes: u64,
+    pub schema_downloaded: bool,
+    pub format: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceModelProfile {
     pub profile_id: String,
     pub vendor: Vendor,
@@ -50,6 +60,8 @@ pub struct DeviceModelProfile {
     pub pbr_write_readiness: WriteReadiness,
     pub bgp_write_readiness: WriteReadiness,
     pub rejection_reasons: Vec<String>,
+    #[serde(default)]
+    pub yang_module_count: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +111,20 @@ impl DeviceModelProfile {
             pbr_write_readiness: WriteReadiness::from_proto(proto.pbr_write_readiness),
             bgp_write_readiness: WriteReadiness::from_proto(proto.bgp_write_readiness),
             rejection_reasons: proto.rejection_reasons,
+            yang_module_count: proto.yang_module_count,
+        }
+    }
+}
+
+impl YangModuleSummary {
+    pub fn from_proto(proto: adapter::YangModuleSummary) -> Self {
+        Self {
+            name: proto.name,
+            revision: proto.revision,
+            namespace: proto.namespace,
+            schema_size_bytes: proto.schema_size_bytes,
+            schema_downloaded: proto.schema_downloaded,
+            format: proto.format,
         }
     }
 }

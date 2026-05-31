@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::device::model_profile::DeviceModelProfile;
+use crate::device::model_profile::{DeviceModelProfile, YangModuleSummary};
 use crate::model::Vendor;
 use crate::tx::TransactionStrategy;
 
@@ -29,4 +29,6 @@ pub struct DeviceCapabilityProfile {
     pub model_profile: Option<DeviceModelProfile>,
     pub recommended_strategy: TransactionStrategy,
     pub warnings: Vec<String>,
+    #[serde(default)]
+    pub yang_modules: Vec<YangModuleSummary>,
 }

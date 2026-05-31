@@ -2,6 +2,7 @@ use crate::device::{
     capability::BackendKind, DeviceCapabilityProfile, DeviceInfo, DeviceModelProfile,
     HostKeyPolicy,
 };
+use crate::device::model_profile::YangModuleSummary;
 use crate::engine::diff::{ChangeOp, ChangeSet};
 use crate::model::{
     AclAction, AclBinding, AclConfig, AclDirection, AclEndpoint, AclProtocol, AclRule, AdminState,
@@ -112,6 +113,11 @@ pub fn capability_from_proto(proto: adapter::DeviceCapability, warnings: Vec<Str
         model_profile: proto.model_profile.map(DeviceModelProfile::from_proto),
         recommended_strategy,
         warnings,
+        yang_modules: proto
+            .yang_modules
+            .into_iter()
+            .map(YangModuleSummary::from_proto)
+            .collect(),
     }
 }
 
