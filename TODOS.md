@@ -180,9 +180,11 @@ renderers/
 
 ---
 
-## P2/P3: YANG Schema 采集
+## P2/P3: 进行中 — YANG Schema 采集
 
-**做什么**：把所有接入设备的 YANG modules 通过 NETCONF `get-schema`（RFC 6022）采集并归档，建立 YANG library。结果存入 `data/yang-library/{vendor}/{model}/{os_version}/` 并写入 `DeviceModelProfile.yang_modules`。
+**状态**：核心采集逻辑已在 `codex/yang-schema-collection` 分支实现，待 CI 通过后合入 `main`。已落地：`backends/yang_schema.py`（collect/save/load）、`YangModuleSummary` proto 消息、`DeviceCapability.yang_modules` 字段、`DeviceModelProfile.yang_module_count`、`ARIA_UNDERLAY_YANG_SCHEMA_COLLECTION_ENABLED` 配置开关、save/load 单元测试和 NETCONF backend 测试。
+
+**做什么**：把所有接入设备的 YANG modules 通过 NETCONF `get-schema`（RFC 6022）采集并归档，建立 YANG library。结果存入 `data/yang-library/{vendor}/{model}/{os_version}/` 并通过 `DeviceCapability.yang_modules` 返回，`DeviceModelProfile.yang_module_count` 记录总数。
 
 **为什么**：YANG library 是三个适配加速方案的共同数据基础。即使后续不走 YANG 驱动方向，采集数据也有独立价值（设备能力归档、firmware 变更追踪）。
 
