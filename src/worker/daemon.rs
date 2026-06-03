@@ -22,7 +22,11 @@ use crate::telemetry::{
 use crate::worker::drift_auditor::{
     DriftAuditSchedule, DriftAuditWorker, DriftAuditor, DriftObservationSource,
 };
-use crate::worker::gc::{JournalGc, JournalGcSchedule, JournalGcWorker, RetentionPolicy};
+use crate::worker::gc::{
+    ApplyIdempotencyGc, ApplyIdempotencyGcSchedule, ApplyIdempotencyGcWorker,
+    ApplyIdempotencyRetentionPolicy, JournalGc, JournalGcSchedule, JournalGcWorker,
+    RetentionPolicy,
+};
 use crate::worker::operation_alerts::{
     OperationAlertDeliverySchedule, OperationAlertDeliveryWorker,
 };
@@ -49,6 +53,8 @@ pub struct UnderlayWorkerDaemonConfig {
     pub operation_alert: Option<OperationAlertDaemonConfig>,
     #[serde(default)]
     pub journal_gc: Option<JournalGcDaemonConfig>,
+    #[serde(default)]
+    pub apply_idempotency_gc: Option<ApplyIdempotencyGcDaemonConfig>,
     #[serde(default)]
     pub drift_audit: Option<DriftAuditDaemonConfig>,
 }
@@ -98,6 +104,15 @@ pub struct JournalGcDaemonConfig {
     pub schedule: WorkerScheduleConfig,
     #[serde(default)]
     pub retention: RetentionPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyIdempotencyGcDaemonConfig {
+    pub root: PathBuf,
+    #[serde(default)]
+    pub schedule: WorkerScheduleConfig,
+    #[serde(default)]
+    pub retention: ApplyIdempotencyRetentionPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -271,6 +286,17 @@ impl UnderlayWorkerDaemon {
             );
         }
 
+        if let Some(config) = config.apply_idempotency_gc {
+            runtime = runtime.with_apply_idempotency_gc(
+                ApplyIdempotencyGcWorker::new(
+                    ApplyIdempotencyGc::new(config.root),
+                    config.retention,
+                    event_sink.clone(),
+                ),
+                config.schedule.into(),
+            );
+        }
+
         if let Some(config) = config.drift_audit {
             let expected_store = Arc::new(JsonFileShadowStateStore::new(config.expected_shadow_root));
             let observed_source = Arc::new(ShadowStoreObservationSource {
@@ -340,6 +366,15 @@ impl DriftObservationSource for ShadowStoreObservationSource {
 }
 
 impl From<WorkerScheduleConfig> for JournalGcSchedule {
+    fn from(config: WorkerScheduleConfig) -> Self {
+        Self {
+            interval_secs: config.interval_secs,
+            run_immediately: config.run_immediately,
+        }
+    }
+}
+
+impl From<WorkerScheduleConfig> for ApplyIdempotencyGcSchedule {
     fn from(config: WorkerScheduleConfig) -> Self {
         Self {
             interval_secs: config.interval_secs,
@@ -599,6 +634,13 @@ pub(crate) fn validate_worker_config_for_runtime(
     if let Some(journal_gc) = &config.journal_gc {
         journal_gc.retention.validate()?;
         validate_worker_schedule("journal_gc.schedule", journal_gc.schedule)?;
+    }
+    if let Some(apply_idempotency_gc) = &config.apply_idempotency_gc {
+        apply_idempotency_gc.retention.validate()?;
+        validate_worker_schedule(
+            "apply_idempotency_gc.schedule",
+            apply_idempotency_gc.schedule,
+        )?;
     }
     if let Some(drift_audit) = &config.drift_audit {
         validate_worker_schedule("drift_audit.schedule", drift_audit.schedule)?;

@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::worker::daemon::{
-    DriftAuditDaemonConfig, JournalGcDaemonConfig, OperationAlertDaemonConfig,
-    OperationAuditDaemonConfig, OperationSummaryDaemonConfig, UnderlayWorkerDaemonConfig,
-    WorkerReloadDaemonConfig, WorkerScheduleConfig,
+    ApplyIdempotencyGcDaemonConfig, DriftAuditDaemonConfig, JournalGcDaemonConfig,
+    OperationAlertDaemonConfig, OperationAuditDaemonConfig, OperationSummaryDaemonConfig,
+    UnderlayWorkerDaemonConfig, WorkerReloadDaemonConfig, WorkerScheduleConfig,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +97,7 @@ impl WorkerDeploymentPreflight {
             && config.operation_audit.is_none()
             && config.operation_alert.is_none()
             && config.journal_gc.is_none()
+            && config.apply_idempotency_gc.is_none()
             && config.drift_audit.is_none()
         {
             report.warning("worker config has no enabled sections");
@@ -117,6 +118,9 @@ impl WorkerDeploymentPreflight {
         }
         if let Some(journal_gc) = &config.journal_gc {
             self.check_journal_gc(report, journal_gc);
+        }
+        if let Some(apply_idempotency_gc) = &config.apply_idempotency_gc {
+            self.check_apply_idempotency_gc(report, apply_idempotency_gc);
         }
         if let Some(drift_audit) = &config.drift_audit {
             self.check_drift_audit(report, drift_audit);
@@ -191,6 +195,18 @@ impl WorkerDeploymentPreflight {
         if let Some(artifact_root) = &config.artifact_root {
             self.check_directory(report, artifact_root, "journal_gc.artifact_root", true);
         }
+    }
+
+    fn check_apply_idempotency_gc(
+        &self,
+        report: &mut WorkerDeploymentPreflightReport,
+        config: &ApplyIdempotencyGcDaemonConfig,
+    ) {
+        if let Err(err) = config.retention.validate() {
+            report.error(format!("apply_idempotency_gc.retention: {err}"));
+        }
+        check_schedule(report, "apply_idempotency_gc.schedule", config.schedule);
+        self.check_directory(report, &config.root, "apply_idempotency_gc.root", true);
     }
 
     fn check_drift_audit(

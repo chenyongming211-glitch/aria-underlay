@@ -18,6 +18,8 @@ pub enum MetricName {
     OperationDriftDetectedTotal,
     OperationJournalGcTotal,
     OperationJournalGcDeletedTotal,
+    OperationApplyIdempotencyGcTotal,
+    OperationApplyIdempotencyGcDeletedTotal,
     OperationAuditWriteFailedTotal,
     NetconfRpcLatencyMs,
     DeviceSessionReconnectTotal,
@@ -91,6 +93,17 @@ impl Metrics {
                         .unwrap_or_default();
                 if deleted > 0 {
                     self.increment(MetricName::OperationJournalGcDeletedTotal);
+                }
+            }
+            UnderlayEventKind::UnderlayApplyIdempotencyGcCompleted => {
+                self.increment(MetricName::OperationApplyIdempotencyGcTotal);
+                let deleted = event
+                    .fields
+                    .get("records_deleted")
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or_default();
+                if deleted > 0 {
+                    self.increment(MetricName::OperationApplyIdempotencyGcDeletedTotal);
                 }
             }
             UnderlayEventKind::UnderlayAuditWriteFailed => {

@@ -375,6 +375,7 @@ fn is_operator_event(kind: &UnderlayEventKind) -> bool {
         UnderlayEventKind::UnderlayDriftDetected
             | UnderlayEventKind::UnderlayDriftAuditCompleted
             | UnderlayEventKind::UnderlayJournalGcCompleted
+            | UnderlayEventKind::UnderlayApplyIdempotencyGcCompleted
             | UnderlayEventKind::UnderlayRecoveryCompleted
             | UnderlayEventKind::UnderlayAuditWriteFailed
             | UnderlayEventKind::UnderlayTransactionForceResolved

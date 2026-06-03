@@ -390,9 +390,12 @@ fn required_worker_schedule_target(
         }
         "operation-alert" | "operation_alert" => Ok(WorkerScheduleTarget::OperationAlert),
         "journal-gc" | "journal_gc" => Ok(WorkerScheduleTarget::JournalGc),
+        "apply-idempotency-gc" | "apply_idempotency_gc" => {
+            Ok(WorkerScheduleTarget::ApplyIdempotencyGc)
+        }
         "drift-audit" | "drift_audit" => Ok(WorkerScheduleTarget::DriftAudit),
         _ => Err(invalid_input(format!(
-            "{name} must be operation-summary-retention, operation-alert, journal-gc, or drift-audit"
+            "{name} must be operation-summary-retention, operation-alert, journal-gc, apply-idempotency-gc, or drift-audit"
         ))),
     }
 }

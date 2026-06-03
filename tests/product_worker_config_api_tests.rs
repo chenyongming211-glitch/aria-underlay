@@ -15,10 +15,11 @@ use aria_underlay::telemetry::{
     InMemoryOperationSummaryStore, InMemoryProductAuditStore, OperationSummaryRetentionPolicy,
 };
 use aria_underlay::worker::daemon::{
-    DriftAuditDaemonConfig, JournalGcDaemonConfig, OperationAlertDaemonConfig,
-    OperationSummaryDaemonConfig, UnderlayWorkerDaemonConfig, WorkerScheduleConfig,
+    ApplyIdempotencyGcDaemonConfig, DriftAuditDaemonConfig, JournalGcDaemonConfig,
+    OperationAlertDaemonConfig, OperationSummaryDaemonConfig, UnderlayWorkerDaemonConfig,
+    WorkerScheduleConfig,
 };
-use aria_underlay::worker::gc::RetentionPolicy;
+use aria_underlay::worker::gc::{ApplyIdempotencyRetentionPolicy, RetentionPolicy};
 
 #[test]
 fn product_http_operator_changes_worker_schedule_with_product_audit() {
@@ -129,6 +130,14 @@ fn worker_config(temp: &std::path::Path) -> UnderlayWorkerDaemonConfig {
                 run_immediately: true,
             },
             retention: RetentionPolicy::default(),
+        }),
+        apply_idempotency_gc: Some(ApplyIdempotencyGcDaemonConfig {
+            root: temp.join("idempotency"),
+            schedule: WorkerScheduleConfig {
+                interval_secs: 60,
+                run_immediately: true,
+            },
+            retention: ApplyIdempotencyRetentionPolicy::default(),
         }),
         drift_audit: Some(DriftAuditDaemonConfig {
             expected_shadow_root: temp.join("expected-shadow"),

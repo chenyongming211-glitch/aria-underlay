@@ -51,6 +51,16 @@
       "max_artifacts_per_device": 50
     }
   },
+  "apply_idempotency_gc": {
+    "root": "var/aria-underlay/idempotency",
+    "schedule": {
+      "interval_secs": 3600,
+      "run_immediately": true
+    },
+    "retention": {
+      "retention_days": 30
+    }
+  },
   "drift_audit": {
     "expected_shadow_root": "var/aria-underlay/shadow/expected",
     "observed_shadow_root": "var/aria-underlay/shadow/observed",

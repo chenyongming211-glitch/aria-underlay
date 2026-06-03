@@ -11,11 +11,11 @@ use aria_underlay::tx::context::TxContext;
 use aria_underlay::tx::recovery::RecoveryReport;
 use aria_underlay::tx::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase};
 use aria_underlay::worker::daemon::{
-    DriftAuditDaemonConfig, JournalGcDaemonConfig, OperationAlertDaemonConfig,
-    OperationSummaryDaemonConfig, UnderlayWorkerDaemonConfig, WorkerConfigReloadStatus,
-    WorkerReloadCheckpoint, WorkerScheduleConfig,
+    ApplyIdempotencyGcDaemonConfig, DriftAuditDaemonConfig, JournalGcDaemonConfig,
+    OperationAlertDaemonConfig, OperationSummaryDaemonConfig, UnderlayWorkerDaemonConfig,
+    WorkerConfigReloadStatus, WorkerReloadCheckpoint, WorkerScheduleConfig,
 };
-use aria_underlay::worker::gc::RetentionPolicy;
+use aria_underlay::worker::gc::{ApplyIdempotencyRetentionPolicy, RetentionPolicy};
 
 #[test]
 fn ops_cli_prints_attention_required_operation_overview() {
@@ -499,6 +499,14 @@ fn worker_config(temp: &std::path::Path) -> UnderlayWorkerDaemonConfig {
             },
             retention: RetentionPolicy::default(),
         }),
+        apply_idempotency_gc: Some(ApplyIdempotencyGcDaemonConfig {
+            root: temp.join("idempotency"),
+            schedule: WorkerScheduleConfig {
+                interval_secs: 60,
+                run_immediately: true,
+            },
+            retention: ApplyIdempotencyRetentionPolicy::default(),
+        }),
         drift_audit: Some(DriftAuditDaemonConfig {
             expected_shadow_root: temp.join("expected-shadow"),
             observed_shadow_root: temp.join("observed-shadow"),
@@ -535,6 +543,10 @@ fn create_worker_dirs(config: &UnderlayWorkerDaemonConfig) {
         if let Some(artifact_root) = &journal_gc.artifact_root {
             fs::create_dir_all(artifact_root).expect("artifact root should be created");
         }
+    }
+    if let Some(apply_idempotency_gc) = &config.apply_idempotency_gc {
+        fs::create_dir_all(&apply_idempotency_gc.root)
+            .expect("apply idempotency root should be created");
     }
     if let Some(drift_audit) = &config.drift_audit {
         fs::create_dir_all(&drift_audit.expected_shadow_root)

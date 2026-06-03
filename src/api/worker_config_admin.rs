@@ -17,6 +17,7 @@ pub enum WorkerScheduleTarget {
     OperationSummaryRetention,
     OperationAlert,
     JournalGc,
+    ApplyIdempotencyGc,
     DriftAudit,
 }
 
@@ -217,6 +218,7 @@ impl WorkerScheduleTarget {
             WorkerScheduleTarget::OperationSummaryRetention => "operation_summary_retention",
             WorkerScheduleTarget::OperationAlert => "operation_alert",
             WorkerScheduleTarget::JournalGc => "journal_gc",
+            WorkerScheduleTarget::ApplyIdempotencyGc => "apply_idempotency_gc",
             WorkerScheduleTarget::DriftAudit => "drift_audit",
         }
     }
@@ -242,6 +244,11 @@ fn schedule_slot<'a>(
             .as_mut()
             .map(|section| &mut section.schedule)
             .ok_or_else(|| missing_config_section("journal_gc")),
+        WorkerScheduleTarget::ApplyIdempotencyGc => config
+            .apply_idempotency_gc
+            .as_mut()
+            .map(|section| &mut section.schedule)
+            .ok_or_else(|| missing_config_section("apply_idempotency_gc")),
         WorkerScheduleTarget::DriftAudit => config
             .drift_audit
             .as_mut()

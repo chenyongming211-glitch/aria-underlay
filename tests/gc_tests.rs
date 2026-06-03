@@ -8,7 +8,9 @@ use aria_underlay::model::DeviceId;
 use aria_underlay::telemetry::{InMemoryEventSink, UnderlayEvent, UnderlayEventKind};
 use aria_underlay::tx::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase};
 use aria_underlay::worker::gc::{
-    JournalGc, JournalGcReport, JournalGcSchedule, JournalGcWorker, RetentionPolicy,
+    ApplyIdempotencyGc, ApplyIdempotencyGcSchedule, ApplyIdempotencyGcWorker,
+    ApplyIdempotencyRetentionPolicy, JournalGc, JournalGcReport, JournalGcSchedule,
+    JournalGcWorker, RetentionPolicy,
 };
 
 #[test]
@@ -16,6 +18,9 @@ fn retention_policy_defaults_are_conservative() {
     let policy = RetentionPolicy::default();
     assert_eq!(policy.failed_journal_retention_days, 90);
     assert_eq!(policy.max_artifacts_per_device, 50);
+
+    let idempotency_policy = ApplyIdempotencyRetentionPolicy::default();
+    assert_eq!(idempotency_policy.retention_days, 30);
 }
 
 #[test]
@@ -83,6 +88,100 @@ fn journal_gc_completed_event_includes_cleanup_counts() {
         event.fields.get("failed_artifact_refs").map(String::as_str),
         Some("leaf-b/tx-stuck")
     );
+}
+
+#[tokio::test]
+async fn apply_idempotency_gc_deletes_old_records_and_keeps_recent_or_corrupt() {
+    let temp = temp_test_dir("apply-idempotency-retention");
+    let root = temp.join("apply-idempotency");
+    write_apply_idempotency_record(&root, "old.json", 100);
+    write_apply_idempotency_record(&root, "recent.json", 100 + 29 * 24 * 60 * 60);
+    fs::write(root.join("bad.json"), b"{not valid json")
+        .expect("corrupt idempotency fixture should be written");
+
+    let report = ApplyIdempotencyGc::new(&root)
+        .with_now_unix_secs(100 + 31 * 24 * 60 * 60)
+        .run_once(ApplyIdempotencyRetentionPolicy { retention_days: 30 })
+        .await
+        .expect("apply idempotency GC should run");
+
+    assert_eq!(report.records_deleted, 1);
+    assert_eq!(report.records_retained, 1);
+    assert_eq!(report.records_failed, 1);
+    assert_eq!(report.deleted_refs, vec!["old.json".to_string()]);
+    assert_eq!(report.failed_refs, vec!["bad.json".to_string()]);
+    assert!(!root.join("old.json").exists());
+    assert!(root.join("recent.json").exists());
+    assert!(root.join("bad.json").exists());
+    fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn apply_idempotency_gc_worker_emits_completion_event() {
+    let temp = temp_test_dir("apply-idempotency-worker-event");
+    let root = temp.join("apply-idempotency");
+    write_apply_idempotency_record(&root, "old.json", 100);
+    let sink = Arc::new(InMemoryEventSink::default());
+
+    let report = ApplyIdempotencyGcWorker::new(
+        ApplyIdempotencyGc::new(&root).with_now_unix_secs(100 + 31 * 24 * 60 * 60),
+        ApplyIdempotencyRetentionPolicy { retention_days: 30 },
+        sink.clone(),
+    )
+    .with_request_context("req-apply-idem-gc", "trace-apply-idem-gc")
+    .run_once_and_emit()
+    .await
+    .expect("apply idempotency worker should run");
+
+    assert_eq!(report.records_deleted, 1);
+    let events = sink.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].kind,
+        UnderlayEventKind::UnderlayApplyIdempotencyGcCompleted
+    );
+    assert_eq!(events[0].request_id, "req-apply-idem-gc");
+    assert_eq!(events[0].trace_id, "trace-apply-idem-gc");
+    assert_eq!(
+        events[0].fields.get("records_deleted").map(String::as_str),
+        Some("1")
+    );
+    fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn apply_idempotency_gc_worker_periodic_runner_runs_immediate_cycle() {
+    let temp = temp_test_dir("apply-idempotency-worker-periodic");
+    let root = temp.join("apply-idempotency");
+    write_apply_idempotency_record(&root, "old.json", 100);
+    let sink = Arc::new(InMemoryEventSink::default());
+    let worker = ApplyIdempotencyGcWorker::new(
+        ApplyIdempotencyGc::new(&root).with_now_unix_secs(100 + 31 * 24 * 60 * 60),
+        ApplyIdempotencyRetentionPolicy { retention_days: 30 },
+        sink,
+    );
+
+    let summary = worker
+        .run_periodic_until_shutdown(
+            ApplyIdempotencyGcSchedule {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+            async {},
+        )
+        .await
+        .expect("periodic apply idempotency GC should stop cleanly");
+
+    assert_eq!(summary.runs, 1);
+    assert_eq!(
+        summary
+            .last_report
+            .as_ref()
+            .expect("periodic worker should retain last report")
+            .deleted_refs,
+        vec!["old.json".to_string()]
+    );
+    fs::remove_dir_all(temp).ok();
 }
 
 #[tokio::test]
@@ -415,6 +514,30 @@ fn write_artifact(root: &std::path::Path, device_id: &str, tx_id: &str) {
     let dir = root.join(device_id).join(tx_id);
     fs::create_dir_all(&dir).expect("create artifact dir");
     fs::write(dir.join("rollback.json"), "{}").expect("write artifact");
+}
+
+fn write_apply_idempotency_record(root: &std::path::Path, file_name: &str, stored_at: u64) {
+    fs::create_dir_all(root).expect("apply idempotency root should be created");
+    let payload = serde_json::json!({
+        "stored_at_unix_secs": stored_at,
+        "fingerprint": format!("fingerprint-{file_name}"),
+        "response": {
+            "request_id": format!("req-{file_name}"),
+            "trace_id": format!("trace-{file_name}"),
+            "idempotency_key": file_name,
+            "reused": false,
+            "tx_id": null,
+            "status": "Success",
+            "strategy": null,
+            "device_results": [],
+            "warnings": []
+        }
+    });
+    fs::write(
+        root.join(file_name),
+        serde_json::to_vec_pretty(&payload).expect("fixture should serialize"),
+    )
+    .expect("apply idempotency fixture should be written");
 }
 
 fn temp_test_dir(name: &str) -> std::path::PathBuf {

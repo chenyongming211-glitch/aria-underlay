@@ -10,10 +10,13 @@ use crate::api::request::ApplyOptions;
 use crate::api::response::ApplyIntentResponse;
 use crate::intent::UnderlayDomainIntent;
 use crate::utils::atomic_file::atomic_write;
+use crate::utils::time::now_unix_secs;
 use crate::{UnderlayError, UnderlayResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ApplyIdempotencyRecord {
+    #[serde(default = "now_unix_secs")]
+    stored_at_unix_secs: u64,
     fingerprint: String,
     response: ApplyIntentResponse,
 }
@@ -21,6 +24,7 @@ pub(crate) struct ApplyIdempotencyRecord {
 impl ApplyIdempotencyRecord {
     pub(crate) fn new(fingerprint: String, response: ApplyIntentResponse) -> Self {
         Self {
+            stored_at_unix_secs: now_unix_secs(),
             fingerprint,
             response,
         }

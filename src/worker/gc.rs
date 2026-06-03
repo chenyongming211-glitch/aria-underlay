@@ -44,10 +44,38 @@ impl RetentionPolicy {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApplyIdempotencyRetentionPolicy {
+    pub retention_days: u32,
+}
+
+impl Default for ApplyIdempotencyRetentionPolicy {
+    fn default() -> Self {
+        Self { retention_days: 30 }
+    }
+}
+
+impl ApplyIdempotencyRetentionPolicy {
+    pub fn validate(&self) -> UnderlayResult<()> {
+        if self.retention_days == 0 {
+            return Err(UnderlayError::InvalidIntent(
+                "apply idempotency GC retention_days must be greater than zero".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct JournalGc {
     journal_root: Option<PathBuf>,
     artifact_root: Option<PathBuf>,
+    now_unix_secs: Option<u64>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ApplyIdempotencyGc {
+    root: Option<PathBuf>,
     now_unix_secs: Option<u64>,
 }
 
@@ -79,6 +107,26 @@ impl JournalGcReport {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApplyIdempotencyGcReport {
+    pub records_deleted: usize,
+    pub records_retained: usize,
+    pub records_failed: usize,
+    pub deleted_refs: Vec<String>,
+    pub failed_refs: Vec<String>,
+}
+
+impl ApplyIdempotencyGcReport {
+    pub fn deleted_total(&self) -> usize {
+        self.records_deleted
+    }
+
+    fn sort_details(&mut self) {
+        self.deleted_refs.sort();
+        self.failed_refs.sort();
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JournalGcSchedule {
     pub interval_secs: u64,
@@ -94,16 +142,46 @@ impl Default for JournalGcSchedule {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApplyIdempotencyGcSchedule {
+    pub interval_secs: u64,
+    pub run_immediately: bool,
+}
+
+impl Default for ApplyIdempotencyGcSchedule {
+    fn default() -> Self {
+        Self {
+            interval_secs: 60 * 60,
+            run_immediately: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JournalGcSchedulerReport {
     pub runs: usize,
     pub last_report: Option<JournalGcReport>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApplyIdempotencyGcSchedulerReport {
+    pub runs: usize,
+    pub last_report: Option<ApplyIdempotencyGcReport>,
+}
+
 #[derive(Debug, Clone)]
 pub struct JournalGcWorker {
     gc: JournalGc,
     policy: RetentionPolicy,
+    event_sink: Arc<dyn EventSink>,
+    request_id: String,
+    trace_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApplyIdempotencyGcWorker {
+    gc: ApplyIdempotencyGc,
+    policy: ApplyIdempotencyRetentionPolicy,
     event_sink: Arc<dyn EventSink>,
     request_id: String,
     trace_id: String,
@@ -159,6 +237,79 @@ impl JournalGcWorker {
         }
 
         let mut summary = JournalGcSchedulerReport::default();
+        if schedule.run_immediately {
+            summary.last_report = Some(self.run_once_and_emit().await?);
+            summary.runs += 1;
+        }
+
+        let mut interval = tokio::time::interval(Duration::from_secs(schedule.interval_secs));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        interval.tick().await;
+
+        tokio::pin!(shutdown);
+        loop {
+            tokio::select! {
+                _ = &mut shutdown => return Ok(summary),
+                _ = interval.tick() => {
+                    summary.last_report = Some(self.run_once_and_emit().await?);
+                    summary.runs += 1;
+                }
+            }
+        }
+    }
+}
+
+impl ApplyIdempotencyGcWorker {
+    pub fn new(
+        gc: ApplyIdempotencyGc,
+        policy: ApplyIdempotencyRetentionPolicy,
+        event_sink: Arc<dyn EventSink>,
+    ) -> Self {
+        Self {
+            gc,
+            policy,
+            event_sink,
+            request_id: "apply-idempotency-gc".into(),
+            trace_id: "apply-idempotency-gc".into(),
+        }
+    }
+
+    pub fn with_request_context(
+        mut self,
+        request_id: impl Into<String>,
+        trace_id: impl Into<String>,
+    ) -> Self {
+        self.request_id = request_id.into();
+        self.trace_id = trace_id.into();
+        self
+    }
+
+    pub async fn run_once_and_emit(&self) -> UnderlayResult<ApplyIdempotencyGcReport> {
+        let report = self.gc.run_once(self.policy.clone()).await?;
+        self.event_sink
+            .emit(UnderlayEvent::apply_idempotency_gc_completed(
+                self.request_id.clone(),
+                self.trace_id.clone(),
+                &report,
+            ));
+        Ok(report)
+    }
+
+    pub async fn run_periodic_until_shutdown<F>(
+        &self,
+        schedule: ApplyIdempotencyGcSchedule,
+        shutdown: F,
+    ) -> UnderlayResult<ApplyIdempotencyGcSchedulerReport>
+    where
+        F: Future<Output = ()>,
+    {
+        if schedule.interval_secs == 0 {
+            return Err(UnderlayError::InvalidIntent(
+                "apply idempotency GC schedule interval_secs must be greater than zero".into(),
+            ));
+        }
+
+        let mut summary = ApplyIdempotencyGcSchedulerReport::default();
         if schedule.run_immediately {
             summary.last_report = Some(self.run_once_and_emit().await?);
             summary.runs += 1;
@@ -444,10 +595,100 @@ impl JournalGc {
     }
 }
 
+impl ApplyIdempotencyGc {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self {
+            root: Some(root.into()),
+            now_unix_secs: None,
+        }
+    }
+
+    pub fn with_now_unix_secs(mut self, now_unix_secs: u64) -> Self {
+        self.now_unix_secs = Some(now_unix_secs);
+        self
+    }
+
+    pub async fn run_once(
+        &self,
+        policy: ApplyIdempotencyRetentionPolicy,
+    ) -> UnderlayResult<ApplyIdempotencyGcReport> {
+        policy.validate()?;
+        let Some(root) = &self.root else {
+            return Ok(ApplyIdempotencyGcReport::default());
+        };
+        if !root.exists() {
+            return Ok(ApplyIdempotencyGcReport::default());
+        }
+
+        let now = self.now_unix_secs.unwrap_or_else(now_unix_secs);
+        let mut report = ApplyIdempotencyGcReport::default();
+        let entries = match fs::read_dir(root) {
+            Ok(entries) => entries,
+            Err(_) => {
+                record_apply_idempotency_failure(&mut report, root);
+                report.sort_details();
+                return Ok(report);
+            }
+        };
+
+        for entry in entries {
+            let path = match entry {
+                Ok(entry) => entry.path(),
+                Err(_) => {
+                    record_apply_idempotency_failure(&mut report, root);
+                    continue;
+                }
+            };
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+
+            let record = match read_apply_idempotency_gc_record(&path) {
+                Ok(record) => record,
+                Err(_) => {
+                    record_apply_idempotency_failure(&mut report, &path);
+                    continue;
+                }
+            };
+
+            if is_older_than(record.stored_at_unix_secs, now, policy.retention_days) {
+                match fs::remove_file(&path) {
+                    Ok(()) => {
+                        report.records_deleted += 1;
+                        report.deleted_refs.push(path_ref(&path));
+                    }
+                    Err(_) => record_apply_idempotency_failure(&mut report, &path),
+                }
+            } else {
+                report.records_retained += 1;
+            }
+        }
+
+        report.sort_details();
+        Ok(report)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ApplyIdempotencyGcRecord {
+    #[serde(default = "now_unix_secs")]
+    stored_at_unix_secs: u64,
+}
+
 fn read_journal_record(path: &Path) -> UnderlayResult<TxJournalRecord> {
     let payload = fs::read(path).map_err(gc_io_error)?;
     serde_json::from_slice(&payload)
         .map_err(|err| UnderlayError::Internal(format!("parse tx journal {:?}: {err}", path)))
+}
+
+fn read_apply_idempotency_gc_record(path: &Path) -> UnderlayResult<ApplyIdempotencyGcRecord> {
+    let payload = fs::read(path).map_err(gc_io_error)?;
+    serde_json::from_slice(&payload).map_err(|err| {
+        UnderlayError::Internal(format!(
+            "parse apply idempotency record {:?}: {err}",
+            path
+        ))
+    })
 }
 
 fn path_ref(path: &Path) -> String {
@@ -469,6 +710,14 @@ fn record_artifact_failure(report: &mut JournalGcReport, reference: String) {
     if !report.failed_artifact_refs.contains(&reference) {
         report.artifacts_failed += 1;
         report.failed_artifact_refs.push(reference);
+    }
+}
+
+fn record_apply_idempotency_failure(report: &mut ApplyIdempotencyGcReport, path: &Path) {
+    let reference = path_ref(path);
+    if !report.failed_refs.contains(&reference) {
+        report.records_failed += 1;
+        report.failed_refs.push(reference);
     }
 }
 

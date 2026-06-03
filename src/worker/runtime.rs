@@ -10,7 +10,10 @@ use crate::worker::confirmed_commit::{
 use crate::worker::drift_auditor::{
     DriftAuditSchedule, DriftAuditSchedulerReport, DriftAuditWorker,
 };
-use crate::worker::gc::{JournalGcSchedule, JournalGcSchedulerReport, JournalGcWorker};
+use crate::worker::gc::{
+    ApplyIdempotencyGcSchedule, ApplyIdempotencyGcSchedulerReport,
+    ApplyIdempotencyGcWorker, JournalGcSchedule, JournalGcSchedulerReport, JournalGcWorker,
+};
 use crate::worker::operation_alerts::{
     OperationAlertDeliverySchedule, OperationAlertDeliverySchedulerReport,
     OperationAlertDeliveryWorker,
@@ -30,6 +33,7 @@ const WORKER_RESTART_DELAY: Duration = Duration::from_millis(100);
 #[derive(Debug, Default)]
 pub struct UnderlayWorkerRuntime {
     journal_gc: Option<(JournalGcWorker, JournalGcSchedule)>,
+    apply_idempotency_gc: Option<(ApplyIdempotencyGcWorker, ApplyIdempotencyGcSchedule)>,
     confirmed_commit_timeout: Option<(
         ConfirmedCommitTimeoutWatcher,
         ConfirmedCommitTimeoutWatcherSchedule,
@@ -46,6 +50,7 @@ pub struct UnderlayWorkerRuntime {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UnderlayWorkerRuntimeReport {
     pub journal_gc: Option<JournalGcSchedulerReport>,
+    pub apply_idempotency_gc: Option<ApplyIdempotencyGcSchedulerReport>,
     pub confirmed_commit_timeout: Option<ConfirmedCommitTimeoutWatcherSchedulerReport>,
     pub drift_audit: Option<DriftAuditSchedulerReport>,
     pub operation_alert_delivery: Option<OperationAlertDeliverySchedulerReport>,
@@ -56,6 +61,7 @@ pub struct UnderlayWorkerRuntimeReport {
 
 enum RuntimeWorkerOutcome {
     JournalGc(WorkerRun<JournalGcSchedulerReport>),
+    ApplyIdempotencyGc(WorkerRun<ApplyIdempotencyGcSchedulerReport>),
     ConfirmedCommitTimeout(WorkerRun<ConfirmedCommitTimeoutWatcherSchedulerReport>),
     DriftAudit(WorkerRun<DriftAuditSchedulerReport>),
     OperationAlertDelivery(WorkerRun<OperationAlertDeliverySchedulerReport>),
@@ -72,6 +78,7 @@ enum WorkerRun<T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum RuntimeWorkerKind {
     JournalGc,
+    ApplyIdempotencyGc,
     ConfirmedCommitTimeout,
     DriftAudit,
     OperationAlertDelivery,
@@ -82,6 +89,7 @@ enum RuntimeWorkerKind {
 #[derive(Debug, Clone)]
 enum RuntimeWorkerSpec {
     JournalGc(JournalGcWorker, JournalGcSchedule),
+    ApplyIdempotencyGc(ApplyIdempotencyGcWorker, ApplyIdempotencyGcSchedule),
     ConfirmedCommitTimeout(
         ConfirmedCommitTimeoutWatcher,
         ConfirmedCommitTimeoutWatcherSchedule,
@@ -105,6 +113,7 @@ impl RuntimeWorkerSpec {
     fn kind(&self) -> RuntimeWorkerKind {
         match self {
             Self::JournalGc(_, _) => RuntimeWorkerKind::JournalGc,
+            Self::ApplyIdempotencyGc(_, _) => RuntimeWorkerKind::ApplyIdempotencyGc,
             Self::ConfirmedCommitTimeout(_, _) => RuntimeWorkerKind::ConfirmedCommitTimeout,
             Self::DriftAudit(_, _) => RuntimeWorkerKind::DriftAudit,
             Self::OperationAlertDelivery(_, _) => RuntimeWorkerKind::OperationAlertDelivery,
@@ -123,6 +132,19 @@ impl RuntimeWorkerSpec {
                 })
                 .await,
             ),
+            Self::ApplyIdempotencyGc(worker, schedule) => {
+                RuntimeWorkerOutcome::ApplyIdempotencyGc(
+                    run_isolated(async move {
+                        worker
+                            .run_periodic_until_shutdown(
+                                schedule,
+                                wait_for_shutdown(worker_shutdown),
+                            )
+                            .await
+                    })
+                    .await,
+                )
+            }
             Self::ConfirmedCommitTimeout(worker, schedule) => {
                 RuntimeWorkerOutcome::ConfirmedCommitTimeout(
                     run_isolated(async move {
@@ -201,6 +223,15 @@ impl UnderlayWorkerRuntime {
         self
     }
 
+    pub fn with_apply_idempotency_gc(
+        mut self,
+        worker: ApplyIdempotencyGcWorker,
+        schedule: ApplyIdempotencyGcSchedule,
+    ) -> Self {
+        self.apply_idempotency_gc = Some((worker, schedule));
+        self
+    }
+
     pub fn with_confirmed_commit_timeout_watcher(
         mut self,
         worker: ConfirmedCommitTimeoutWatcher,
@@ -261,6 +292,9 @@ impl UnderlayWorkerRuntime {
         let mut specs = Vec::new();
         if let Some((worker, schedule)) = self.journal_gc {
             specs.push(RuntimeWorkerSpec::JournalGc(worker, schedule));
+        }
+        if let Some((worker, schedule)) = self.apply_idempotency_gc {
+            specs.push(RuntimeWorkerSpec::ApplyIdempotencyGc(worker, schedule));
         }
         if let Some((worker, schedule)) = self.confirmed_commit_timeout {
             specs.push(RuntimeWorkerSpec::ConfirmedCommitTimeout(
@@ -349,6 +383,9 @@ impl UnderlayWorkerRuntime {
         if let Some((_, schedule)) = &self.journal_gc {
             validate_interval("journal GC", schedule.interval_secs)?;
         }
+        if let Some((_, schedule)) = &self.apply_idempotency_gc {
+            validate_interval("apply idempotency GC", schedule.interval_secs)?;
+        }
         if let Some((_, schedule)) = &self.confirmed_commit_timeout {
             validate_interval(
                 "confirmed-commit timeout watcher",
@@ -434,6 +471,22 @@ fn record_worker_outcome(
             WorkerRun::Panicked(err) => {
                 record_worker_join_error_for(report, RuntimeWorkerKind::JournalGc, err);
                 return Some(RuntimeWorkerKind::JournalGc);
+            }
+        },
+        RuntimeWorkerOutcome::ApplyIdempotencyGc(worker_report) => match worker_report {
+            WorkerRun::Finished(Ok(worker_report)) => {
+                report.apply_idempotency_gc = Some(worker_report)
+            }
+            WorkerRun::Finished(Err(err)) => {
+                record_worker_error(report, "apply_idempotency_gc", err)
+            }
+            WorkerRun::Panicked(err) => {
+                record_worker_join_error_for(
+                    report,
+                    RuntimeWorkerKind::ApplyIdempotencyGc,
+                    err,
+                );
+                return Some(RuntimeWorkerKind::ApplyIdempotencyGc);
             }
         },
         RuntimeWorkerOutcome::ConfirmedCommitTimeout(worker_report) => match worker_report {
@@ -546,6 +599,7 @@ fn record_worker_join_error_for(
 fn runtime_worker_name(kind: RuntimeWorkerKind) -> &'static str {
     match kind {
         RuntimeWorkerKind::JournalGc => "journal_gc",
+        RuntimeWorkerKind::ApplyIdempotencyGc => "apply_idempotency_gc",
         RuntimeWorkerKind::ConfirmedCommitTimeout => "confirmed_commit_timeout",
         RuntimeWorkerKind::DriftAudit => "drift_audit",
         RuntimeWorkerKind::OperationAlertDelivery => "operation_alert_delivery",

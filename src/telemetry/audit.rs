@@ -553,6 +553,7 @@ fn action_name(kind: &UnderlayEventKind) -> &'static str {
         UnderlayEventKind::UnderlayDeviceLockTimeout => "device.lock_timeout",
         UnderlayEventKind::UnderlayForceUnlockRequested => "device.force_unlock_requested",
         UnderlayEventKind::UnderlayJournalGcCompleted => "journal.gc_completed",
+        UnderlayEventKind::UnderlayApplyIdempotencyGcCompleted => "apply_idempotency.gc_completed",
         UnderlayEventKind::UnderlayRecoveryCompleted => "recovery.completed",
         UnderlayEventKind::UnderlayAuditWriteFailed => "audit.write_failed",
         UnderlayEventKind::UnderlayTransactionStarted => "transaction.started",

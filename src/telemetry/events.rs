@@ -7,7 +7,7 @@ use crate::model::DeviceId;
 use crate::state::drift::DriftReport;
 use crate::tx::recovery::RecoveryReport;
 use crate::tx::{TransactionStrategy, TxPhase};
-use crate::worker::gc::JournalGcReport;
+use crate::worker::gc::{ApplyIdempotencyGcReport, JournalGcReport};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnderlayEventKind {
@@ -18,6 +18,7 @@ pub enum UnderlayEventKind {
     UnderlayForceUnlockRequested,
     UnderlayDriftAuditCompleted,
     UnderlayJournalGcCompleted,
+    UnderlayApplyIdempotencyGcCompleted,
     UnderlayRecoveryCompleted,
     UnderlayAuditWriteFailed,
     UnderlayTransactionStarted,
@@ -157,6 +158,47 @@ impl UnderlayEvent {
 
         Self {
             kind: UnderlayEventKind::UnderlayJournalGcCompleted,
+            request_id: request_id.into(),
+            trace_id: trace_id.into(),
+            tx_id: None,
+            device_id: None,
+            phase: None,
+            strategy: None,
+            result: Some("completed".into()),
+            error_code: None,
+            error_message: None,
+            fields,
+        }
+    }
+
+    pub fn apply_idempotency_gc_completed(
+        request_id: impl Into<String>,
+        trace_id: impl Into<String>,
+        report: &ApplyIdempotencyGcReport,
+    ) -> Self {
+        let mut fields = BTreeMap::new();
+        fields.insert(
+            "records_deleted".into(),
+            report.records_deleted.to_string(),
+        );
+        fields.insert(
+            "records_retained".into(),
+            report.records_retained.to_string(),
+        );
+        fields.insert(
+            "records_failed".into(),
+            report.records_failed.to_string(),
+        );
+        fields.insert("deleted_total".into(), report.deleted_total().to_string());
+        if !report.deleted_refs.is_empty() {
+            fields.insert("deleted_refs".into(), report.deleted_refs.join(","));
+        }
+        if !report.failed_refs.is_empty() {
+            fields.insert("failed_refs".into(), report.failed_refs.join(","));
+        }
+
+        Self {
+            kind: UnderlayEventKind::UnderlayApplyIdempotencyGcCompleted,
             request_id: request_id.into(),
             trace_id: trace_id.into(),
             tx_id: None,

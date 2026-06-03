@@ -2,12 +2,12 @@ use std::fs;
 
 use aria_underlay::telemetry::OperationSummaryRetentionPolicy;
 use aria_underlay::worker::daemon::{
-    DriftAuditDaemonConfig, JournalGcDaemonConfig, OperationAlertDaemonConfig,
-    OperationSummaryDaemonConfig, UnderlayWorkerDaemonConfig, WorkerReloadDaemonConfig,
-    WorkerScheduleConfig,
+    ApplyIdempotencyGcDaemonConfig, DriftAuditDaemonConfig, JournalGcDaemonConfig,
+    OperationAlertDaemonConfig, OperationSummaryDaemonConfig, UnderlayWorkerDaemonConfig,
+    WorkerReloadDaemonConfig, WorkerScheduleConfig,
 };
 use aria_underlay::worker::deployment::WorkerDeploymentPreflight;
-use aria_underlay::worker::gc::RetentionPolicy;
+use aria_underlay::worker::gc::{ApplyIdempotencyRetentionPolicy, RetentionPolicy};
 
 #[test]
 fn checked_in_worker_deployment_samples_are_consistent() {
@@ -53,6 +53,7 @@ fn checked_in_worker_deployment_samples_are_consistent() {
     let tmpfiles = fs::read_to_string("docs/examples/tmpfiles.d/aria-underlay.conf")
         .expect("checked-in tmpfiles.d sample should exist");
     assert!(tmpfiles.contains("/var/lib/aria-underlay/ops"));
+    assert!(tmpfiles.contains("/var/lib/aria-underlay/idempotency"));
     assert!(tmpfiles.contains("/var/lib/aria-underlay/journal"));
     assert!(tmpfiles.contains("/var/lib/aria-underlay/shadow/expected"));
     assert!(tmpfiles.contains("/var/lib/aria-underlay/shadow/observed"));
@@ -89,6 +90,12 @@ fn preflight_accepts_valid_config_when_strict_paths_exist() {
             .checked_paths
             .iter()
             .any(|check| check.kind == "operation_summary.path.parent")
+    );
+    assert!(
+        report
+            .checked_paths
+            .iter()
+            .any(|check| check.kind == "apply_idempotency_gc.root")
     );
     assert!(
         report
@@ -220,6 +227,14 @@ fn worker_config(temp: &std::path::Path) -> UnderlayWorkerDaemonConfig {
             },
             retention: RetentionPolicy::default(),
         }),
+        apply_idempotency_gc: Some(ApplyIdempotencyGcDaemonConfig {
+            root: temp.join("idempotency"),
+            schedule: WorkerScheduleConfig {
+                interval_secs: 60,
+                run_immediately: true,
+            },
+            retention: ApplyIdempotencyRetentionPolicy::default(),
+        }),
         drift_audit: Some(DriftAuditDaemonConfig {
             expected_shadow_root: temp.join("shadow").join("expected"),
             observed_shadow_root: temp.join("shadow").join("observed"),
@@ -256,6 +271,10 @@ fn create_worker_dirs(config: &UnderlayWorkerDaemonConfig) {
         if let Some(artifact_root) = &journal_gc.artifact_root {
             fs::create_dir_all(artifact_root).expect("artifact root should be created");
         }
+    }
+    if let Some(apply_idempotency_gc) = &config.apply_idempotency_gc {
+        fs::create_dir_all(&apply_idempotency_gc.root)
+            .expect("apply idempotency root should be created");
     }
     if let Some(drift_audit) = &config.drift_audit {
         fs::create_dir_all(&drift_audit.expected_shadow_root)

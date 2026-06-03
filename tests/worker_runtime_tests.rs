@@ -23,7 +23,9 @@ use aria_underlay::worker::confirmed_commit::{
     ConfirmedCommitTimeoutWatcher, ConfirmedCommitTimeoutWatcherSchedule,
 };
 use aria_underlay::worker::gc::{
-    JournalGc, JournalGcReport, JournalGcSchedule, JournalGcWorker, RetentionPolicy,
+    ApplyIdempotencyGc, ApplyIdempotencyGcSchedule, ApplyIdempotencyGcWorker,
+    ApplyIdempotencyRetentionPolicy, JournalGc, JournalGcReport, JournalGcSchedule,
+    JournalGcWorker, RetentionPolicy,
 };
 use aria_underlay::worker::operation_alerts::{
     OperationAlertDeliverySchedule, OperationAlertDeliveryWorker,
@@ -36,10 +38,12 @@ use async_trait::async_trait;
 async fn worker_runtime_runs_gc_and_drift_workers_under_one_shutdown() {
     let temp = temp_test_dir("runtime-runs-workers");
     let journal_root = temp.join("journal");
+    let apply_idempotency_root = temp.join("apply-idempotency");
     let journal = JsonFileTxJournalStore::new(&journal_root);
     journal
         .put(&journal_record("tx-old", TxPhase::Committed, 100))
         .expect("old terminal journal should be stored");
+    write_apply_idempotency_record(&apply_idempotency_root, "old.json", 100);
 
     let sink = Arc::new(InMemoryEventSink::default());
     let gc_worker = JournalGcWorker::new(
@@ -51,6 +55,12 @@ async fn worker_runtime_runs_gc_and_drift_workers_under_one_shutdown() {
             rollback_artifact_retention_days: 30,
             max_artifacts_per_device: 50,
         },
+        sink.clone(),
+    );
+    let apply_idempotency_gc_worker = ApplyIdempotencyGcWorker::new(
+        ApplyIdempotencyGc::new(&apply_idempotency_root)
+            .with_now_unix_secs(100 + 31 * 24 * 60 * 60),
+        ApplyIdempotencyRetentionPolicy { retention_days: 30 },
         sink.clone(),
     );
     let drift_worker = DriftAuditWorker::new(
@@ -65,6 +75,13 @@ async fn worker_runtime_runs_gc_and_drift_workers_under_one_shutdown() {
         .with_journal_gc(
             gc_worker,
             JournalGcSchedule {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+        )
+        .with_apply_idempotency_gc(
+            apply_idempotency_gc_worker,
+            ApplyIdempotencyGcSchedule {
                 interval_secs: 60 * 60,
                 run_immediately: true,
             },
@@ -92,6 +109,18 @@ async fn worker_runtime_runs_gc_and_drift_workers_under_one_shutdown() {
         vec!["tx-old".to_string()]
     );
 
+    let apply_idempotency_gc_report = report
+        .apply_idempotency_gc
+        .expect("runtime should include apply idempotency GC scheduler report");
+    assert_eq!(apply_idempotency_gc_report.runs, 1);
+    assert_eq!(
+        apply_idempotency_gc_report
+            .last_report
+            .expect("apply idempotency GC should retain last report")
+            .deleted_refs,
+        vec!["old.json".to_string()]
+    );
+
     let drift_report = report
         .drift_audit
         .expect("runtime should include drift audit scheduler report");
@@ -109,6 +138,13 @@ async fn worker_runtime_runs_gc_and_drift_workers_under_one_shutdown() {
         events
             .iter()
             .filter(|event| event.kind == UnderlayEventKind::UnderlayJournalGcCompleted)
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.kind == UnderlayEventKind::UnderlayApplyIdempotencyGcCompleted)
             .count(),
         1
     );
@@ -692,6 +728,30 @@ fn vlan(vlan_id: u16, name: &str) -> VlanConfig {
         name: Some(name.into()),
         description: None,
     }
+}
+
+fn write_apply_idempotency_record(root: &std::path::Path, file_name: &str, stored_at: u64) {
+    fs::create_dir_all(root).expect("apply idempotency root should be created");
+    let payload = serde_json::json!({
+        "stored_at_unix_secs": stored_at,
+        "fingerprint": format!("fingerprint-{file_name}"),
+        "response": {
+            "request_id": format!("req-{file_name}"),
+            "trace_id": format!("trace-{file_name}"),
+            "idempotency_key": file_name,
+            "reused": false,
+            "tx_id": null,
+            "status": "Success",
+            "strategy": null,
+            "device_results": [],
+            "warnings": []
+        }
+    });
+    fs::write(
+        root.join(file_name),
+        serde_json::to_vec_pretty(&payload).expect("fixture should serialize"),
+    )
+    .expect("apply idempotency fixture should be written");
 }
 
 fn temp_test_dir(name: &str) -> std::path::PathBuf {

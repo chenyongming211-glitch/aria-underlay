@@ -10,12 +10,12 @@ use aria_underlay::telemetry::{
 };
 use aria_underlay::tx::{JsonFileTxJournalStore, TxJournalRecord, TxJournalStore, TxPhase};
 use aria_underlay::worker::daemon::{
-    DriftAuditDaemonConfig, JournalGcDaemonConfig, OperationAlertDaemonConfig,
-    OperationAuditDaemonConfig, OperationSummaryDaemonConfig, UnderlayWorkerDaemon,
-    UnderlayWorkerDaemonConfig, WorkerConfigReloadStatus, WorkerReloadCheckpoint,
-    WorkerReloadDaemonConfig, WorkerScheduleConfig,
+    ApplyIdempotencyGcDaemonConfig, DriftAuditDaemonConfig, JournalGcDaemonConfig,
+    OperationAlertDaemonConfig, OperationAuditDaemonConfig, OperationSummaryDaemonConfig,
+    UnderlayWorkerDaemon, UnderlayWorkerDaemonConfig, WorkerConfigReloadStatus,
+    WorkerReloadCheckpoint, WorkerReloadDaemonConfig, WorkerScheduleConfig,
 };
-use aria_underlay::worker::gc::RetentionPolicy;
+use aria_underlay::worker::gc::{ApplyIdempotencyRetentionPolicy, RetentionPolicy};
 use tokio::sync::watch;
 
 #[test]
@@ -29,6 +29,7 @@ fn checked_in_worker_daemon_sample_config_parses() {
     assert!(config.operation_audit.is_some());
     assert!(config.operation_alert.is_some());
     assert!(config.journal_gc.is_some());
+    assert!(config.apply_idempotency_gc.is_some());
     assert!(config.drift_audit.is_some());
 }
 
@@ -36,6 +37,7 @@ fn checked_in_worker_daemon_sample_config_parses() {
 async fn daemon_config_wires_gc_drift_and_persistent_operation_summaries() {
     let temp = temp_test_dir("daemon-wires-workers");
     let journal_root = temp.join("journal");
+    let apply_idempotency_root = temp.join("apply-idempotency");
     let expected_shadow_root = temp.join("expected-shadow");
     let observed_shadow_root = temp.join("observed-shadow");
     let operation_summary_path = temp.join("ops").join("summaries.jsonl");
@@ -44,6 +46,7 @@ async fn daemon_config_wires_gc_drift_and_persistent_operation_summaries() {
     JsonFileTxJournalStore::new(&journal_root)
         .put(&journal_record("tx-old", TxPhase::Committed, 100))
         .expect("old terminal journal should be stored");
+    write_apply_idempotency_record(&apply_idempotency_root, "old.json", 100);
     JsonFileShadowStateStore::new(&expected_shadow_root)
         .put(shadow_state("leaf-a", vec![vlan(100, "prod")], vec![]))
         .expect("expected shadow should be stored");
@@ -79,6 +82,14 @@ async fn daemon_config_wires_gc_drift_and_persistent_operation_summaries() {
                 max_artifacts_per_device: 50,
             },
         }),
+        apply_idempotency_gc: Some(ApplyIdempotencyGcDaemonConfig {
+            root: apply_idempotency_root.clone(),
+            schedule: WorkerScheduleConfig {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+            retention: ApplyIdempotencyRetentionPolicy { retention_days: 30 },
+        }),
         drift_audit: Some(DriftAuditDaemonConfig {
             expected_shadow_root: expected_shadow_root.clone(),
             observed_shadow_root: observed_shadow_root.clone(),
@@ -105,6 +116,14 @@ async fn daemon_config_wires_gc_drift_and_persistent_operation_summaries() {
     );
     assert_eq!(
         report
+            .apply_idempotency_gc
+            .as_ref()
+            .expect("apply idempotency GC report should be present")
+            .runs,
+        1
+    );
+    assert_eq!(
+        report
             .drift_audit
             .as_ref()
             .expect("drift report should be present")
@@ -123,6 +142,7 @@ async fn daemon_config_wires_gc_drift_and_persistent_operation_summaries() {
     assert_eq!(
         actions,
         vec![
+            "apply_idempotency.gc_completed",
             "drift.audit_completed",
             "drift.detected",
             "journal.gc_completed"
@@ -139,6 +159,7 @@ async fn daemon_config_wires_gc_drift_and_persistent_operation_summaries() {
     assert_eq!(
         audit_actions,
         vec![
+            "apply_idempotency.gc_completed",
             "drift.audit_completed",
             "drift.detected",
             "journal.gc_completed"
@@ -176,6 +197,7 @@ async fn daemon_config_wires_operation_summary_retention_worker() {
         operation_audit: None,
         operation_alert: None,
         journal_gc: None,
+        apply_idempotency_gc: None,
         drift_audit: None,
     };
 
@@ -230,6 +252,7 @@ async fn daemon_config_wires_operation_audit_retention_worker() {
         }),
         operation_alert: None,
         journal_gc: None,
+        apply_idempotency_gc: None,
         drift_audit: None,
     };
 
@@ -287,6 +310,7 @@ async fn daemon_config_wires_operation_alert_delivery_worker() {
             },
         }),
         journal_gc: None,
+        apply_idempotency_gc: None,
         drift_audit: None,
     };
 
@@ -327,6 +351,7 @@ async fn daemon_config_wires_operation_alert_delivery_worker() {
             },
         }),
         journal_gc: None,
+        apply_idempotency_gc: None,
         drift_audit: None,
     };
     UnderlayWorkerDaemon::from_config(second_config)
@@ -580,6 +605,30 @@ fn attention_recovery_event(index: usize) -> UnderlayEvent {
     )
 }
 
+fn write_apply_idempotency_record(root: &std::path::Path, file_name: &str, stored_at: u64) {
+    fs::create_dir_all(root).expect("apply idempotency root should be created");
+    let payload = serde_json::json!({
+        "stored_at_unix_secs": stored_at,
+        "fingerprint": format!("fingerprint-{file_name}"),
+        "response": {
+            "request_id": format!("req-{file_name}"),
+            "trace_id": format!("trace-{file_name}"),
+            "idempotency_key": file_name,
+            "reused": false,
+            "tx_id": null,
+            "status": "Success",
+            "strategy": null,
+            "device_results": [],
+            "warnings": []
+        }
+    });
+    fs::write(
+        root.join(file_name),
+        serde_json::to_vec_pretty(&payload).expect("fixture should serialize"),
+    )
+    .expect("apply idempotency fixture should be written");
+}
+
 fn reloadable_worker_config(
     temp: &std::path::Path,
     retention_interval_secs: u64,
@@ -605,6 +654,7 @@ fn reloadable_worker_config(
         operation_audit: None,
         operation_alert: None,
         journal_gc: None,
+        apply_idempotency_gc: None,
         drift_audit: None,
     }
 }
