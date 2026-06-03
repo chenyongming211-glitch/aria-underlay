@@ -13,6 +13,7 @@ use crate::api::force_unlock::{ForceUnlockRequest, ForceUnlockResponse};
 use crate::api::idempotency::{
     apply_domain_fingerprint, idempotency_payload_mismatch_error,
     normalize_idempotency_key, ApplyIdempotencyRecord, ApplyIdempotencyRegistry,
+    JsonFileApplyIdempotencyStore,
 };
 use crate::api::operations::{
     ListOperationSummariesRequest, ListOperationSummariesResponse, OperationSummaryOverview,
@@ -269,6 +270,16 @@ impl AriaUnderlayService {
         self
     }
 
+    pub fn with_file_apply_idempotency_store(
+        mut self,
+        root: impl Into<std::path::PathBuf>,
+    ) -> Self {
+        self.apply_idempotency = Arc::new(ApplyIdempotencyRegistry::new(Arc::new(
+            JsonFileApplyIdempotencyStore::new(root),
+        )));
+        self
+    }
+
     pub async fn activate_active_passive(
         self,
         lease_config: ActiveLeaseConfig,
@@ -397,13 +408,19 @@ impl AriaUnderlayService {
                 response,
                 request_id,
                 trace_id,
-                idempotency_key,
+                idempotency_key.clone(),
                 false,
             );
-            *record = Some(ApplyIdempotencyRecord::new(
-                fingerprint,
-                response.clone(),
-            ));
+            let mut stored_record =
+                ApplyIdempotencyRecord::new(fingerprint.clone(), response.clone());
+            let mut response = response;
+            if let Err(err) = self.apply_idempotency.put(&idempotency_key, &stored_record) {
+                response
+                    .warnings
+                    .push(format!("idempotency record persistence failed: {err}"));
+                stored_record = ApplyIdempotencyRecord::new(fingerprint, response.clone());
+            }
+            *record = Some(stored_record);
             return Ok(response);
         }
 

@@ -25,6 +25,7 @@ pub const PRODUCT_STATUS_BUNDLE_GET_PATH: &str = "/product/v1/status:bundle";
 
 const REQUEST_ID_HEADER: &str = "x-aria-request-id";
 const TRACE_ID_HEADER: &str = "x-aria-trace-id";
+pub const IDEMPOTENCY_KEY_HEADER: &str = "x-aria-idempotency-key";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProductHttpMethod {
@@ -204,6 +205,7 @@ fn product_api_request<T>(
     Ok(ProductApiRequest {
         request_id: required_header(&request.headers, REQUEST_ID_HEADER)?,
         trace_id: optional_header(&request.headers, TRACE_ID_HEADER),
+        idempotency_key: optional_header(&request.headers, IDEMPOTENCY_KEY_HEADER),
         headers: request.headers.clone(),
         body,
     })

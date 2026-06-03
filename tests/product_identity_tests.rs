@@ -42,6 +42,7 @@ fn bearer_token_session_lists_operation_summaries_without_mock_role_headers() {
         .list_operation_summaries(ProductApiRequest {
             request_id: "req-bearer-list".into(),
             trace_id: Some("trace-bearer-list".into()),
+            idempotency_key: None,
             headers: authorization_headers("Bearer viewer-token"),
             body: ListOperationSummariesRequest {
                 attention_required_only: true,
@@ -65,6 +66,7 @@ fn bearer_token_session_rejects_missing_authorization_header() {
         .extract(&ProductApiRequestMetadata {
             request_id: "req-missing-auth".into(),
             trace_id: None,
+            idempotency_key: None,
             headers: BTreeMap::new(),
         })
         .expect_err("missing authorization should fail closed");
@@ -83,6 +85,7 @@ fn bearer_token_session_rejects_unknown_token() {
         .extract(&ProductApiRequestMetadata {
             request_id: "req-unknown-token".into(),
             trace_id: None,
+            idempotency_key: None,
             headers: authorization_headers("Bearer unknown-token"),
         })
         .expect_err("unknown token should fail closed");

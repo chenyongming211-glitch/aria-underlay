@@ -1,17 +1,20 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use aria_underlay::api::operations::{
     ListOperationSummariesRequest, ListOperationSummariesResponse,
 };
 use aria_underlay::api::product_api::{
-    HeaderProductSessionExtractor, ProductApiResponse, ProductOpsApi,
+    HeaderProductSessionExtractor, ProductApiRequestMetadata, ProductApiResponse,
+    ProductOpsApi, ProductSession, ProductSessionExtractor,
 };
 use aria_underlay::api::product_http::{
     ProductHttpErrorResponse, ProductHttpMethod, ProductHttpRequest, ProductHttpRouter,
     OPERATION_SUMMARIES_QUERY_PATH, PRODUCT_AUDIT_EXPORT_PATH, WORKER_RELOAD_STATUS_GET_PATH,
 };
+use aria_underlay::authz::AdminAction;
 use aria_underlay::api::product_ops::{
     ExportProductAuditRequest, ExportProductAuditResponse,
     ProductGetWorkerReloadStatusRequest,
@@ -139,6 +142,36 @@ fn product_http_operator_can_read_worker_reload_status() {
 }
 
 #[test]
+fn product_http_maps_idempotency_header_into_product_api_metadata() {
+    let captured_keys = Arc::new(Mutex::new(Vec::new()));
+    let extractor = RecordingSessionExtractor {
+        captured_idempotency_keys: captured_keys.clone(),
+    };
+    let router = ProductHttpRouter::new(ProductOpsApi::new(
+        Arc::new(extractor),
+        Arc::new(InMemoryOperationSummaryStore::default()),
+        Arc::new(InMemoryProductAuditStore::default()),
+    ));
+    let mut headers = product_headers("req-http-idem", Some("trace-http-idem"), "netops-a");
+    headers.insert("x-aria-idempotency-key".into(), "idem-http-1".into());
+
+    let response = router.handle(ProductHttpRequest {
+        method: ProductHttpMethod::Post,
+        path: OPERATION_SUMMARIES_QUERY_PATH.into(),
+        headers,
+        body: json_body(&ListOperationSummariesRequest::default()),
+    });
+
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        *captured_keys
+            .lock()
+            .expect("captured keys should not be poisoned"),
+        vec![Some("idem-http-1".to_string())]
+    );
+}
+
+#[test]
 fn product_http_rejects_missing_request_id() {
     let router = product_router(
         Arc::new(InMemoryOperationSummaryStore::default()),
@@ -252,6 +285,27 @@ fn json_body<T: serde::Serialize>(body: &T) -> Vec<u8> {
 
 fn response_json<T: serde::de::DeserializeOwned>(body: &[u8]) -> T {
     serde_json::from_slice(body).expect("response should be valid JSON")
+}
+
+#[derive(Debug)]
+struct RecordingSessionExtractor {
+    captured_idempotency_keys: Arc<Mutex<Vec<Option<String>>>>,
+}
+
+impl ProductSessionExtractor for RecordingSessionExtractor {
+    fn extract(
+        &self,
+        metadata: &ProductApiRequestMetadata,
+    ) -> aria_underlay::UnderlayResult<ProductSession> {
+        self.captured_idempotency_keys
+            .lock()
+            .expect("captured keys should not be poisoned")
+            .push(metadata.idempotency_key.clone());
+        Ok(ProductSession {
+            operator_id: "netops-a".into(),
+            allowed_actions: AdminAction::all_actions(),
+        })
+    }
 }
 
 fn seed_audit_record(request_id: &str, operator: &str) -> ProductAuditRecord {

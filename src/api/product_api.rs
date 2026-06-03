@@ -24,6 +24,8 @@ pub struct ProductApiRequest<T> {
     pub request_id: String,
     pub trace_id: Option<String>,
     #[serde(default)]
+    pub idempotency_key: Option<String>,
+    #[serde(default)]
     pub headers: BTreeMap<String, String>,
     pub body: T,
 }
@@ -40,6 +42,7 @@ pub struct ProductApiResponse<T> {
 pub struct ProductApiRequestMetadata {
     pub request_id: String,
     pub trace_id: Option<String>,
+    pub idempotency_key: Option<String>,
     pub headers: BTreeMap<String, String>,
 }
 
@@ -199,6 +202,7 @@ impl<T> ProductApiRequest<T> {
         ProductApiRequestMetadata {
             request_id: self.request_id.clone(),
             trace_id: self.trace_id.clone(),
+            idempotency_key: self.idempotency_key.clone(),
             headers: self.headers.clone(),
         }
     }

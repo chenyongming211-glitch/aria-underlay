@@ -406,6 +406,51 @@ async fn apply_domain_intent_rejects_same_idempotency_key_for_different_payload(
 }
 
 #[tokio::test]
+async fn apply_domain_intent_reuses_persisted_response_after_service_recreation() {
+    let prepare_calls = Arc::new(AtomicUsize::new(0));
+    let endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-mgmt", 100)),
+        prepare_calls: Some(prepare_calls.clone()),
+        ..Default::default()
+    })
+    .await;
+    let inventory = inventory_with_endpoint_at(
+        "stack-mgmt",
+        DeviceLifecycleState::Ready,
+        endpoint,
+    );
+    let idempotency_root = temp_store_dir("idempotency");
+
+    let first_service = AriaUnderlayService::new(inventory.clone())
+        .with_file_apply_idempotency_store(&idempotency_root);
+    let mut first_request = apply_request_with_vlan(200, DriftPolicy::ReportOnly);
+    first_request.idempotency_key = Some("tenant-a:site-a:op-persisted".into());
+    let first_response = first_service
+        .apply_domain_intent(first_request)
+        .await
+        .expect("first apply should succeed and persist idempotency record");
+
+    let restarted_service = AriaUnderlayService::new(inventory)
+        .with_file_apply_idempotency_store(&idempotency_root);
+    let mut retry_request = apply_request_with_vlan(200, DriftPolicy::ReportOnly);
+    retry_request.request_id = "req-apply-after-restart".into();
+    retry_request.trace_id = Some("trace-apply-after-restart".into());
+    retry_request.idempotency_key = Some("tenant-a:site-a:op-persisted".into());
+    let retry_response = restarted_service
+        .apply_domain_intent(retry_request)
+        .await
+        .expect("retry after service recreation should reuse persisted response");
+
+    assert_eq!(prepare_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(first_response.tx_id, retry_response.tx_id);
+    assert!(retry_response.reused);
+    assert_eq!(retry_response.request_id, "req-apply-after-restart");
+    assert_eq!(retry_response.trace_id, "trace-apply-after-restart");
+
+    std::fs::remove_dir_all(idempotency_root).ok();
+}
+
+#[tokio::test]
 async fn preflight_fetches_only_desired_scope_to_avoid_unrelated_delete_ops() {
     let current_state_scopes = Arc::new(Mutex::new(Vec::new()));
     let endpoint = start_test_adapter(TestAdapter {

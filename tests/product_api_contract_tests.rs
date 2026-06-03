@@ -39,6 +39,7 @@ fn product_api_lists_operation_summaries_with_mock_viewer_session() {
         .list_operation_summaries(ProductApiRequest {
             request_id: "req-list".into(),
             trace_id: Some("trace-list".into()),
+            idempotency_key: None,
             headers: session_headers("viewer-a"),
             body: ListOperationSummariesRequest {
                 attention_required_only: true,
@@ -68,6 +69,7 @@ fn product_api_rejects_missing_operator_header() {
         .list_operation_summaries(ProductApiRequest {
             request_id: "req-missing-operator".into(),
             trace_id: None,
+            idempotency_key: None,
             headers,
             body: ListOperationSummariesRequest::default(),
         })
@@ -92,6 +94,7 @@ fn product_api_exports_product_audit_with_mock_auditor_session() {
         .export_product_audit(ProductApiRequest {
             request_id: "req-export".into(),
             trace_id: Some("trace-export".into()),
+            idempotency_key: None,
             headers: session_headers("auditor-a"),
             body: ExportProductAuditRequest {
                 reason: "quarterly audit review".into(),
@@ -126,6 +129,7 @@ fn product_api_audit_export_fails_closed_when_audit_append_fails() {
         .export_product_audit(ProductApiRequest {
             request_id: "req-audit-failed".into(),
             trace_id: Some("trace-audit-failed".into()),
+            idempotency_key: None,
             headers: session_headers("admin-a"),
             body: ExportProductAuditRequest {
                 reason: "incident review".into(),

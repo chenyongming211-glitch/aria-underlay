@@ -205,7 +205,8 @@ Deferred backlog:
 - `ApplyDomainIntentRequest.idempotency_key` is implemented for in-process domain apply request reuse.
 - Same `idempotency_key` plus the same serialized apply payload returns the previously completed tx/result and marks the response with `reused = true`; it does not call the adapter again.
 - Same `idempotency_key` with a different apply payload fails closed with `InvalidIntent`.
-- Remaining P1 work: persist idempotency records across Core restart, map product HTTP/gateway idempotency headers into the apply request, add domain/region orchestration locks, add failed-endpoint retry/recover API, and add product-readable apply-after-verify reports.
+- 2026-06-03 follow-up: file-backed apply idempotency records can now be enabled with `with_file_apply_idempotency_store(...)`, so a recreated Core instance can reuse the same completed tx/result for the same key and payload. Product HTTP metadata now maps `x-aria-idempotency-key` into `ProductApiRequestMetadata`; a future async apply route must pass that value into `ApplyDomainIntentRequest`.
+- Remaining P1 work: wire the file-backed idempotency store into production Core configuration, add retention/GC for idempotency records, add domain/region orchestration locks, add failed-endpoint retry/recover API, and add product-readable apply-after-verify reports.
 
 ## 3. 推荐目录结构
 
