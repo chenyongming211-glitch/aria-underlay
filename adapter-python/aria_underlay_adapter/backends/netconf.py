@@ -533,6 +533,7 @@ class NcclientNetconfBackend:
         self._lock_candidate(session)
         committed = False
         original_error = None
+        discard_on_error = prepared_candidate_checksum is None
 
         try:
             if prepared_candidate_checksum:
@@ -540,6 +541,7 @@ class NcclientNetconfBackend:
                     session,
                     prepared_candidate_checksum,
                 )
+                discard_on_error = True
             self._validate_candidate(session)
             self._commit_candidate_session(
                 session,
@@ -554,6 +556,8 @@ class NcclientNetconfBackend:
             original_error = _adapter_error_from_ncclient_exception(exc)
 
         unlock_error = None
+        if original_error is not None and discard_on_error and not committed:
+            self._discard_candidate_preserving_error(session, original_error)
         try:
             self._unlock_candidate(session)
         except AdapterError as exc:

@@ -587,7 +587,7 @@ async fn process_restart_recovers_rollback_rpc_crash_to_rolled_back_without_shad
         .list_recoverable()
         .expect("journal scan after rollback-rpc crash should succeed");
     assert_eq!(pending_before.len(), 1);
-    assert_eq!(pending_before[0].phase, TxPhase::Verifying);
+    assert_eq!(pending_before[0].phase, TxPhase::RollingBack);
     let tx_id = pending_before[0].tx_id.clone();
 
     let shadow = Arc::new(JsonFileShadowStateStore::new(&shadow_root));

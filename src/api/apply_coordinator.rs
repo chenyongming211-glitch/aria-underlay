@@ -854,14 +854,14 @@ impl ApplyCoordinator {
         context: &RequestContext,
         journal_record: &mut TxJournalRecord,
     ) -> UnderlayResult<()> {
-        let rollback_result = client
-            .rollback_with_context(device, context, journal_record.strategy)
-            .await;
-
         let mut rolling_back_record = journal_record.clone();
         rolling_back_record.transition_phase(TxPhase::RollingBack)?;
         self.journal.put(&rolling_back_record)?;
         *journal_record = rolling_back_record;
+
+        let rollback_result = client
+            .rollback_with_context(device, context, journal_record.strategy)
+            .await;
 
         match rollback_result {
             Ok(outcome)

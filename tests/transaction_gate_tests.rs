@@ -174,7 +174,7 @@ async fn verify_failure_rolls_back_and_records_rolled_back_phase() {
 }
 
 #[tokio::test]
-async fn rollback_rpc_is_attempted_even_when_rolling_back_journal_write_fails() {
+async fn rollback_rpc_is_not_attempted_when_rolling_back_journal_write_fails() {
     let rollback_calls = Arc::new(AtomicUsize::new(0));
     let mut adapter = TestAdapter {
         current_state: Some(observed_access_state("stack-mgmt", 100)),
@@ -199,7 +199,7 @@ async fn rollback_rpc_is_attempted_even_when_rolling_back_journal_write_fails() 
         .await
         .expect("apply should return a per-device result even when journal write fails");
 
-    assert_eq!(rollback_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(rollback_calls.load(Ordering::SeqCst), 0);
     assert_eq!(response.status, ApplyStatus::Failed);
 }
 

@@ -305,6 +305,7 @@ class NetconfBackedDriver:
                         pb2.ADAPTER_OPERATION_STATUS_COMMITTED,
                         changed=True,
                     )
+                return pb2.RecoverResponse(result=_failed_result(error))
             except Exception as exc:
                 return pb2.RecoverResponse(result=_failed_result(_unexpected_error(exc)))
             else:

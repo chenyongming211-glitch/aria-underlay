@@ -1089,11 +1089,10 @@ def test_netconf_driver_adapter_recovery_does_not_infer_consumed_persist_id_from
         action=pb2.RECOVERY_ACTION_ADAPTER_RECOVER,
     )
 
-    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_ROLLED_BACK
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
+    assert response.result.errors[0].code == "NETCONF_FINAL_CONFIRM_FAILED"
     assert backend.final_confirm_calls == ["tx-1"]
-    assert backend.rollback_calls == [
-        (pb2.TRANSACTION_STRATEGY_CONFIRMED_COMMIT, "tx-1")
-    ]
+    assert backend.rollback_calls == []
 
 
 def test_netconf_driver_adapter_recovery_uses_structured_consumed_persist_id_code():
@@ -1289,6 +1288,7 @@ def test_commit_candidate_maps_device_commit_failure():
         ("lock", "candidate"),
         ("validate", "candidate"),
         ("commit", {}),
+        ("discard_changes",),
         ("unlock", "candidate"),
     ]
 

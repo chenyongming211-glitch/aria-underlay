@@ -152,6 +152,35 @@ Python 适配器 可以进程无状态，但事务产物不能无状态。
 - 不允许 `InDoubt` 事务被 GC 自动删除。
 - 不允许在降级模式中宣传强 ACID；必须明确说明削弱点和补偿方式。
 
+### 2.6 对比 netconf 后的当前落地顺序
+
+对比现有 `netconf` 项目后，`aria-underlay` 不应复制 Celery / DB 任务中心作为事务内核。Rust Core 的单 endpoint 事务、journal、recovery、shadow state、drift gate 仍是主路径。需要吸收的是 `netconf` 在产品任务层和真实设备适配层积累出的两类经验。
+
+第一类是产品请求防线，解决“产品什么时候发、发几次、失败后如何认账”的问题：
+
+- 请求幂等：新增 `idempotency_key` 或等价的请求去重与结果复用机制，避免 HTTP 超时、网关重试或控制器重放造成二次下发。
+- domain / region 级串行：在同一 underlay domain、MLAG 双 ToR 或同一业务区域内提供可配置编排策略；该策略只缩短不一致窗口和明确补偿方式，不承诺跨 endpoint 全局 ACID。
+- failed endpoint retry / recover：批量 apply 失败时，产品 API 和 ops CLI 必须能按 endpoint 查询 journal，并只重试或恢复失败项。
+- apply 后 verify 报告：在事务内 scoped verify 之外，输出产品可读的对账报告，说明 touched scope、endpoint 结果、live collection / parser 状态和人工处理建议。
+
+第二类是真机适配素材，解决“对真实设备说的话是否正确、读回来的状态是否可信”的问题：
+
+- 真实或脱敏 running XML、capability、YANG library、model profile 样本。
+- 厂商 renderer snapshot 与 parser fixture。
+- offline acceptance fixture 与真机验收记录。
+- H3C 先保持生产主线；Huawei 只有在真实样本、parser / renderer 快照和真机验收闭环完成后，才提升生产就绪级别；Cisco / Ruijie / NAPALM / CLI 降级路径按交付需求排期。
+
+当前推荐执行顺序：
+
+| 顺序 | 事项 | 目的 | 验收口径 |
+| --- | --- | --- | --- |
+| 1 | 修复 2026-05-31 剩余事务 / recovery 高优缺陷 | 先降低真机脏配置、误恢复和崩溃安全风险 | #2 recover 不误 cancel pending confirmed commit；#3 commit 失败清理 candidate；#4 rollback 前先持久化 RollingBack；相关回归测试通过 |
+| 2 | 记录并实施产品请求防线 | 对齐产品侧重试、并发、批量失败和运维恢复语义 | 同一 idempotency key 不二次下发；domain / region 编排策略有测试；PartialSuccess 可按 endpoint retry / recover；产品 verify 报告可追踪 |
+| 3 | 同步收集真机适配素材 | 校准 renderer / parser，支撑真实设备验收 | H3C / Huawei 样本归档；renderer snapshot 和 parser fixture 覆盖新增写路径；offline acceptance 和真机 runbook 记录完整 |
+| 4 | 扩展厂商和降级后端 | 扩大交付覆盖面 | 非 H3C 厂商或 NAPALM / CLI 路径默认 fail-closed，只有通过样本、离线验收和真机验收后才 production ready |
+
+工程排期上，文档和样本收集可以立即开始；代码实现必须先处理第 1 项，再进入第 2 项。第 3 项可与第 1 / 第 2 项并行准备，但不得阻塞或替代事务正确性修复。
+
 ## 3. 推荐目录结构
 
 ```text

@@ -343,6 +343,35 @@ Conflict
 DriftDetected
 ```
 
+### 5.1.1 产品请求防线与真机适配素材
+
+对比现有 `netconf` 项目后，`aria-underlay` 还需要补齐两类能力。两者都重要，但作用层级不同，不能混为“厂商 XML 模板”一类问题。
+
+第一类是产品请求防线，位于产品 API / 编排 / 运维语义层，目标是防止上层产品因为超时重试、并发请求、部分失败或状态复用不清晰而制造脏状态。即使第一阶段只支持 H3C，这一层也必须存在。
+
+产品请求防线至少包括：
+
+- `idempotency_key` 或等价请求去重机制：同一业务动作、同一目标和同一标准化 payload 重复提交时，必须返回同一事务或同一最终结果，不得二次下发。
+- domain / region 级串行策略：在 MLAG 双 ToR、同一 underlay 管控域或同一业务区域内，产品可以选择串行 apply，缩短多 endpoint 不一致窗口；该机制不得伪装成跨 endpoint 全局 ACID。
+- 失败 endpoint retry / recover 入口：批量 apply 返回 `PartialSuccess` 或 `InDoubt` 时，产品和运维必须能按 endpoint 查询 journal，并只重试或恢复失败项。
+- apply 后 verify 报告：除了事务内 scoped verify，产品层还应能获得面向用户的对账报告，说明 touched scope 是否收敛、哪些 endpoint 仍需人工处理、是否存在 live collection / parser 降级或失败。
+
+第二类是真机适配素材，位于 Python Adapter / 厂商 driver / renderer / parser 层，目标是证明“发出去的配置对、读回来的状态准”。没有真实素材时，事务框架只能证明流程正确，不能证明现场设备适配正确。
+
+真机适配素材至少包括：
+
+- 真实或脱敏的 H3C / Huawei running XML、NETCONF capability、YANG library 和 model profile 样本。
+- 厂商 renderer snapshot：标准 intent 到厂商 XML / CLI 输出的固定快照，用于防止 renderer 回归。
+- running state parser fixture：真实 readback 输入到标准 observed state 的解析样本，包括负例和边界样本。
+- offline acceptance fixture：覆盖 renderer + mock NETCONF dry-run / prepare / commit / final-confirm + parser verify 的离线闭环。
+- 真机验收记录：写入、readback、cleanup、回滚、force unlock、session drop、timeout 等路径必须按 runbook 归档。
+
+落地顺序要求：
+
+1. 先修复会影响事务正确性和恢复正确性的缺陷，尤其是 recovery、candidate cleanup、journal 崩溃安全类问题。
+2. 随后补齐产品请求防线，使上层重试、并发、批量部分失败和人工恢复具备明确语义。
+3. 真机适配素材需要同步收集和归档，但不得用来替代事务正确性修复；没有真实素材时，非 H3C 厂商不得提升为 production ready。
+
 ### 5.2 原子性边界
 
 Aria Underlay 第一阶段的强一致目标是单 management endpoint 原子性。
