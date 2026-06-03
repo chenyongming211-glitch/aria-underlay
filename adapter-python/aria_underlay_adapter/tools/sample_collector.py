@@ -99,6 +99,7 @@ _IPV4_PATTERN = re.compile(
     r"\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}"
     r"(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b"
 )
+_MAX_DOCUMENTATION_IPV4_REPLACEMENTS = len(_DOCUMENTATION_IPS) * 254
 
 
 @dataclass
@@ -107,6 +108,7 @@ class SampleCollector:
 
     # IP address mapping cache to ensure consistent replacement
     _ip_mapping: dict[str, str] = field(default_factory=dict)
+    _allocated_ip_replacements: set[str] = field(default_factory=set)
     _ip_counter: int = 0
 
     def _replace_ip(self, ip: str) -> str:
@@ -114,12 +116,41 @@ class SampleCollector:
         if ip in self._ip_mapping:
             return self._ip_mapping[ip]
 
-        # Use round-robin across documentation ranges
-        prefix = _DOCUMENTATION_IPS[self._ip_counter % len(_DOCUMENTATION_IPS)]
-        new_ip = f"{prefix}{(self._ip_counter % 254) + 1}"
+        if not self._allocated_ip_replacements and self._ip_mapping:
+            self._allocated_ip_replacements.update(self._ip_mapping.values())
+
+        # Use round-robin across documentation ranges, failing closed instead
+        # of silently reusing a replacement after the finite pool is exhausted.
+        for _ in range(_MAX_DOCUMENTATION_IPV4_REPLACEMENTS):
+            prefix = _DOCUMENTATION_IPS[self._ip_counter % len(_DOCUMENTATION_IPS)]
+            new_ip = f"{prefix}{(self._ip_counter % 254) + 1}"
+            self._ip_counter += 1
+            if new_ip != ip and new_ip not in self._allocated_ip_replacements:
+                break
+        else:
+            raise ValueError("documentation IPv4 replacement pool exhausted")
+
         self._ip_mapping[ip] = new_ip
-        self._ip_counter += 1
+        self._allocated_ip_replacements.add(new_ip)
         return new_ip
+
+    def _sanitize_ip_text(
+        self, text: str | None, report: SanitizationReport
+    ) -> str | None:
+        """Replace IPs in a text node without reprocessing inserted values."""
+        if not text:
+            return text
+
+        replacements = 0
+
+        def replace(match: re.Match[str]) -> str:
+            nonlocal replacements
+            replacements += 1
+            return self._replace_ip(match.group(0))
+
+        sanitized = _IPV4_PATTERN.sub(replace, text)
+        report.ip_addresses_replaced += replacements
+        return sanitized
 
     def _anonymize_as_number(self, as_number: str) -> str:
         """Anonymize an AS number using hash-based replacement."""
@@ -176,14 +207,11 @@ class SampleCollector:
                 element.text = "[REDACTED]"
                 report.community_strings_redacted += 1
 
-        # Sanitize text content for IP addresses
-        if element.text:
-            ips_found = _IPV4_PATTERN.findall(element.text)
-            if ips_found:
-                for ip in ips_found:
-                    new_ip = self._replace_ip(ip)
-                    element.text = element.text.replace(ip, new_ip)
-                report.ip_addresses_replaced += len(ips_found)
+        # Sanitize text, tail text, and attribute values for IP addresses.
+        element.text = self._sanitize_ip_text(element.text, report)
+        element.tail = self._sanitize_ip_text(element.tail, report)
+        for name, value in list(element.attrib.items()):
+            element.attrib[name] = self._sanitize_ip_text(value, report) or ""
 
         # Recursively process children
         for child in element:

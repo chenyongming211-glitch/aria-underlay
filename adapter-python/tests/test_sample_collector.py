@@ -70,6 +70,50 @@ class TestSampleCollector:
         # Check that documentation addresses are used
         assert "192.0.2." in sanitized or "198.51.100." in sanitized or "203.0.113." in sanitized
 
+    def test_ip_replacement_does_not_rewrite_generated_addresses(self):
+        """Replacement IPs inserted earlier must not be rewritten later."""
+        xml = """
+        <config>
+            <Description>src 10.0.0.1 dst 192.0.2.1 repeat 10.0.0.1</Description>
+        </config>
+        """
+        collector = SampleCollector()
+        sanitized, report = collector.sanitize_xml(xml)
+
+        root = ElementTree.fromstring(sanitized)
+        description = root.find(".//Description").text
+
+        assert report.ip_addresses_replaced == 3
+        assert collector._ip_mapping["10.0.0.1"] in description
+        assert collector._ip_mapping["192.0.2.1"] in description
+        assert description.count(collector._ip_mapping["10.0.0.1"]) == 2
+
+    def test_sanitize_ip_addresses_in_tail_text(self):
+        """Mixed-content tail text can contain sensitive IPs."""
+        xml = """
+        <config>
+            <Route><NextHop>via</NextHop>10.0.0.1</Route>
+        </config>
+        """
+        collector = SampleCollector()
+        sanitized, report = collector.sanitize_xml(xml)
+
+        assert report.ip_addresses_replaced == 1
+        assert "10.0.0.1" not in sanitized
+        root = ElementTree.fromstring(sanitized)
+        assert root.find(".//NextHop").tail == collector._ip_mapping["10.0.0.1"]
+
+    def test_documentation_address_is_not_mapped_to_itself(self):
+        """A raw documentation-range IP still needs a different replacement."""
+        xml = "<config><IPAddress>192.0.2.1</IPAddress></config>"
+        collector = SampleCollector()
+        sanitized, report = collector.sanitize_xml(xml)
+
+        root = ElementTree.fromstring(sanitized)
+        assert report.ip_addresses_replaced == 1
+        assert root.find(".//IPAddress").text != "192.0.2.1"
+        assert "192.0.2.1" not in sanitized
+
     def test_consistent_ip_replacement(self):
         """Same IP should be replaced consistently."""
         xml = """
@@ -284,7 +328,20 @@ class TestSampleCollector:
         collector = SampleCollector()
         sanitized, report = collector.sanitize_xml(xml)
 
-        # Note: Current implementation only sanitizes text content, not attributes
-        # This test documents the current behavior
-        assert "10.0.0.1" in sanitized
-        assert report.ip_addresses_replaced == 0
+        assert "10.0.0.1" not in sanitized
+        assert collector._ip_mapping["10.0.0.1"] in sanitized
+        assert report.ip_addresses_replaced == 1
+
+    def test_ip_replacement_pool_fails_closed_instead_of_colliding(self):
+        """The fixed documentation IPv4 pool must not silently reuse replacements."""
+        ip_count = 763
+        ips = [
+            f"10.{index // (254 * 254)}.{(index // 254) % 254}.{(index % 254) + 1}"
+            for index in range(ip_count)
+        ]
+        xml = f"<config><Description>{' '.join(ips)}</Description></config>"
+
+        collector = SampleCollector()
+
+        with pytest.raises(ValueError, match="documentation IPv4 replacement pool exhausted"):
+            collector.sanitize_xml(xml)
