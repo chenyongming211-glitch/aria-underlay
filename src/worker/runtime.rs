@@ -1,4 +1,4 @@
-use std::future::Future;
+use std::{collections::BTreeMap, future::Future, time::Duration};
 
 use tokio::sync::watch;
 use tokio::task::JoinSet;
@@ -24,6 +24,8 @@ use crate::worker::operation_summary_compactor::{
     OperationSummaryCompactionWorker,
 };
 use crate::{UnderlayError, UnderlayResult};
+
+const WORKER_RESTART_DELAY: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Default)]
 pub struct UnderlayWorkerRuntime {
@@ -53,12 +55,136 @@ pub struct UnderlayWorkerRuntimeReport {
 }
 
 enum RuntimeWorkerOutcome {
-    JournalGc(UnderlayResult<JournalGcSchedulerReport>),
-    ConfirmedCommitTimeout(UnderlayResult<ConfirmedCommitTimeoutWatcherSchedulerReport>),
-    DriftAudit(UnderlayResult<DriftAuditSchedulerReport>),
-    OperationAlertDelivery(UnderlayResult<OperationAlertDeliverySchedulerReport>),
-    OperationSummaryCompaction(UnderlayResult<OperationSummaryCompactionSchedulerReport>),
-    OperationAuditCompaction(UnderlayResult<OperationAuditCompactionSchedulerReport>),
+    JournalGc(WorkerRun<JournalGcSchedulerReport>),
+    ConfirmedCommitTimeout(WorkerRun<ConfirmedCommitTimeoutWatcherSchedulerReport>),
+    DriftAudit(WorkerRun<DriftAuditSchedulerReport>),
+    OperationAlertDelivery(WorkerRun<OperationAlertDeliverySchedulerReport>),
+    OperationSummaryCompaction(WorkerRun<OperationSummaryCompactionSchedulerReport>),
+    OperationAuditCompaction(WorkerRun<OperationAuditCompactionSchedulerReport>),
+    RestartSkipped,
+}
+
+enum WorkerRun<T> {
+    Finished(UnderlayResult<T>),
+    Panicked(tokio::task::JoinError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum RuntimeWorkerKind {
+    JournalGc,
+    ConfirmedCommitTimeout,
+    DriftAudit,
+    OperationAlertDelivery,
+    OperationSummaryCompaction,
+    OperationAuditCompaction,
+}
+
+#[derive(Debug, Clone)]
+enum RuntimeWorkerSpec {
+    JournalGc(JournalGcWorker, JournalGcSchedule),
+    ConfirmedCommitTimeout(
+        ConfirmedCommitTimeoutWatcher,
+        ConfirmedCommitTimeoutWatcherSchedule,
+    ),
+    DriftAudit(DriftAuditWorker, DriftAuditSchedule),
+    OperationAlertDelivery(
+        OperationAlertDeliveryWorker,
+        OperationAlertDeliverySchedule,
+    ),
+    OperationSummaryCompaction(
+        OperationSummaryCompactionWorker,
+        OperationSummaryCompactionSchedule,
+    ),
+    OperationAuditCompaction(
+        OperationAuditCompactionWorker,
+        OperationAuditCompactionSchedule,
+    ),
+}
+
+impl RuntimeWorkerSpec {
+    fn kind(&self) -> RuntimeWorkerKind {
+        match self {
+            Self::JournalGc(_, _) => RuntimeWorkerKind::JournalGc,
+            Self::ConfirmedCommitTimeout(_, _) => RuntimeWorkerKind::ConfirmedCommitTimeout,
+            Self::DriftAudit(_, _) => RuntimeWorkerKind::DriftAudit,
+            Self::OperationAlertDelivery(_, _) => RuntimeWorkerKind::OperationAlertDelivery,
+            Self::OperationSummaryCompaction(_, _) => RuntimeWorkerKind::OperationSummaryCompaction,
+            Self::OperationAuditCompaction(_, _) => RuntimeWorkerKind::OperationAuditCompaction,
+        }
+    }
+
+    async fn run(self, worker_shutdown: watch::Receiver<bool>) -> RuntimeWorkerOutcome {
+        match self {
+            Self::JournalGc(worker, schedule) => RuntimeWorkerOutcome::JournalGc(
+                run_isolated(async move {
+                    worker
+                        .run_periodic_until_shutdown(schedule, wait_for_shutdown(worker_shutdown))
+                        .await
+                })
+                .await,
+            ),
+            Self::ConfirmedCommitTimeout(worker, schedule) => {
+                RuntimeWorkerOutcome::ConfirmedCommitTimeout(
+                    run_isolated(async move {
+                        worker
+                            .run_periodic_until_shutdown(
+                                schedule,
+                                wait_for_shutdown(worker_shutdown),
+                            )
+                            .await
+                    })
+                    .await,
+                )
+            }
+            Self::DriftAudit(worker, schedule) => RuntimeWorkerOutcome::DriftAudit(
+                run_isolated(async move {
+                    worker
+                        .run_periodic_until_shutdown(schedule, wait_for_shutdown(worker_shutdown))
+                        .await
+                })
+                .await,
+            ),
+            Self::OperationAlertDelivery(worker, schedule) => {
+                RuntimeWorkerOutcome::OperationAlertDelivery(
+                    run_isolated(async move {
+                        worker
+                            .run_periodic_until_shutdown(
+                                schedule,
+                                wait_for_shutdown(worker_shutdown),
+                            )
+                            .await
+                    })
+                    .await,
+                )
+            }
+            Self::OperationSummaryCompaction(worker, schedule) => {
+                RuntimeWorkerOutcome::OperationSummaryCompaction(
+                    run_isolated(async move {
+                        worker
+                            .run_periodic_until_shutdown(
+                                schedule,
+                                wait_for_shutdown(worker_shutdown),
+                            )
+                            .await
+                    })
+                    .await,
+                )
+            }
+            Self::OperationAuditCompaction(worker, schedule) => {
+                RuntimeWorkerOutcome::OperationAuditCompaction(
+                    run_isolated(async move {
+                        worker
+                            .run_periodic_until_shutdown(
+                                schedule,
+                                wait_for_shutdown(worker_shutdown),
+                            )
+                            .await
+                    })
+                    .await,
+                )
+            }
+        }
+    }
 }
 
 impl UnderlayWorkerRuntime {
@@ -132,70 +258,38 @@ impl UnderlayWorkerRuntime {
         let mut report = UnderlayWorkerRuntimeReport::default();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut tasks = JoinSet::new();
-
+        let mut specs = Vec::new();
         if let Some((worker, schedule)) = self.journal_gc {
-            let worker_shutdown = shutdown_rx.clone();
-            tasks.spawn(async move {
-                RuntimeWorkerOutcome::JournalGc(
-                    worker
-                        .run_periodic_until_shutdown(schedule, wait_for_shutdown(worker_shutdown))
-                        .await,
-                )
-            });
+            specs.push(RuntimeWorkerSpec::JournalGc(worker, schedule));
         }
-
         if let Some((worker, schedule)) = self.confirmed_commit_timeout {
-            let worker_shutdown = shutdown_rx.clone();
-            tasks.spawn(async move {
-                RuntimeWorkerOutcome::ConfirmedCommitTimeout(
-                    worker
-                        .run_periodic_until_shutdown(schedule, wait_for_shutdown(worker_shutdown))
-                        .await,
-                )
-            });
+            specs.push(RuntimeWorkerSpec::ConfirmedCommitTimeout(
+                worker, schedule,
+            ));
         }
-
         if let Some((worker, schedule)) = self.drift_audit {
-            let worker_shutdown = shutdown_rx.clone();
-            tasks.spawn(async move {
-                RuntimeWorkerOutcome::DriftAudit(
-                    worker
-                        .run_periodic_until_shutdown(schedule, wait_for_shutdown(worker_shutdown))
-                        .await,
-                )
-            });
+            specs.push(RuntimeWorkerSpec::DriftAudit(worker, schedule));
         }
         if let Some((worker, schedule)) = self.operation_alert_delivery {
-            let worker_shutdown = shutdown_rx.clone();
-            tasks.spawn(async move {
-                RuntimeWorkerOutcome::OperationAlertDelivery(
-                    worker
-                        .run_periodic_until_shutdown(schedule, wait_for_shutdown(worker_shutdown))
-                        .await,
-                )
-            });
+            specs.push(RuntimeWorkerSpec::OperationAlertDelivery(
+                worker, schedule,
+            ));
         }
         if let Some((worker, schedule)) = self.operation_summary_compaction {
-            let worker_shutdown = shutdown_rx.clone();
-            tasks.spawn(async move {
-                RuntimeWorkerOutcome::OperationSummaryCompaction(
-                    worker
-                        .run_periodic_until_shutdown(schedule, wait_for_shutdown(worker_shutdown))
-                        .await,
-                )
-            });
+            specs.push(RuntimeWorkerSpec::OperationSummaryCompaction(
+                worker, schedule,
+            ));
         }
         if let Some((worker, schedule)) = self.operation_audit_compaction {
-            let worker_shutdown = shutdown_rx.clone();
-            tasks.spawn(async move {
-                RuntimeWorkerOutcome::OperationAuditCompaction(
-                    worker
-                        .run_periodic_until_shutdown(schedule, wait_for_shutdown(worker_shutdown))
-                        .await,
-                )
-            });
+            specs.push(RuntimeWorkerSpec::OperationAuditCompaction(
+                worker, schedule,
+            ));
+        }
+        for spec in &specs {
+            spawn_runtime_worker(spec, &shutdown_rx, &mut tasks, None);
         }
         drop(shutdown_rx);
+        let mut restart_attempts = BTreeMap::<RuntimeWorkerKind, u32>::new();
 
         if tasks.is_empty() {
             return Ok(report);
@@ -208,7 +302,9 @@ impl UnderlayWorkerRuntime {
                     let _ = shutdown_tx.send(true);
                     while let Some(joined) = tasks.join_next().await {
                         match joined {
-                            Ok(outcome) => record_worker_outcome(outcome, &mut report),
+                            Ok(outcome) => {
+                                let _ = record_worker_outcome(outcome, &mut report);
+                            }
                             Err(err) => record_worker_join_error(&mut report, err),
                         }
                     }
@@ -220,7 +316,19 @@ impl UnderlayWorkerRuntime {
                     };
                     match joined {
                         Ok(outcome) => {
-                            record_worker_outcome(outcome, &mut report);
+                            if let Some(kind) = record_worker_outcome(outcome, &mut report) {
+                                if let Some(spec) = specs.iter().find(|spec| spec.kind() == kind) {
+                                    let attempts = restart_attempts.entry(kind).or_insert(0);
+                                    let restart_delay = worker_restart_delay(*attempts);
+                                    *attempts = attempts.saturating_add(1);
+                                    spawn_runtime_worker(
+                                        spec,
+                                        &shutdown_tx.subscribe(),
+                                        &mut tasks,
+                                        Some(restart_delay),
+                                    );
+                                }
+                            }
                             if tasks.is_empty() {
                                 return Ok(report);
                             }
@@ -283,36 +391,126 @@ async fn wait_for_shutdown(mut shutdown_rx: watch::Receiver<bool>) {
     }
 }
 
+fn spawn_runtime_worker(
+    spec: &RuntimeWorkerSpec,
+    shutdown_rx: &watch::Receiver<bool>,
+    tasks: &mut JoinSet<RuntimeWorkerOutcome>,
+    restart_delay: Option<Duration>,
+) {
+    let spec = spec.clone();
+    let worker_shutdown = shutdown_rx.clone();
+    tasks.spawn(async move {
+        if let Some(delay) = restart_delay {
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => {}
+                _ = wait_for_shutdown(worker_shutdown.clone()) => {
+                    return RuntimeWorkerOutcome::RestartSkipped;
+                }
+            }
+        }
+        spec.run(worker_shutdown).await
+    });
+}
+
+async fn run_isolated<T, F>(future: F) -> WorkerRun<T>
+where
+    T: Send + 'static,
+    F: Future<Output = UnderlayResult<T>> + Send + 'static,
+{
+    match tokio::spawn(future).await {
+        Ok(result) => WorkerRun::Finished(result),
+        Err(err) => WorkerRun::Panicked(err),
+    }
+}
+
 fn record_worker_outcome(
     outcome: RuntimeWorkerOutcome,
     report: &mut UnderlayWorkerRuntimeReport,
-) {
+) -> Option<RuntimeWorkerKind> {
     match outcome {
         RuntimeWorkerOutcome::JournalGc(worker_report) => match worker_report {
-            Ok(worker_report) => report.journal_gc = Some(worker_report),
-            Err(err) => record_worker_error(report, "journal_gc", err),
+            WorkerRun::Finished(Ok(worker_report)) => report.journal_gc = Some(worker_report),
+            WorkerRun::Finished(Err(err)) => record_worker_error(report, "journal_gc", err),
+            WorkerRun::Panicked(err) => {
+                record_worker_join_error_for(report, RuntimeWorkerKind::JournalGc, err);
+                return Some(RuntimeWorkerKind::JournalGc);
+            }
         },
         RuntimeWorkerOutcome::ConfirmedCommitTimeout(worker_report) => match worker_report {
-            Ok(worker_report) => report.confirmed_commit_timeout = Some(worker_report),
-            Err(err) => record_worker_error(report, "confirmed_commit_timeout", err),
+            WorkerRun::Finished(Ok(worker_report)) => {
+                report.confirmed_commit_timeout = Some(worker_report)
+            }
+            WorkerRun::Finished(Err(err)) => {
+                record_worker_error(report, "confirmed_commit_timeout", err)
+            }
+            WorkerRun::Panicked(err) => {
+                record_worker_join_error_for(
+                    report,
+                    RuntimeWorkerKind::ConfirmedCommitTimeout,
+                    err,
+                );
+                return Some(RuntimeWorkerKind::ConfirmedCommitTimeout);
+            }
         },
         RuntimeWorkerOutcome::DriftAudit(worker_report) => match worker_report {
-            Ok(worker_report) => report.drift_audit = Some(worker_report),
-            Err(err) => record_worker_error(report, "drift_audit", err),
+            WorkerRun::Finished(Ok(worker_report)) => report.drift_audit = Some(worker_report),
+            WorkerRun::Finished(Err(err)) => record_worker_error(report, "drift_audit", err),
+            WorkerRun::Panicked(err) => {
+                record_worker_join_error_for(report, RuntimeWorkerKind::DriftAudit, err);
+                return Some(RuntimeWorkerKind::DriftAudit);
+            }
         },
         RuntimeWorkerOutcome::OperationAlertDelivery(worker_report) => match worker_report {
-            Ok(worker_report) => report.operation_alert_delivery = Some(worker_report),
-            Err(err) => record_worker_error(report, "operation_alert_delivery", err),
+            WorkerRun::Finished(Ok(worker_report)) => {
+                report.operation_alert_delivery = Some(worker_report)
+            }
+            WorkerRun::Finished(Err(err)) => {
+                record_worker_error(report, "operation_alert_delivery", err)
+            }
+            WorkerRun::Panicked(err) => {
+                record_worker_join_error_for(
+                    report,
+                    RuntimeWorkerKind::OperationAlertDelivery,
+                    err,
+                );
+                return Some(RuntimeWorkerKind::OperationAlertDelivery);
+            }
         },
         RuntimeWorkerOutcome::OperationSummaryCompaction(worker_report) => match worker_report {
-            Ok(worker_report) => report.operation_summary_compaction = Some(worker_report),
-            Err(err) => record_worker_error(report, "operation_summary_compaction", err),
+            WorkerRun::Finished(Ok(worker_report)) => {
+                report.operation_summary_compaction = Some(worker_report)
+            }
+            WorkerRun::Finished(Err(err)) => {
+                record_worker_error(report, "operation_summary_compaction", err)
+            }
+            WorkerRun::Panicked(err) => {
+                record_worker_join_error_for(
+                    report,
+                    RuntimeWorkerKind::OperationSummaryCompaction,
+                    err,
+                );
+                return Some(RuntimeWorkerKind::OperationSummaryCompaction);
+            }
         },
         RuntimeWorkerOutcome::OperationAuditCompaction(worker_report) => match worker_report {
-            Ok(worker_report) => report.operation_audit_compaction = Some(worker_report),
-            Err(err) => record_worker_error(report, "operation_audit_compaction", err),
+            WorkerRun::Finished(Ok(worker_report)) => {
+                report.operation_audit_compaction = Some(worker_report)
+            }
+            WorkerRun::Finished(Err(err)) => {
+                record_worker_error(report, "operation_audit_compaction", err)
+            }
+            WorkerRun::Panicked(err) => {
+                record_worker_join_error_for(
+                    report,
+                    RuntimeWorkerKind::OperationAuditCompaction,
+                    err,
+                );
+                return Some(RuntimeWorkerKind::OperationAuditCompaction);
+            }
         },
+        RuntimeWorkerOutcome::RestartSkipped => {}
     }
+    None
 }
 
 fn record_worker_error(
@@ -328,6 +526,39 @@ fn record_worker_join_error(
     err: tokio::task::JoinError,
 ) {
     record_worker_error(report, "worker_runtime", runtime_join_error(err));
+}
+
+fn record_worker_join_error_for(
+    report: &mut UnderlayWorkerRuntimeReport,
+    kind: RuntimeWorkerKind,
+    err: tokio::task::JoinError,
+) {
+    record_worker_error(
+        report,
+        "worker_runtime",
+        UnderlayError::Internal(format!(
+            "{} task join error: {err}",
+            runtime_worker_name(kind)
+        )),
+    );
+}
+
+fn runtime_worker_name(kind: RuntimeWorkerKind) -> &'static str {
+    match kind {
+        RuntimeWorkerKind::JournalGc => "journal_gc",
+        RuntimeWorkerKind::ConfirmedCommitTimeout => "confirmed_commit_timeout",
+        RuntimeWorkerKind::DriftAudit => "drift_audit",
+        RuntimeWorkerKind::OperationAlertDelivery => "operation_alert_delivery",
+        RuntimeWorkerKind::OperationSummaryCompaction => "operation_summary_compaction",
+        RuntimeWorkerKind::OperationAuditCompaction => "operation_audit_compaction",
+    }
+}
+
+fn worker_restart_delay(previous_restarts: u32) -> Duration {
+    let multiplier = 2_u64.saturating_pow(previous_restarts.min(6));
+    WORKER_RESTART_DELAY
+        .saturating_mul(multiplier as u32)
+        .min(Duration::from_secs(5))
 }
 
 fn runtime_join_error(err: tokio::task::JoinError) -> UnderlayError {

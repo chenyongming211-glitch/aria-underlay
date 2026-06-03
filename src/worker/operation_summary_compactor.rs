@@ -32,7 +32,7 @@ pub struct OperationSummaryCompactionSchedulerReport {
     pub last_report: Option<OperationSummaryCompactionReport>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OperationSummaryCompactionWorker {
     store: Arc<JsonFileOperationSummaryStore>,
     policy: OperationSummaryRetentionPolicy,

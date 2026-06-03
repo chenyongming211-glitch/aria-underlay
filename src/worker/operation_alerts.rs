@@ -38,7 +38,7 @@ pub struct OperationAlertDeliverySchedulerReport {
     pub last_report: Option<OperationAlertDeliveryReport>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OperationAlertDeliveryWorker {
     operation_summaries: Arc<dyn OperationSummaryStore>,
     alert_sink: Arc<dyn OperationAlertSink>,

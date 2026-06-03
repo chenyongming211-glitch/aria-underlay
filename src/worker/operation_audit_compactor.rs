@@ -31,7 +31,7 @@ pub struct OperationAuditCompactionSchedulerReport {
     pub last_report: Option<OperationAuditCompactionReport>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OperationAuditCompactionWorker {
     store: Arc<JsonFileOperationAuditStore>,
     policy: OperationAuditRetentionPolicy,

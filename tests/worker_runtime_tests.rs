@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 use aria_underlay::api::AriaUnderlayService;
 use aria_underlay::device::DeviceInventory;
@@ -416,6 +419,61 @@ async fn worker_runtime_records_worker_panic_and_keeps_other_workers_running() {
 }
 
 #[tokio::test]
+async fn worker_runtime_restarts_worker_after_panic() {
+    let expected_store = Arc::new(aria_underlay::state::InMemoryShadowStateStore::default());
+    expected_store
+        .put(shadow_state("leaf-restart", vec![vlan(100, "prod")], vec![]))
+        .expect("restart test expected state should be stored");
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let sink = Arc::new(InMemoryEventSink::default());
+    let drift_worker = DriftAuditWorker::new(
+        DriftAuditor::from_source(
+            expected_store,
+            Arc::new(FlakyPanicObservationSource {
+                attempts: attempts.clone(),
+            }),
+        ),
+        sink.clone(),
+    );
+
+    let report = UnderlayWorkerRuntime::new()
+        .with_drift_audit(
+            drift_worker,
+            DriftAuditSchedule {
+                interval_secs: 60 * 60,
+                run_immediately: true,
+            },
+        )
+        .run_until_shutdown(async {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        })
+        .await
+        .expect("runtime should restart panicked worker");
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(report.worker_errors.len(), 1);
+    assert!(
+        report.worker_errors[0].contains("worker_runtime"),
+        "panic should be reported through runtime worker supervision: {:?}",
+        report.worker_errors
+    );
+    assert_eq!(
+        report
+            .drift_audit
+            .expect("restarted drift worker should report")
+            .runs,
+        1
+    );
+    assert_eq!(
+        sink.events()
+            .iter()
+            .filter(|event| event.kind == UnderlayEventKind::UnderlayDriftAuditCompleted)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn journal_gc_skips_malformed_journal_file_and_continues() {
     let temp = temp_test_dir("gc-skips-malformed-journal");
     let journal_root = temp.join("journal");
@@ -566,6 +624,24 @@ impl DriftObservationSource for PanickingObservationSource {
         _device_id: &DeviceId,
     ) -> UnderlayResult<DeviceShadowState> {
         panic!("panic observation source")
+    }
+}
+
+#[derive(Debug)]
+struct FlakyPanicObservationSource {
+    attempts: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl DriftObservationSource for FlakyPanicObservationSource {
+    async fn get_observed_state(
+        &self,
+        device_id: &DeviceId,
+    ) -> UnderlayResult<DeviceShadowState> {
+        if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            panic!("first drift observation panics")
+        }
+        Ok(shadow_state(&device_id.0, vec![], vec![]))
     }
 }
 

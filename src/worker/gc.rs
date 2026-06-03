@@ -44,7 +44,7 @@ impl RetentionPolicy {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct JournalGc {
     journal_root: Option<PathBuf>,
     artifact_root: Option<PathBuf>,
@@ -100,7 +100,7 @@ pub struct JournalGcSchedulerReport {
     pub last_report: Option<JournalGcReport>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct JournalGcWorker {
     gc: JournalGc,
     policy: RetentionPolicy,

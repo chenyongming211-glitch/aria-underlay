@@ -89,7 +89,7 @@ pub struct DriftAuditSchedulerReport {
     pub last_summary: Option<DriftAuditRunSummary>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DriftAuditWorker {
     auditor: DriftAuditor,
     event_sink: Arc<dyn EventSink>,
