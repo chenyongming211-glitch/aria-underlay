@@ -154,7 +154,7 @@ async fn gc_deletes_artifacts_only_for_old_terminal_transactions() {
 }
 
 #[tokio::test]
-async fn gc_prunes_terminal_artifacts_per_device_without_touching_unknown_tx() {
+async fn gc_prunes_terminal_artifacts_per_device_and_deletes_orphans() {
     let temp = temp_test_dir("artifact-cap");
     let journal_root = temp.join("journal");
     let artifact_root = temp.join("artifacts");
@@ -165,8 +165,12 @@ async fn gc_prunes_terminal_artifacts_per_device_without_touching_unknown_tx() {
     store
         .put(&journal_record("tx-old", TxPhase::Committed, 200))
         .expect("write old");
+    store
+        .put(&journal_record("tx-in-doubt", TxPhase::InDoubt, 100))
+        .expect("write in doubt");
     write_artifact(&artifact_root, "leaf-a", "tx-new");
     write_artifact(&artifact_root, "leaf-a", "tx-old");
+    write_artifact(&artifact_root, "leaf-a", "tx-in-doubt");
     write_artifact(&artifact_root, "leaf-a", "tx-unknown");
 
     let report = JournalGc::new(&journal_root)
@@ -182,14 +186,47 @@ async fn gc_prunes_terminal_artifacts_per_device_without_touching_unknown_tx() {
         .await
         .expect("gc should run");
 
-    assert_eq!(report.artifacts_deleted, 1);
+    assert_eq!(report.artifacts_deleted, 2);
     assert_eq!(
         report.artifact_deleted_refs,
-        vec!["leaf-a/tx-old".to_string()]
+        vec![
+            "leaf-a/tx-old".to_string(),
+            "leaf-a/tx-unknown".to_string()
+        ]
     );
     assert!(artifact_root.join("leaf-a/tx-new").exists());
     assert!(!artifact_root.join("leaf-a/tx-old").exists());
-    assert!(artifact_root.join("leaf-a/tx-unknown").exists());
+    assert!(artifact_root.join("leaf-a/tx-in-doubt").exists());
+    assert!(!artifact_root.join("leaf-a/tx-unknown").exists());
+    fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn gc_keeps_artifact_when_matching_journal_file_is_unreadable() {
+    let temp = temp_test_dir("artifact-corrupt-journal");
+    let journal_root = temp.join("journal");
+    let artifact_root = temp.join("artifacts");
+    fs::create_dir_all(&journal_root).expect("journal root should be created");
+    fs::write(journal_root.join("tx-corrupt.json"), b"{not valid json")
+        .expect("corrupt journal fixture should be written");
+    write_artifact(&artifact_root, "leaf-a", "tx-corrupt");
+
+    let report = JournalGc::new(&journal_root)
+        .with_artifact_root(&artifact_root)
+        .with_now_unix_secs(1_000)
+        .run_once(RetentionPolicy {
+            committed_journal_retention_days: 30,
+            rolled_back_journal_retention_days: 30,
+            failed_journal_retention_days: 90,
+            rollback_artifact_retention_days: 30,
+            max_artifacts_per_device: 1,
+        })
+        .await
+        .expect("gc should report corrupt journal without deleting matching artifact");
+
+    assert_eq!(report.journals_failed, 1);
+    assert_eq!(report.artifacts_deleted, 0);
+    assert!(artifact_root.join("leaf-a/tx-corrupt").exists());
     fs::remove_dir_all(temp).ok();
 }
 

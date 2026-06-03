@@ -121,6 +121,16 @@ impl JsonFileShadowStateStore {
             .value()
             .clone()
     }
+
+    fn prune_idle_lock(&self, device_id: &DeviceId, lock: &Arc<Mutex<()>>) {
+        self.locks.remove_if(device_id, |_, existing| {
+            Arc::ptr_eq(existing, lock) && Arc::strong_count(existing) == 2
+        });
+    }
+
+    pub fn lock_entry_count(&self) -> usize {
+        self.locks.len()
+    }
 }
 
 impl ShadowStateStore for JsonFileShadowStateStore {
@@ -133,38 +143,48 @@ impl ShadowStateStore for JsonFileShadowStateStore {
     }
 
     fn put(&self, mut state: DeviceShadowState) -> UnderlayResult<DeviceShadowState> {
-        let lock = self.lock_for(&state.device_id);
-        let _guard = lock
-            .lock()
-            .map_err(|_| UnderlayError::Internal("shadow state mutex poisoned".into()))?;
+        let device_id = state.device_id.clone();
+        let lock = self.lock_for(&device_id);
+        let result = (|| -> UnderlayResult<DeviceShadowState> {
+            let _guard = lock
+                .lock()
+                .map_err(|_| UnderlayError::Internal("shadow state mutex poisoned".into()))?;
 
-        let next_revision = self
-            .get(&state.device_id)?
-            .map(|current| current.revision.saturating_add(1))
-            .unwrap_or_else(|| state.revision.max(1));
-        state.revision = next_revision;
+            let next_revision = self
+                .get(&state.device_id)?
+                .map(|current| current.revision.saturating_add(1))
+                .unwrap_or_else(|| state.revision.max(1));
+            state.revision = next_revision;
 
-        let path = self.path_for(&state.device_id)?;
-        let payload = serde_json::to_vec_pretty(&state)
-            .map_err(|err| UnderlayError::Internal(format!("serialize shadow state: {err}")))?;
+            let path = self.path_for(&state.device_id)?;
+            let payload = serde_json::to_vec_pretty(&state).map_err(|err| {
+                UnderlayError::Internal(format!("serialize shadow state: {err}"))
+            })?;
 
-        atomic_write(&path, &payload, shadow_io_error)?;
-        Ok(state)
+            atomic_write(&path, &payload, shadow_io_error)?;
+            Ok(state)
+        })();
+        self.prune_idle_lock(&device_id, &lock);
+        result
     }
 
     fn remove(&self, device_id: &DeviceId) -> UnderlayResult<Option<DeviceShadowState>> {
         let lock = self.lock_for(device_id);
-        let _guard = lock
-            .lock()
-            .map_err(|_| UnderlayError::Internal("shadow state mutex poisoned".into()))?;
-        let path = self.path_for(device_id)?;
-        if !path.exists() {
-            return Ok(None);
-        }
+        let result = (|| -> UnderlayResult<Option<DeviceShadowState>> {
+            let _guard = lock
+                .lock()
+                .map_err(|_| UnderlayError::Internal("shadow state mutex poisoned".into()))?;
+            let path = self.path_for(device_id)?;
+            if !path.exists() {
+                return Ok(None);
+            }
 
-        let state = read_shadow_state(&path)?;
-        fs::remove_file(&path).map_err(shadow_io_error)?;
-        Ok(Some(state))
+            let state = read_shadow_state(&path)?;
+            fs::remove_file(&path).map_err(shadow_io_error)?;
+            Ok(Some(state))
+        })();
+        self.prune_idle_lock(device_id, &lock);
+        result
     }
 
     fn list(&self) -> UnderlayResult<Vec<DeviceShadowState>> {

@@ -414,6 +414,28 @@ fn file_journal_serializes_concurrent_same_transaction_writes() {
     std::fs::remove_dir_all(root).ok();
 }
 
+#[test]
+fn file_journal_prunes_idle_lock_entries_after_write() {
+    let root = temp_journal_dir("lock-prune");
+    let store = JsonFileTxJournalStore::new(&root);
+    let context = TxContext {
+        tx_id: "tx-lock-prune".into(),
+        request_id: "req-lock-prune".into(),
+        trace_id: "trace-lock-prune".into(),
+    };
+    let record = TxJournalRecord::started(&context, vec![DeviceId("leaf-a".into())])
+        .with_phase(TxPhase::Committed);
+
+    store.put(&record).expect("journal put should succeed");
+
+    assert_eq!(
+        store.lock_entry_count(),
+        0,
+        "idle file-journal locks should not accumulate after writes"
+    );
+    std::fs::remove_dir_all(root).ok();
+}
+
 #[tokio::test]
 async fn endpoint_lock_serializes_same_endpoint_writers() {
     let locks = EndpointLockTable::default();

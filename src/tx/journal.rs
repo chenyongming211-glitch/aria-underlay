@@ -243,21 +243,35 @@ impl JsonFileTxJournalStore {
             .value()
             .clone()
     }
+
+    fn prune_idle_lock(&self, tx_id: &str, lock: &Arc<Mutex<()>>) {
+        self.locks.remove_if(tx_id, |_, existing| {
+            Arc::ptr_eq(existing, lock) && Arc::strong_count(existing) == 2
+        });
+    }
+
+    pub fn lock_entry_count(&self) -> usize {
+        self.locks.len()
+    }
 }
 
 impl TxJournalStore for JsonFileTxJournalStore {
     fn put(&self, record: &TxJournalRecord) -> UnderlayResult<()> {
         let lock = self.lock_for(&record.tx_id);
-        let _guard = lock
-            .lock()
-            .map_err(|_| UnderlayError::Internal("tx journal mutex poisoned".into()))?;
+        let result = (|| -> UnderlayResult<()> {
+            let _guard = lock
+                .lock()
+                .map_err(|_| UnderlayError::Internal("tx journal mutex poisoned".into()))?;
 
-        let path = self.path_for(&record.tx_id)?;
-        let payload = serde_json::to_vec_pretty(record)
-            .map_err(|err| UnderlayError::Internal(format!("serialize tx journal: {err}")))?;
+            let path = self.path_for(&record.tx_id)?;
+            let payload = serde_json::to_vec_pretty(record)
+                .map_err(|err| UnderlayError::Internal(format!("serialize tx journal: {err}")))?;
 
-        atomic_write(&path, &payload, journal_io_error)?;
-        Ok(())
+            atomic_write(&path, &payload, journal_io_error)?;
+            Ok(())
+        })();
+        self.prune_idle_lock(&record.tx_id, &lock);
+        result
     }
 
     fn get(&self, tx_id: &str) -> UnderlayResult<Option<TxJournalRecord>> {

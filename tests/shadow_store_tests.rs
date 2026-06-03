@@ -170,6 +170,33 @@ fn file_shadow_store_removes_state() {
 }
 
 #[test]
+fn file_shadow_store_prunes_idle_lock_entries_after_write_and_remove() {
+    let root = temp_shadow_dir("lock-prune");
+    let store = JsonFileShadowStateStore::new(&root);
+    let device_id = DeviceId("leaf-a".into());
+
+    store
+        .put(shadow_state("leaf-a", 100))
+        .expect("file shadow put should succeed");
+    assert_eq!(
+        store.lock_entry_count(),
+        0,
+        "idle file-shadow locks should not accumulate after writes"
+    );
+
+    store
+        .remove(&device_id)
+        .expect("file shadow remove should succeed");
+    assert_eq!(
+        store.lock_entry_count(),
+        0,
+        "idle file-shadow locks should not accumulate after remove"
+    );
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn file_shadow_store_rejects_non_canonical_device_id() {
     let root = temp_shadow_dir("reject-invalid-id");
     let store = JsonFileShadowStateStore::new(&root);

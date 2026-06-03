@@ -211,6 +211,7 @@ impl JournalGc {
         let now = self.now_unix_secs.unwrap_or_else(now_unix_secs);
         let mut report = JournalGcReport::default();
         let mut terminal_records = Vec::new();
+        let mut known_tx_ids = BTreeSet::new();
 
         let entries = match fs::read_dir(journal_root) {
             Ok(entries) => entries,
@@ -232,6 +233,9 @@ impl JournalGc {
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
             }
+            if let Some(tx_id) = path.file_stem().and_then(|stem| stem.to_str()) {
+                known_tx_ids.insert(tx_id.to_string());
+            }
 
             let record = match read_journal_record(&path) {
                 Ok(record) => record,
@@ -240,6 +244,7 @@ impl JournalGc {
                     continue;
                 }
             };
+            known_tx_ids.insert(record.tx_id.clone());
             if !is_terminal_phase(&record.phase) {
                 report.journals_retained += 1;
                 continue;
@@ -277,6 +282,7 @@ impl JournalGc {
 
         self.prune_artifacts_per_device(
             &terminal_records,
+            &known_tx_ids,
             policy.max_artifacts_per_device as usize,
             &mut report,
         );
@@ -332,6 +338,7 @@ impl JournalGc {
     fn prune_artifacts_per_device(
         &self,
         terminal_records: &[TxJournalRecord],
+        known_tx_ids: &BTreeSet<String>,
         max_artifacts_per_device: usize,
         report: &mut JournalGcReport,
     ) {
@@ -394,6 +401,16 @@ impl JournalGc {
                     continue;
                 };
                 let Some(updated_at) = terminal_by_tx.get(tx_id) else {
+                    if !known_tx_ids.contains(tx_id) {
+                        let artifact_ref = format!("{device_id}/{tx_id}");
+                        match fs::remove_dir_all(&tx_dir) {
+                            Ok(()) => {
+                                report.artifacts_deleted += 1;
+                                report.artifact_deleted_refs.push(artifact_ref);
+                            }
+                            Err(_) => record_artifact_failure(report, artifact_ref),
+                        }
+                    }
                     continue;
                 };
                 terminal_artifacts.push((*updated_at, tx_id.to_string(), tx_dir));
