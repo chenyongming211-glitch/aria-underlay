@@ -42,6 +42,7 @@ fn is_allowed(from: &TxPhase, to: &TxPhase) -> bool {
                     | Committing
                     | Verifying
                     | FinalConfirming
+                    | RollingBack
                     | Recovering,
                 Recovering
             )
@@ -116,6 +117,7 @@ mod tests {
             Committing,
             Verifying,
             FinalConfirming,
+            RollingBack,
             Recovering,
         ];
         for from in phases {
@@ -311,8 +313,8 @@ mod tests {
     }
 
     #[test]
-    fn rolling_back_to_recovering_is_invalid() {
-        assert!(validate_transition(&RollingBack, &Recovering).is_err());
+    fn rolling_back_can_enter_recovering_after_process_restart() {
+        assert!(validate_transition(&RollingBack, &Recovering).is_ok());
     }
 
     #[test]
