@@ -230,20 +230,53 @@ impl RecoveryCoordinator {
             trace_id: record.trace_id.clone(),
         };
         let mut merged_phase = None;
+        let mut failures = Vec::new();
 
         for device_id in &record.devices {
-            let managed = self.inventory.get(device_id)?;
+            let managed = match self.inventory.get(device_id) {
+                Ok(managed) => managed,
+                Err(err) => {
+                    record_recovery_failure(
+                        &mut merged_phase,
+                        &mut failures,
+                        device_id,
+                        err,
+                    );
+                    continue;
+                }
+            };
             let rpc_context = tx_request_context(&managed.info, &tx_context);
-            let outcome = self
+            let outcome = match self
                 .recover_with_transport_retry(
                     &managed.info,
                     &rpc_context,
                     record.strategy,
                     action,
                 )
-                .await?;
+                .await
+            {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    record_recovery_failure(
+                        &mut merged_phase,
+                        &mut failures,
+                        device_id,
+                        err,
+                    );
+                    continue;
+                }
+            };
             let phase = recover_phase_from_adapter_status(action, outcome.status);
             merged_phase = Some(merge_recovery_phase(merged_phase, phase));
+        }
+
+        if !failures.is_empty() {
+            return Err(recovery_attempts_in_doubt_error(
+                record,
+                "RECOVERY_ATTEMPT_IN_DOUBT",
+                "could not recover",
+                failures,
+            ));
         }
 
         Ok(merged_phase.unwrap_or(TxPhase::InDoubt))
@@ -263,10 +296,33 @@ impl RecoveryCoordinator {
             trace_id: record.trace_id.clone(),
         };
         let mut merged_phase = None;
+        let mut failures = Vec::new();
 
         for device_id in &record.devices {
-            let managed = self.inventory.get(device_id)?;
-            let mut client = self.adapter_pool.client(&managed.info.adapter_endpoint)?;
+            let managed = match self.inventory.get(device_id) {
+                Ok(managed) => managed,
+                Err(err) => {
+                    record_recovery_failure(
+                        &mut merged_phase,
+                        &mut failures,
+                        device_id,
+                        err,
+                    );
+                    continue;
+                }
+            };
+            let mut client = match self.adapter_pool.client(&managed.info.adapter_endpoint) {
+                Ok(client) => client,
+                Err(err) => {
+                    record_recovery_failure(
+                        &mut merged_phase,
+                        &mut failures,
+                        device_id,
+                        err,
+                    );
+                    continue;
+                }
+            };
             let rpc_context = tx_request_context(&managed.info, &tx_context);
 
             let final_confirm_summary = match client
@@ -342,26 +398,47 @@ impl RecoveryCoordinator {
                             merged_phase = Some(merge_recovery_phase(merged_phase, phase));
                         }
                         _ => {
-                            return Err(final_confirm_recovery_in_doubt_error(
+                            let err = final_confirm_recovery_in_doubt_error(
                                 record,
                                 device_id,
                                 final_confirm_summary,
                                 verify_summary,
                                 format!("adapter recover returned status {:?}", outcome.status),
-                            ));
+                            );
+                            record_recovery_failure(
+                                &mut merged_phase,
+                                &mut failures,
+                                device_id,
+                                err,
+                            );
                         }
                     }
                 }
                 Err(err) => {
-                    return Err(final_confirm_recovery_in_doubt_error(
+                    let err = final_confirm_recovery_in_doubt_error(
                         record,
                         device_id,
                         final_confirm_summary,
                         verify_summary,
                         error_summary("adapter recover", &err),
-                    ));
+                    );
+                    record_recovery_failure(
+                        &mut merged_phase,
+                        &mut failures,
+                        device_id,
+                        err,
+                    );
                 }
             }
+        }
+
+        if !failures.is_empty() {
+            return Err(recovery_attempts_in_doubt_error(
+                record,
+                "FINAL_CONFIRM_RECOVERY_IN_DOUBT",
+                "could not prove final-confirming",
+                failures,
+            ));
         }
 
         Ok(merged_phase.unwrap_or(TxPhase::InDoubt))
@@ -447,4 +524,57 @@ fn is_timed_out_confirmed_commit(
                 | TxPhase::Recovering
         )
         && now_unix_secs.saturating_sub(record.updated_at_unix_secs) >= timeout_secs.max(1)
+}
+
+fn record_recovery_failure(
+    merged_phase: &mut Option<TxPhase>,
+    failures: &mut Vec<RecoveryFailure>,
+    device_id: &crate::model::DeviceId,
+    error: UnderlayError,
+) {
+    *merged_phase = Some(merge_recovery_phase(merged_phase.clone(), TxPhase::InDoubt));
+    failures.push(RecoveryFailure {
+        device_id: device_id.0.clone(),
+        error,
+    });
+}
+
+fn recovery_attempts_in_doubt_error(
+    record: &TxJournalRecord,
+    code: &'static str,
+    prefix: &'static str,
+    failures: Vec<RecoveryFailure>,
+) -> UnderlayError {
+    if record.devices.len() == 1 && failures.len() == 1 {
+        return failures
+            .into_iter()
+            .next()
+            .expect("single failure should exist")
+            .error;
+    }
+
+    UnderlayError::AdapterOperation {
+        code: code.into(),
+        message: format!(
+            "{prefix} transaction {} for one or more devices: {}",
+            record.tx_id,
+            failures
+                .iter()
+                .map(recovery_failure_summary)
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
+        retryable: true,
+        errors: Vec::new(),
+    }
+}
+
+struct RecoveryFailure {
+    device_id: String,
+    error: UnderlayError,
+}
+
+fn recovery_failure_summary(failure: &RecoveryFailure) -> String {
+    let (code, message) = journal_error_fields(&failure.error);
+    format!("device {}: {code}: {message}", failure.device_id)
 }

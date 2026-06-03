@@ -25,6 +25,7 @@ pub struct TestAdapter {
     pub rollback_calls: Option<Arc<AtomicUsize>>,
     pub verify_result: adapter::AdapterResult,
     pub recover_result: adapter::AdapterResult,
+    pub recover_calls: Option<Arc<AtomicUsize>>,
     pub force_unlock_result: adapter::AdapterResult,
 }
 
@@ -48,6 +49,7 @@ impl Default for TestAdapter {
             rollback_calls: None,
             verify_result: adapter_result(adapter::AdapterOperationStatus::Committed),
             recover_result: adapter_result(adapter::AdapterOperationStatus::NoChange),
+            recover_calls: None,
             force_unlock_result: adapter_result(adapter::AdapterOperationStatus::Committed),
         }
     }
@@ -265,6 +267,9 @@ impl UnderlayAdapter for TestAdapter {
         &self,
         _request: Request<adapter::RecoverRequest>,
     ) -> Result<Response<adapter::RecoverResponse>, Status> {
+        if let Some(calls) = &self.recover_calls {
+            calls.fetch_add(1, Ordering::SeqCst);
+        }
         Ok(Response::new(adapter::RecoverResponse {
             result: Some(self.recover_result.clone()),
         }))

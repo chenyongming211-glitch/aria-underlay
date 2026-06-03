@@ -30,8 +30,8 @@ use tonic::{Request, Response, Status};
 mod common;
 
 use common::{
-    adapter_result, confirmed_commit_capability, observed_access_state, start_test_adapter_at,
-    TestAdapter,
+    adapter_result, confirmed_commit_capability, failed_result, observed_access_state,
+    start_test_adapter_at, TestAdapter,
 };
 
 const CHILD_MODE_ENV: &str = "ARIA_UNDERLAY_PROCESS_CHAOS_CHILD";
@@ -479,6 +479,196 @@ async fn multi_device_committing_recovery_marks_record_in_doubt_on_mixed_adapter
             .expect("shadow list after mixed recovery should succeed")
             .is_empty(),
         "mixed recovery outcomes must not persist desired shadow"
+    );
+
+    std::fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn multi_device_committing_recovery_attempts_remaining_endpoints_after_recover_error() {
+    let temp = temp_store_dir("multi-device-committing-error");
+    let journal_root = temp.join("journal");
+    let shadow_root = temp.join("shadow");
+
+    let endpoint_a_addr = parse_endpoint_addr(&reserve_local_endpoint());
+    let endpoint_b_addr = parse_endpoint_addr(&reserve_local_endpoint());
+    let recover_calls_a = Arc::new(AtomicUsize::new(0));
+    let recover_calls_b = Arc::new(AtomicUsize::new(0));
+    let endpoint_a = start_test_adapter_at(
+        TestAdapter {
+            recover_result: failed_result("RECOVER_FAILED"),
+            recover_calls: Some(recover_calls_a.clone()),
+            ..Default::default()
+        },
+        endpoint_a_addr,
+    )
+    .await;
+    let endpoint_b = start_test_adapter_at(
+        TestAdapter {
+            recover_result: adapter_result(adapter::AdapterOperationStatus::Committed),
+            recover_calls: Some(recover_calls_b.clone()),
+            ..Default::default()
+        },
+        endpoint_b_addr,
+    )
+    .await;
+
+    let journal = Arc::new(JsonFileTxJournalStore::new(&journal_root));
+    let desired_states = plan_underlay_domain(&multi_endpoint_domain_intent(301))
+        .expect("multi-endpoint domain intent should plan");
+    let context = TxContext {
+        tx_id: "tx-multi-committing-error".into(),
+        request_id: "req-multi-committing-error".into(),
+        trace_id: "trace-multi-committing-error".into(),
+    };
+    journal
+        .put(
+            &TxJournalRecord::started(
+                &context,
+                vec![DeviceId("leaf-a".into()), DeviceId("leaf-b".into())],
+            )
+            .with_desired_states(desired_states)
+            .with_strategy(TransactionStrategy::ConfirmedCommit)
+            .with_phase(TxPhase::Committing),
+        )
+        .expect("multi-device committing journal record should be stored");
+
+    let shadow = Arc::new(JsonFileShadowStateStore::new(&shadow_root));
+    let service = AriaUnderlayService::new_with_shadow_store(
+        inventory_with_two_endpoints(endpoint_a, endpoint_b),
+        journal.clone(),
+        Default::default(),
+        Default::default(),
+        Arc::new(aria_underlay::device::InMemorySecretStore::default()),
+        shadow.clone(),
+    );
+
+    let report = service
+        .recover_pending_transactions()
+        .await
+        .expect("multi-device recovery scan should complete");
+
+    assert_eq!(recover_calls_a.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        recover_calls_b.load(Ordering::SeqCst),
+        1,
+        "recovery must still attempt later endpoints after an earlier endpoint errors"
+    );
+    assert_eq!(report.recovered, 0);
+    assert_eq!(report.pending, 1);
+    assert_eq!(report.in_doubt, 1);
+
+    let record = journal
+        .get("tx-multi-committing-error")
+        .expect("journal read after recovery should succeed")
+        .expect("journal record should remain readable");
+    assert_eq!(record.phase, TxPhase::InDoubt);
+    assert_eq!(
+        record.error_code.as_deref(),
+        Some("RECOVERY_ATTEMPT_IN_DOUBT")
+    );
+    assert!(
+        shadow
+            .list()
+            .expect("shadow list after failed recovery should succeed")
+            .is_empty(),
+        "partial recovery must not persist desired shadow as committed"
+    );
+
+    std::fs::remove_dir_all(temp).ok();
+}
+
+#[tokio::test]
+async fn multi_device_final_confirming_recovery_attempts_remaining_endpoints_after_error() {
+    let temp = temp_store_dir("multi-device-final-confirming-error");
+    let journal_root = temp.join("journal");
+    let shadow_root = temp.join("shadow");
+
+    let endpoint_a_addr = parse_endpoint_addr(&reserve_local_endpoint());
+    let endpoint_b_addr = parse_endpoint_addr(&reserve_local_endpoint());
+    let recover_calls_a = Arc::new(AtomicUsize::new(0));
+    let recover_calls_b = Arc::new(AtomicUsize::new(0));
+    let endpoint_a = start_test_adapter_at(
+        TestAdapter {
+            final_confirm_result: failed_result("UNKNOWN_PERSIST_ID"),
+            recover_result: failed_result("RECOVER_FAILED"),
+            recover_calls: Some(recover_calls_a.clone()),
+            ..Default::default()
+        },
+        endpoint_a_addr,
+    )
+    .await;
+    let endpoint_b = start_test_adapter_at(
+        TestAdapter {
+            final_confirm_result: failed_result("UNKNOWN_PERSIST_ID"),
+            recover_result: adapter_result(adapter::AdapterOperationStatus::Committed),
+            recover_calls: Some(recover_calls_b.clone()),
+            ..Default::default()
+        },
+        endpoint_b_addr,
+    )
+    .await;
+
+    let journal = Arc::new(JsonFileTxJournalStore::new(&journal_root));
+    let desired_states = plan_underlay_domain(&multi_endpoint_domain_intent(302))
+        .expect("multi-endpoint domain intent should plan");
+    let context = TxContext {
+        tx_id: "tx-multi-final-confirming-error".into(),
+        request_id: "req-multi-final-confirming-error".into(),
+        trace_id: "trace-multi-final-confirming-error".into(),
+    };
+    journal
+        .put(
+            &TxJournalRecord::started(
+                &context,
+                vec![DeviceId("leaf-a".into()), DeviceId("leaf-b".into())],
+            )
+            .with_desired_states(desired_states)
+            .with_strategy(TransactionStrategy::ConfirmedCommit)
+            .with_phase(TxPhase::FinalConfirming),
+        )
+        .expect("multi-device final-confirming journal record should be stored");
+
+    let shadow = Arc::new(JsonFileShadowStateStore::new(&shadow_root));
+    let service = AriaUnderlayService::new_with_shadow_store(
+        inventory_with_two_endpoints(endpoint_a, endpoint_b),
+        journal.clone(),
+        Default::default(),
+        Default::default(),
+        Arc::new(aria_underlay::device::InMemorySecretStore::default()),
+        shadow.clone(),
+    );
+
+    let report = service
+        .recover_pending_transactions()
+        .await
+        .expect("multi-device final-confirming recovery scan should complete");
+
+    assert_eq!(recover_calls_a.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        recover_calls_b.load(Ordering::SeqCst),
+        1,
+        "final-confirming recovery must attempt later endpoints after an earlier endpoint errors"
+    );
+    assert_eq!(report.recovered, 0);
+    assert_eq!(report.pending, 1);
+    assert_eq!(report.in_doubt, 1);
+
+    let record = journal
+        .get("tx-multi-final-confirming-error")
+        .expect("journal read after recovery should succeed")
+        .expect("journal record should remain readable");
+    assert_eq!(record.phase, TxPhase::InDoubt);
+    assert_eq!(
+        record.error_code.as_deref(),
+        Some("FINAL_CONFIRM_RECOVERY_IN_DOUBT")
+    );
+    assert!(
+        shadow
+            .list()
+            .expect("shadow list after final-confirming failed recovery should succeed")
+            .is_empty(),
+        "partial final-confirming recovery must not persist desired shadow as committed"
     );
 
     std::fs::remove_dir_all(temp).ok();

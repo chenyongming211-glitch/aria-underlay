@@ -181,6 +181,25 @@ Python 适配器 可以进程无状态，但事务产物不能无状态。
 
 工程排期上，文档和样本收集可以立即开始；代码实现必须先处理第 1 项，再进入第 2 项。第 3 项可与第 1 / 第 2 项并行准备，但不得阻塞或替代事务正确性修复。
 
+### 2.7 Deferred bug backlog note - 2026-06-03
+
+After the completed fixes for #1-#10 and #17 from `docs/bug-inventory-2026-05-31-code-review.md`, the remaining bugs #11-#21 are recorded as deferred backlog items. They are intentionally not fixed in this pass so the team can first close #22, then move to the next productization phase.
+
+Deferred backlog:
+
+- #11: bounded apply history / long-running product API memory.
+- #12: adapter timeout / cancellation around NETCONF calls.
+- #13: best-effort CLI host-key strictness default.
+- #14: sample collector host-key verification behavior.
+- #15: `--from-file` non-UTF-8 / binary input handling.
+- #16: `--from-file` and `--output` same-path overwrite guard.
+- #18: sample collector secret attribute coverage.
+- #19: sample collector malformed XML user-facing errors.
+- #20: anonymized device-name collision handling.
+- #21: related low-priority sample / UX hardening noted in the inventory.
+
+#22 remains promoted for immediate recovery correctness work before starting request-level idempotency, domain / region orchestration, failed endpoint retry APIs, and apply-after-verify reporting.
+
 ## 3. 推荐目录结构
 
 ```text
