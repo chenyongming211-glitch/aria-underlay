@@ -33,6 +33,10 @@ pub struct DeviceApplyResult {
 pub struct ApplyIntentResponse {
     pub request_id: String,
     pub trace_id: String,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+    #[serde(default)]
+    pub reused: bool,
     pub tx_id: Option<String>,
     pub status: ApplyStatus,
     pub strategy: Option<TransactionStrategy>,

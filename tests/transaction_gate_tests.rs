@@ -320,6 +320,92 @@ async fn prepared_candidate_checksum_is_sent_to_commit() {
 }
 
 #[tokio::test]
+async fn apply_domain_intent_reuses_completed_response_for_same_idempotency_key() {
+    let prepare_calls = Arc::new(AtomicUsize::new(0));
+    let endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-mgmt", 100)),
+        prepare_calls: Some(prepare_calls.clone()),
+        ..Default::default()
+    })
+    .await;
+    let inventory = inventory_with_endpoint_at(
+        "stack-mgmt",
+        DeviceLifecycleState::Ready,
+        endpoint,
+    );
+    let service = AriaUnderlayService::new(inventory);
+
+    let mut first_request = apply_request_with_vlan(200, DriftPolicy::ReportOnly);
+    first_request.idempotency_key = Some("tenant-a:site-a:op-1".into());
+    let first_response = service
+        .apply_domain_intent(first_request)
+        .await
+        .expect("first apply should succeed");
+
+    let mut retry_request = apply_request_with_vlan(200, DriftPolicy::ReportOnly);
+    retry_request.request_id = "req-apply-retry".into();
+    retry_request.trace_id = Some("trace-apply-retry".into());
+    retry_request.idempotency_key = Some("tenant-a:site-a:op-1".into());
+    let retry_response = service
+        .apply_domain_intent(retry_request)
+        .await
+        .expect("retry with same idempotency key should reuse the response");
+
+    assert_eq!(prepare_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(first_response.status, ApplyStatus::Success);
+    assert_eq!(retry_response.status, ApplyStatus::Success);
+    assert_eq!(first_response.tx_id, retry_response.tx_id);
+    assert_eq!(
+        retry_response.idempotency_key.as_deref(),
+        Some("tenant-a:site-a:op-1")
+    );
+    assert!(!first_response.reused);
+    assert!(retry_response.reused);
+    assert_eq!(retry_response.request_id, "req-apply-retry");
+    assert_eq!(retry_response.trace_id, "trace-apply-retry");
+}
+
+#[tokio::test]
+async fn apply_domain_intent_rejects_same_idempotency_key_for_different_payload() {
+    let prepare_calls = Arc::new(AtomicUsize::new(0));
+    let endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-mgmt", 100)),
+        prepare_calls: Some(prepare_calls.clone()),
+        ..Default::default()
+    })
+    .await;
+    let inventory = inventory_with_endpoint_at(
+        "stack-mgmt",
+        DeviceLifecycleState::Ready,
+        endpoint,
+    );
+    let service = AriaUnderlayService::new(inventory);
+
+    let mut first_request = apply_request_with_vlan(200, DriftPolicy::ReportOnly);
+    first_request.idempotency_key = Some("tenant-a:site-a:op-2".into());
+    service
+        .apply_domain_intent(first_request)
+        .await
+        .expect("first apply should succeed");
+
+    let mut different_request = apply_request_with_vlan(201, DriftPolicy::ReportOnly);
+    different_request.request_id = "req-apply-different".into();
+    different_request.idempotency_key = Some("tenant-a:site-a:op-2".into());
+    let err = service
+        .apply_domain_intent(different_request)
+        .await
+        .expect_err("same key with a different payload must fail closed");
+
+    assert_eq!(prepare_calls.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        err,
+        UnderlayError::InvalidIntent(message)
+            if message.contains("idempotency_key")
+                && message.contains("different apply payload")
+    ));
+}
+
+#[tokio::test]
 async fn preflight_fetches_only_desired_scope_to_avoid_unrelated_delete_ops() {
     let current_state_scopes = Arc::new(Mutex::new(Vec::new()));
     let endpoint = start_test_adapter(TestAdapter {
@@ -607,6 +693,7 @@ fn apply_request_with_vlan(vlan_id: u16, drift_policy: DriftPolicy) -> ApplyDoma
     ApplyDomainIntentRequest {
         request_id: "req-apply".into(),
         trace_id: Some("trace-apply".into()),
+        idempotency_key: None,
         intent: domain_intent(vlan_id),
         options: ApplyOptions {
             dry_run: false,

@@ -16,6 +16,8 @@ pub struct ApplyIntentRequest {
 pub struct ApplyDomainIntentRequest {
     pub request_id: String,
     pub trace_id: Option<String>,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
     pub intent: UnderlayDomainIntent,
     pub options: ApplyOptions,
 }

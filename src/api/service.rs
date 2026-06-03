@@ -10,6 +10,10 @@ use crate::api::force_resolve::{
     ForceResolveTransactionRequest, ForceResolveTransactionResponse,
 };
 use crate::api::force_unlock::{ForceUnlockRequest, ForceUnlockResponse};
+use crate::api::idempotency::{
+    apply_domain_fingerprint, idempotency_payload_mismatch_error,
+    normalize_idempotency_key, ApplyIdempotencyRecord, ApplyIdempotencyRegistry,
+};
 use crate::api::operations::{
     ListOperationSummariesRequest, ListOperationSummariesResponse, OperationSummaryOverview,
 };
@@ -68,6 +72,7 @@ pub struct AriaUnderlayService {
     product_audit_store: Arc<dyn ProductAuditStore>,
     adapter_pool: AdapterClientPool,
     confirmed_commit_timeout_secs: u32,
+    apply_idempotency: Arc<ApplyIdempotencyRegistry>,
 }
 
 #[derive(Debug)]
@@ -75,6 +80,20 @@ pub struct ActivePassiveAriaUnderlayService {
     service: AriaUnderlayService,
     lease: ActiveLeaseGuard,
     startup_recovery: RecoveryReport,
+}
+
+fn annotate_apply_idempotency_response(
+    mut response: ApplyIntentResponse,
+    request_id: String,
+    trace_id: String,
+    idempotency_key: String,
+    reused: bool,
+) -> ApplyIntentResponse {
+    response.request_id = request_id;
+    response.trace_id = trace_id;
+    response.idempotency_key = Some(idempotency_key);
+    response.reused = reused;
+    response
 }
 
 impl AriaUnderlayService {
@@ -94,6 +113,7 @@ impl AriaUnderlayService {
             product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
             confirmed_commit_timeout_secs: DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
+            apply_idempotency: Arc::new(ApplyIdempotencyRegistry::default()),
         }
     }
 
@@ -116,6 +136,7 @@ impl AriaUnderlayService {
             product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
             confirmed_commit_timeout_secs: DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
+            apply_idempotency: Arc::new(ApplyIdempotencyRegistry::default()),
         }
     }
 
@@ -139,6 +160,7 @@ impl AriaUnderlayService {
             product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
             confirmed_commit_timeout_secs: DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
+            apply_idempotency: Arc::new(ApplyIdempotencyRegistry::default()),
         }
     }
 
@@ -164,6 +186,7 @@ impl AriaUnderlayService {
             product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
             confirmed_commit_timeout_secs: DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
+            apply_idempotency: Arc::new(ApplyIdempotencyRegistry::default()),
         }
     }
 
@@ -190,6 +213,7 @@ impl AriaUnderlayService {
             product_audit_store: Arc::new(NoopProductAuditStore),
             adapter_pool: AdapterClientPool::default(),
             confirmed_commit_timeout_secs: DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
+            apply_idempotency: Arc::new(ApplyIdempotencyRegistry::default()),
         }
     }
 
@@ -332,7 +356,57 @@ impl AriaUnderlayService {
             .trace_id
             .clone()
             .unwrap_or_else(|| request_id.clone());
+        let idempotency_key = request
+            .idempotency_key
+            .as_deref()
+            .map(normalize_idempotency_key)
+            .transpose()?;
+        let fingerprint = match &idempotency_key {
+            Some(_) => Some(apply_domain_fingerprint(&request.intent, &request.options)?),
+            None => None,
+        };
         let desired_states = plan_underlay_domain(&request.intent)?;
+
+        if let (Some(idempotency_key), Some(fingerprint)) = (idempotency_key, fingerprint) {
+            let slot = self.apply_idempotency.slot(&idempotency_key)?;
+            let mut record = slot.lock().await;
+            if let Some(record) = record.as_ref() {
+                if record.fingerprint() != fingerprint.as_str() {
+                    return Err(idempotency_payload_mismatch_error(&idempotency_key));
+                }
+                return Ok(annotate_apply_idempotency_response(
+                    record.response().clone(),
+                    request_id,
+                    trace_id,
+                    idempotency_key,
+                    true,
+                ));
+            }
+
+            let response = self
+                .apply_coordinator()
+                .apply_desired_states(
+                    request_id.clone(),
+                    trace_id.clone(),
+                    desired_states,
+                    request.options.allow_degraded_atomicity,
+                    request.options.drift_policy,
+                )
+                .await?;
+            let response = annotate_apply_idempotency_response(
+                response,
+                request_id,
+                trace_id,
+                idempotency_key,
+                false,
+            );
+            *record = Some(ApplyIdempotencyRecord::new(
+                fingerprint,
+                response.clone(),
+            ));
+            return Ok(response);
+        }
+
         self.apply_coordinator()
             .apply_desired_states(
                 request_id,

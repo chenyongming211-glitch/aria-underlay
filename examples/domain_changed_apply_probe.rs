@@ -24,6 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let request = ApplyDomainIntentRequest {
         request_id: "domain-changed-apply-req-a".into(),
         trace_id: Some("domain-changed-apply-trace-a".into()),
+        idempotency_key: None,
         intent: changed_stack_intent(),
         options: ApplyOptions {
             dry_run: false,

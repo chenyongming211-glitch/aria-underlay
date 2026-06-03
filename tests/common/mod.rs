@@ -17,6 +17,7 @@ pub struct TestAdapter {
     pub current_warnings: Vec<String>,
     pub dry_run_result: adapter::AdapterResult,
     pub prepare_result: adapter::AdapterResult,
+    pub prepare_calls: Option<Arc<AtomicUsize>>,
     pub commit_result: adapter::AdapterResult,
     pub commit_confirm_timeouts: Option<Arc<Mutex<Vec<u32>>>>,
     pub commit_prepared_candidate_checksums: Option<Arc<Mutex<Vec<String>>>>,
@@ -39,6 +40,7 @@ impl Default for TestAdapter {
             current_warnings: Vec::new(),
             dry_run_result: adapter_result(adapter::AdapterOperationStatus::NoChange),
             prepare_result: adapter_result(adapter::AdapterOperationStatus::Prepared),
+            prepare_calls: None,
             commit_result: adapter_result(
                 adapter::AdapterOperationStatus::ConfirmedCommitPending,
             ),
@@ -206,6 +208,9 @@ impl UnderlayAdapter for TestAdapter {
         &self,
         _request: Request<adapter::PrepareRequest>,
     ) -> Result<Response<adapter::PrepareResponse>, Status> {
+        if let Some(calls) = &self.prepare_calls {
+            calls.fetch_add(1, Ordering::SeqCst);
+        }
         Ok(Response::new(adapter::PrepareResponse {
             result: Some(self.prepare_result.clone()),
         }))

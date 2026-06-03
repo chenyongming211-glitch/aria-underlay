@@ -84,6 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::env::var("ARIA_UNDERLAY_TRACE_ID")
                 .unwrap_or_else(|_| "real-domain-apply-probe".into()),
         ),
+        idempotency_key: std::env::var("ARIA_UNDERLAY_IDEMPOTENCY_KEY").ok(),
         intent: UnderlayDomainIntent {
             domain_id: std::env::var("ARIA_UNDERLAY_DOMAIN_ID")
                 .unwrap_or_else(|_| "real-domain".into()),

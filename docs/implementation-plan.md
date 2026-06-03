@@ -198,7 +198,14 @@ Deferred backlog:
 - #20: anonymized device-name collision handling.
 - #21: related low-priority sample / UX hardening noted in the inventory.
 
-#22 remains promoted for immediate recovery correctness work before starting request-level idempotency, domain / region orchestration, failed endpoint retry APIs, and apply-after-verify reporting.
+#22 was fixed before starting request-level idempotency, domain / region orchestration, failed endpoint retry APIs, and apply-after-verify reporting.
+
+2026-06-03 P1 request idempotency implementation note:
+
+- `ApplyDomainIntentRequest.idempotency_key` is implemented for in-process domain apply request reuse.
+- Same `idempotency_key` plus the same serialized apply payload returns the previously completed tx/result and marks the response with `reused = true`; it does not call the adapter again.
+- Same `idempotency_key` with a different apply payload fails closed with `InvalidIntent`.
+- Remaining P1 work: persist idempotency records across Core restart, map product HTTP/gateway idempotency headers into the apply request, add domain/region orchestration locks, add failed-endpoint retry/recover API, and add product-readable apply-after-verify reports.
 
 ## 3. 推荐目录结构
 

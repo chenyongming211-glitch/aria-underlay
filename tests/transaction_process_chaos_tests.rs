@@ -1046,6 +1046,7 @@ fn apply_request_with_vlan(vlan_id: u16) -> ApplyDomainIntentRequest {
     ApplyDomainIntentRequest {
         request_id: "req-process-chaos".into(),
         trace_id: Some("trace-process-chaos".into()),
+        idempotency_key: None,
         intent: domain_intent(vlan_id),
         options: ApplyOptions {
             dry_run: false,

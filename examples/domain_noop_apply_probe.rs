@@ -23,6 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let request = ApplyDomainIntentRequest {
         request_id: "domain-noop-apply-req-a".into(),
         trace_id: Some("domain-noop-apply-trace-a".into()),
+        idempotency_key: None,
         intent: stack_single_management_ip_intent(),
         options: ApplyOptions {
             dry_run: false,

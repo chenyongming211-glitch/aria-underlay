@@ -13,6 +13,7 @@ pub mod product_ops;
 pub mod product_server_config;
 pub mod force_unlock;
 pub mod force_resolve;
+mod idempotency;
 mod recovery_coordinator;
 mod recovery_ops;
 pub mod request;

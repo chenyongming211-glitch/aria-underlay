@@ -113,6 +113,8 @@ impl ApplyCoordinator {
         Ok(ApplyIntentResponse {
             request_id,
             trace_id,
+            idempotency_key: None,
+            reused: false,
             tx_id,
             status,
             strategy,
