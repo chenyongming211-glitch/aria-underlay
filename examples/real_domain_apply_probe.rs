@@ -21,7 +21,8 @@ const WRITE_ACK: &str = "I_UNDERSTAND_THIS_WRITES_DEVICE";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if std::env::var("ARIA_UNDERLAY_REAL_APPLY_ACK").as_deref() != Ok(WRITE_ACK) {
+    let dry_run_only = env_bool("ARIA_UNDERLAY_REAL_APPLY_DRY_RUN_ONLY", false)?;
+    if !dry_run_only && std::env::var("ARIA_UNDERLAY_REAL_APPLY_ACK").as_deref() != Ok(WRITE_ACK) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!("set ARIA_UNDERLAY_REAL_APPLY_ACK={WRITE_ACK} to run a real device write"),
@@ -149,6 +150,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &dry_run.change_sets,
         &request.intent.acl_bindings,
     )?;
+    if dry_run_only {
+        println!("real_apply_dry_run_only=true");
+        return Ok(());
+    }
 
     let response = service.apply_domain_intent(request).await?;
     println!("real_apply_status={:?}", response.status);

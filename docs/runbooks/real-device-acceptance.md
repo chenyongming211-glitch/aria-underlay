@@ -197,6 +197,7 @@ unset ARIA_UNDERLAY_TRUNK_ALLOWED_VLANS
 2. Run the real apply probe.
 
 ```bash
+export ARIA_UNDERLAY_REAL_APPLY_DRY_RUN_ONLY=1
 /opt/aria-underlay/probes/real_domain_apply_probe
 ```
 
@@ -207,6 +208,19 @@ unset ARIA_UNDERLAY_TRUNK_ALLOWED_VLANS
 - `real_apply_change_sets` contains `UpdateInterface` for the access port.
 - `real_apply_change_sets` contains no `DeleteVlan`.
 - `real_apply_change_sets` contains no interface delete operation.
+- `real_apply_dry_run_only=true`.
+
+Only after the dry-run output is accepted, unset dry-run-only and set the write
+acknowledgement:
+
+```bash
+unset ARIA_UNDERLAY_REAL_APPLY_DRY_RUN_ONLY
+export ARIA_UNDERLAY_REAL_APPLY_ACK=I_UNDERSTAND_THIS_WRITES_DEVICE
+/opt/aria-underlay/probes/real_domain_apply_probe
+```
+
+The write run must report:
+
 - `real_apply_status` is `Success` or `SuccessWithWarning`.
 - `real_apply_strategy` is recorded.
 - `tx_id` is recorded.
