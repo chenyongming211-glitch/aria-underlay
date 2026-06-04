@@ -100,7 +100,7 @@ def _parse_real_vlans(vlan_node) -> list[dict]:
 
 def _parse_real_interfaces(root, vlan_node, *, model_hint: str, scope) -> list[dict]:
     descriptions = _descriptions_by_ifindex(root)
-    ifmgr_ifindexes = _ifmgr_ifindexes(root)
+    known_ifindexes = _ifmgr_ifindexes(root) | _vlan_interface_ifindexes(vlan_node)
     scope_names = _scope_names_by_ifindex(scope)
     interfaces = []
     seen = set()
@@ -161,7 +161,7 @@ def _parse_real_interfaces(root, vlan_node, *, model_hint: str, scope) -> list[d
         )
 
     for ifindex, scoped_name in sorted(scope_names.items()):
-        if ifindex not in ifmgr_ifindexes or scoped_name in seen:
+        if ifindex not in known_ifindexes or scoped_name in seen:
             continue
         seen.add(scoped_name)
         interfaces.append(
@@ -807,6 +807,19 @@ def _ifmgr_ifindexes(root) -> set[int]:
     interfaces_node = _first_child(ifmgr, "Interfaces") if ifmgr is not None else None
     ifindexes = set()
     for interface in _children(interfaces_node, "Interface"):
+        ifindex_node = _first_child(interface, "IfIndex")
+        if ifindex_node is None:
+            continue
+        try:
+            ifindexes.add(int(_text(ifindex_node)))
+        except ValueError:
+            continue
+    return ifindexes
+
+
+def _vlan_interface_ifindexes(vlan_node) -> set[int]:
+    ifindexes = set()
+    for interface in _descendants(vlan_node, "Interface") if vlan_node is not None else []:
         ifindex_node = _first_child(interface, "IfIndex")
         if ifindex_node is None:
             continue
