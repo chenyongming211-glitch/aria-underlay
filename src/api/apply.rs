@@ -21,6 +21,7 @@ pub(super) fn device_results_from_plan(plan: &DryRunPlan) -> Vec<DeviceApplyResu
             error_code: None,
             error_message: None,
             warnings: Vec::new(),
+            verify_report: None,
         })
         .collect()
 }
@@ -89,9 +90,18 @@ pub(super) fn device_error_result(
         },
         tx_id,
         strategy,
-        error_code: Some(code),
-        error_message: Some(message),
+        error_code: Some(code.clone()),
+        error_message: Some(message.clone()),
         warnings: Vec::new(),
+        verify_report: Some(if matches!(code.as_str(), "TX_IN_DOUBT" | "TX_REQUIRES_RECOVERY") {
+            crate::api::response::DeviceVerifyReport::in_doubt(
+                device_id.clone(),
+                code,
+                message,
+            )
+        } else {
+            crate::api::response::DeviceVerifyReport::skipped(device_id.clone())
+        }),
     }
 }
 
@@ -204,6 +214,7 @@ mod tests {
             error_code: None,
             error_message: None,
             warnings: Vec::new(),
+            verify_report: None,
         }
     }
 

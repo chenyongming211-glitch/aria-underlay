@@ -179,6 +179,7 @@ fn device_apply_result_maps_to_traceable_transaction_event() {
         error_code: Some("TX_IN_DOUBT".into()),
         error_message: Some("final state is unknown".into()),
         warnings: vec!["manual recovery required".into()],
+        verify_report: None,
     };
 
     let event = UnderlayEvent::from_device_apply_result("req-1", "trace-1", &result)
@@ -203,6 +204,7 @@ fn noop_apply_result_does_not_create_transaction_event() {
         error_code: None,
         error_message: None,
         warnings: Vec::new(),
+        verify_report: None,
     };
 
     assert!(UnderlayEvent::from_device_apply_result("req-1", "trace-1", &result).is_none());

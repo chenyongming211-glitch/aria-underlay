@@ -6,7 +6,7 @@ use aria_underlay::api::request::{
     ApplyDomainIntentRequest, ApplyOptions, DriftAuditRequest, RefreshStateRequest,
     RetryFailedDomainEndpointsRequest,
 };
-use aria_underlay::api::response::ApplyStatus;
+use aria_underlay::api::response::{ApplyStatus, ApplyVerifyStatus, DeviceVerifyStatus};
 use aria_underlay::api::{AriaUnderlayService, UnderlayService};
 use aria_underlay::device::{DeviceInfo, DeviceInventory, DeviceLifecycleState, HostKeyPolicy};
 use aria_underlay::engine::change_plan::BlastRadius;
@@ -172,6 +172,74 @@ async fn verify_failure_rolls_back_and_records_rolled_back_phase() {
         TxPhase::RolledBack,
     )
     .await;
+}
+
+#[tokio::test]
+async fn successful_apply_returns_scoped_verify_report() {
+    let endpoint = start_fake_adapter(AdapterFailurePoint::None).await;
+    let inventory = inventory_with_endpoint_at(
+        "stack-mgmt",
+        DeviceLifecycleState::Ready,
+        endpoint,
+    );
+    let service = AriaUnderlayService::new(inventory);
+
+    let response = service
+        .apply_domain_intent(apply_request_with_vlan(200, DriftPolicy::ReportOnly))
+        .await
+        .expect("apply should succeed");
+
+    let device_report = response.device_results[0]
+        .verify_report
+        .as_ref()
+        .expect("changed endpoint should include verify report");
+    assert_eq!(device_report.status, DeviceVerifyStatus::Passed);
+    assert_eq!(device_report.source, "adapter_scoped_verify");
+    assert_eq!(device_report.scope.vlan_count, 1);
+    assert_eq!(device_report.scope.interface_count, 1);
+    assert!(device_report.error_code.is_none());
+
+    let apply_report = response
+        .verify_report
+        .as_ref()
+        .expect("apply response should include aggregate verify report");
+    assert_eq!(apply_report.status, ApplyVerifyStatus::Passed);
+    assert_eq!(apply_report.passed, vec![DeviceId("stack-mgmt".into())]);
+    assert!(!apply_report.attention_required);
+}
+
+#[tokio::test]
+async fn verify_failure_returns_failed_verify_report() {
+    let endpoint = start_fake_adapter(AdapterFailurePoint::Verify).await;
+    let inventory = inventory_with_endpoint_at(
+        "stack-mgmt",
+        DeviceLifecycleState::Ready,
+        endpoint,
+    );
+    let service = AriaUnderlayService::new(inventory);
+
+    let response = service
+        .apply_domain_intent(apply_request_with_vlan(200, DriftPolicy::ReportOnly))
+        .await
+        .expect("verify failure should return a per-device result");
+
+    assert_eq!(response.status, ApplyStatus::RolledBack);
+    let device_report = response.device_results[0]
+        .verify_report
+        .as_ref()
+        .expect("verify failure should include verify report");
+    assert_eq!(device_report.status, DeviceVerifyStatus::Failed);
+    assert_eq!(device_report.error_code.as_deref(), Some("VERIFY_FAILED"));
+    assert_eq!(device_report.scope.vlan_count, 1);
+    assert_eq!(device_report.scope.interface_count, 1);
+
+    let apply_report = response
+        .verify_report
+        .as_ref()
+        .expect("apply response should include aggregate verify report");
+    assert_eq!(apply_report.status, ApplyVerifyStatus::Failed);
+    assert_eq!(apply_report.failed, vec![DeviceId("stack-mgmt".into())]);
+    assert!(apply_report.attention_required);
 }
 
 #[tokio::test]

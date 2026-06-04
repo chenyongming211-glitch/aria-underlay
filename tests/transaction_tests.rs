@@ -3,7 +3,10 @@ use aria_underlay::api::apply_compensation::{
     JsonFileDomainApplyRecordStore,
 };
 use aria_underlay::api::request::{ApplyDomainIntentRequest, ApplyOptions};
-use aria_underlay::api::response::{ApplyIntentResponse, ApplyStatus, DeviceApplyResult};
+use aria_underlay::api::response::{
+    ApplyIntentResponse, ApplyStatus, ApplyVerifyReport, ApplyVerifyStatus, DeviceApplyResult,
+    DeviceVerifyReport, DeviceVerifyStatus, VerifyScopeSummary,
+};
 use aria_underlay::intent::interface::InterfaceIntent;
 use aria_underlay::intent::vlan::VlanIntent;
 use aria_underlay::intent::{
@@ -586,6 +589,7 @@ fn compensation_plan_classifies_terminal_failed_and_in_doubt_endpoints() {
             device_result("stack-c", ApplyStatus::InDoubt),
         ],
         warnings: Vec::new(),
+        verify_report: None,
     };
 
     let plan = DomainApplyCompensationPlan::from_record(&DomainApplyRecord::new(
@@ -618,6 +622,59 @@ fn compensation_filter_keeps_only_selected_endpoint_scope() {
 }
 
 #[test]
+fn aggregate_verify_report_marks_partial_when_some_endpoints_fail_verify() {
+    let report = ApplyVerifyReport::from_device_results(&[
+        device_result_with_verify("leaf-a", DeviceVerifyStatus::Passed),
+        device_result_with_verify("leaf-b", DeviceVerifyStatus::Failed),
+    ]);
+
+    assert_eq!(report.status, ApplyVerifyStatus::Partial);
+    assert_eq!(report.passed, vec![DeviceId("leaf-a".into())]);
+    assert_eq!(report.failed, vec![DeviceId("leaf-b".into())]);
+    assert!(report.attention_required);
+}
+
+#[test]
+fn aggregate_verify_report_marks_in_doubt_when_any_endpoint_is_in_doubt() {
+    let report = ApplyVerifyReport::from_device_results(&[
+        device_result_with_verify("leaf-a", DeviceVerifyStatus::Passed),
+        device_result_with_verify("leaf-b", DeviceVerifyStatus::InDoubt),
+    ]);
+
+    assert_eq!(report.status, ApplyVerifyStatus::InDoubt);
+    assert_eq!(report.in_doubt, vec![DeviceId("leaf-b".into())]);
+    assert!(report.attention_required);
+}
+
+#[test]
+fn legacy_apply_response_without_verify_report_deserializes() {
+    let json = r#"{
+        "request_id": "req-legacy",
+        "trace_id": "trace-legacy",
+        "tx_id": null,
+        "status": "Success",
+        "strategy": null,
+        "device_results": [{
+            "device_id": "leaf-a",
+            "changed": true,
+            "status": "Success",
+            "tx_id": "tx-legacy",
+            "strategy": "ConfirmedCommit",
+            "error_code": null,
+            "error_message": null,
+            "warnings": []
+        }],
+        "warnings": []
+    }"#;
+
+    let response: ApplyIntentResponse =
+        serde_json::from_str(json).expect("legacy response should remain compatible");
+
+    assert!(response.verify_report.is_none());
+    assert!(response.device_results[0].verify_report.is_none());
+}
+
+#[test]
 fn file_domain_apply_record_store_round_trips_records() {
     let root = temp_journal_dir("apply-record");
     let store = JsonFileDomainApplyRecordStore::new(&root);
@@ -635,6 +692,7 @@ fn file_domain_apply_record_store_round_trips_records() {
             device_result("stack-b", ApplyStatus::RolledBack),
         ],
         warnings: Vec::new(),
+        verify_report: None,
     };
     let record = DomainApplyRecord::new(request, response);
 
@@ -662,7 +720,22 @@ fn device_result(device_id: &str, status: ApplyStatus) -> DeviceApplyResult {
         error_code: None,
         error_message: None,
         warnings: Vec::new(),
+        verify_report: None,
     }
+}
+
+fn device_result_with_verify(device_id: &str, status: DeviceVerifyStatus) -> DeviceApplyResult {
+    let mut result = device_result(device_id, ApplyStatus::Success);
+    result.verify_report = Some(DeviceVerifyReport {
+        device_id: DeviceId(device_id.into()),
+        status,
+        source: "adapter_scoped_verify".into(),
+        scope: VerifyScopeSummary::default(),
+        warnings: Vec::new(),
+        error_code: None,
+        error_message: None,
+    });
+    result
 }
 
 fn apply_record_request(intent: UnderlayDomainIntent) -> ApplyDomainIntentRequest {

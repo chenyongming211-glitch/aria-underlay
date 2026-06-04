@@ -1,14 +1,18 @@
 use std::sync::Arc;
 
-use crate::adapter_client::mapper::AdapterOperationStatus;
+use crate::adapter_client::mapper::{AdapterOperationStatus, AdapterOutcome};
 use crate::adapter_client::{tx_request_context, AdapterClient, AdapterClientPool};
 use crate::api::apply::{
     aggregate_apply_status, apply_status_for_failed_phase, commit_status_matches_strategy,
     degraded_strategy_warnings, device_error_result, failed_apply_phase, journal_error_fields,
 };
 use crate::api::drift_ops::drift_policy_error;
-use crate::api::response::{ApplyIntentResponse, ApplyStatus, DeviceApplyResult};
+use crate::api::response::{
+    ApplyIntentResponse, ApplyStatus, ApplyVerifyReport, DeviceApplyResult, DeviceVerifyReport,
+    DeviceVerifyStatus, VerifyScopeSummary,
+};
 use crate::device::{DeviceInfo, DeviceInventory, DeviceLifecycleState};
+use crate::engine::diff::ChangeSet;
 use crate::engine::dry_run::{build_dry_run_plan, DryRunPlan};
 use crate::model::DeviceId;
 use crate::planner::device_plan::DeviceDesiredState;
@@ -109,6 +113,7 @@ impl ApplyCoordinator {
             .iter()
             .flat_map(|result| result.warnings.clone())
             .collect();
+        let verify_report = Some(ApplyVerifyReport::from_device_results(&device_results));
 
         Ok(ApplyIntentResponse {
             request_id,
@@ -120,6 +125,7 @@ impl ApplyCoordinator {
             strategy,
             device_results,
             warnings,
+            verify_report,
         })
     }
 
@@ -233,6 +239,7 @@ impl ApplyCoordinator {
                 error_code: None,
                 error_message: None,
                 warnings: Vec::new(),
+                verify_report: Some(DeviceVerifyReport::skipped(desired.device_id.clone())),
             };
         }
 
@@ -273,12 +280,13 @@ impl ApplyCoordinator {
             )
             .await
         {
-            Ok(strategy) => self.finish_successful_apply(
+            Ok((strategy, verify_report)) => self.finish_successful_apply(
                 desired,
                 &plan,
                 tx_context,
                 journal_record,
                 strategy,
+                verify_report,
             ),
             Err(err) => self.finish_failed_apply(desired, tx_context, journal_record, err),
         }
@@ -291,6 +299,7 @@ impl ApplyCoordinator {
         tx_context: TxContext,
         mut journal_record: TxJournalRecord,
         strategy: TransactionStrategy,
+        verify_report: Option<DeviceVerifyReport>,
     ) -> DeviceApplyResult {
         let mut warnings = degraded_strategy_warnings(strategy);
         journal_record = journal_record.with_strategy(strategy);
@@ -302,13 +311,23 @@ impl ApplyCoordinator {
                 status: ApplyStatus::InDoubt,
                 tx_id: Some(tx_context.tx_id),
                 strategy: Some(strategy),
-                error_code: Some(code),
+                error_code: Some(code.clone()),
                 error_message: Some(message),
                 warnings,
+                verify_report: Some(mark_verify_report_in_doubt(
+                    &desired.device_id,
+                    verify_report,
+                    "INVALID_PHASE_TRANSITION",
+                    "failed to transition verified transaction to committed",
+                )),
             };
         }
         if let Err(err) = self.journal.put(&journal_record) {
             let (code, message) = journal_error_fields(&err);
+            let error_message = format!(
+                "adapter committed, \
+                 but terminal journal write failed: {message}"
+            );
             return DeviceApplyResult {
                 device_id: desired.device_id.clone(),
                 changed: true,
@@ -316,11 +335,14 @@ impl ApplyCoordinator {
                 tx_id: Some(tx_context.tx_id),
                 strategy: Some(strategy),
                 error_code: Some(code),
-                error_message: Some(format!(
-                    "adapter committed, \
-                     but terminal journal write failed: {message}"
-                )),
+                error_message: Some(error_message.clone()),
                 warnings,
+                verify_report: Some(mark_verify_report_in_doubt(
+                    &desired.device_id,
+                    verify_report,
+                    "JOURNAL_WRITE_FAILED",
+                    &error_message,
+                )),
             };
         }
         let Some(change_set) = plan
@@ -346,6 +368,12 @@ impl ApplyCoordinator {
                         "{error_message}; phase transition also failed: {transition_message}"
                     )),
                     warnings,
+                    verify_report: Some(mark_verify_report_in_doubt(
+                        &desired.device_id,
+                        verify_report,
+                        "MISSING_CHANGE_SET",
+                        &error_message,
+                    )),
                 };
             }
             journal_record = journal_record.with_error(code.clone(), error_message.clone());
@@ -359,6 +387,12 @@ impl ApplyCoordinator {
                 error_code: Some(code),
                 error_message: Some(error_message),
                 warnings,
+                verify_report: Some(mark_verify_report_in_doubt(
+                    &desired.device_id,
+                    verify_report,
+                    "MISSING_CHANGE_SET",
+                    "missing change set after successful apply",
+                )),
             };
         };
         let existing_shadow = match self.shadow_store.get(&desired.device_id) {
@@ -380,6 +414,12 @@ impl ApplyCoordinator {
                             "{error_message}; phase transition also failed: {transition_message}"
                         )),
                         warnings,
+                        verify_report: Some(mark_verify_report_in_doubt(
+                            &desired.device_id,
+                            verify_report,
+                            "SHADOW_READ_FAILED",
+                            &error_message,
+                        )),
                     };
                 }
                 journal_record = journal_record.with_error(code.clone(), error_message.clone());
@@ -396,6 +436,12 @@ impl ApplyCoordinator {
                             "{error_message}; journal write also failed: {journal_msg}"
                         )),
                         warnings,
+                        verify_report: Some(mark_verify_report_in_doubt(
+                            &desired.device_id,
+                            verify_report,
+                            "SHADOW_READ_FAILED",
+                            &error_message,
+                        )),
                     };
                 }
                 warnings.push(format!("shadow state read failed: {message}"));
@@ -408,6 +454,12 @@ impl ApplyCoordinator {
                     error_code: Some(code),
                     error_message: Some(error_message),
                     warnings,
+                    verify_report: Some(mark_verify_report_in_doubt(
+                        &desired.device_id,
+                        verify_report,
+                        "SHADOW_READ_FAILED",
+                        "shadow state unavailable after successful apply",
+                    )),
                 };
             }
         };
@@ -428,6 +480,12 @@ impl ApplyCoordinator {
                         "{error_message}; phase transition also failed: {transition_message}"
                     )),
                     warnings,
+                    verify_report: Some(mark_verify_report_in_doubt(
+                        &desired.device_id,
+                        verify_report,
+                        "SHADOW_WRITE_FAILED",
+                        &error_message,
+                    )),
                 };
             }
             journal_record = journal_record.with_error(code.clone(), error_message.clone());
@@ -444,6 +502,12 @@ impl ApplyCoordinator {
                         "{error_message}; journal write also failed: {journal_msg}"
                     )),
                     warnings,
+                    verify_report: Some(mark_verify_report_in_doubt(
+                        &desired.device_id,
+                        verify_report,
+                        "SHADOW_WRITE_FAILED",
+                        &error_message,
+                    )),
                 };
             }
             warnings.push(format!("shadow state update failed: {message}"));
@@ -456,6 +520,12 @@ impl ApplyCoordinator {
                 error_code: Some(code),
                 error_message: Some(error_message),
                 warnings,
+                verify_report: Some(mark_verify_report_in_doubt(
+                    &desired.device_id,
+                    verify_report,
+                    "SHADOW_WRITE_FAILED",
+                    "shadow state stale after successful apply",
+                )),
             };
         }
         DeviceApplyResult {
@@ -471,6 +541,7 @@ impl ApplyCoordinator {
             error_code: None,
             error_message: None,
             warnings,
+            verify_report,
         }
     }
 
@@ -483,6 +554,14 @@ impl ApplyCoordinator {
     ) -> DeviceApplyResult {
         let (code, message) = journal_error_fields(&err);
         let phase = failed_apply_phase(&journal_record.phase);
+        let status = apply_status_for_failed_phase(&phase);
+        let verify_report = failed_apply_verify_report(
+            &desired.device_id,
+            &journal_record,
+            &status,
+            &code,
+            &message,
+        );
         if let Err(transition_err) = journal_record.transition_phase(phase.clone()) {
             let (_, transition_message) = journal_error_fields(&transition_err);
             return DeviceApplyResult {
@@ -491,11 +570,17 @@ impl ApplyCoordinator {
                 status: ApplyStatus::InDoubt,
                 tx_id: Some(tx_context.tx_id),
                 strategy: journal_record.strategy,
-                error_code: Some(code),
+                error_code: Some(code.clone()),
                 error_message: Some(format!(
                     "{message}; phase transition also failed: {transition_message}"
                 )),
                 warnings: Vec::new(),
+                verify_report: Some(mark_verify_report_in_doubt(
+                    &desired.device_id,
+                    Some(verify_report),
+                    &code,
+                    &message,
+                )),
             };
         }
         journal_record = journal_record.with_error(code.clone(), message.clone());
@@ -504,25 +589,27 @@ impl ApplyCoordinator {
             return DeviceApplyResult {
                 device_id: desired.device_id.clone(),
                 changed: true,
-                status: apply_status_for_failed_phase(&phase),
+                status,
                 tx_id: Some(tx_context.tx_id),
                 strategy: journal_record.strategy,
-                error_code: Some(code),
+                error_code: Some(code.clone()),
                 error_message: Some(format!(
                     "{message}; journal write also failed: {journal_msg}"
                 )),
                 warnings: Vec::new(),
+                verify_report: Some(verify_report),
             };
         }
         DeviceApplyResult {
             device_id: desired.device_id.clone(),
             changed: true,
-            status: apply_status_for_failed_phase(&phase),
+            status,
             tx_id: Some(tx_context.tx_id),
             strategy: journal_record.strategy,
             error_code: Some(code),
             error_message: Some(message),
             warnings: Vec::new(),
+            verify_report: Some(verify_report),
         }
     }
 
@@ -533,8 +620,9 @@ impl ApplyCoordinator {
         tx_context: &TxContext,
         journal_record: &mut TxJournalRecord,
         allow_degraded_atomicity: bool,
-    ) -> UnderlayResult<TransactionStrategy> {
+    ) -> UnderlayResult<(TransactionStrategy, Option<DeviceVerifyReport>)> {
         let mut selected_strategy = None;
+        let mut verify_report = None;
 
         for desired in desired_states {
             let Some(change_set) = plan
@@ -594,7 +682,7 @@ impl ApplyCoordinator {
                 journal_record,
             )
             .await?;
-            self.verify_endpoint(
+            verify_report = Some(self.verify_endpoint(
                 &mut client,
                 &managed.info,
                 &rpc_context,
@@ -602,7 +690,7 @@ impl ApplyCoordinator {
                 change_set,
                 journal_record,
             )
-            .await?;
+            .await?);
 
             if strategy == TransactionStrategy::ConfirmedCommit {
                 self.final_confirm_endpoint(
@@ -621,7 +709,9 @@ impl ApplyCoordinator {
             }
         }
 
-        selected_strategy.ok_or(UnderlayError::UnsupportedTransactionStrategy)
+        selected_strategy
+            .map(|strategy| (strategy, verify_report))
+            .ok_or(UnderlayError::UnsupportedTransactionStrategy)
     }
 
     async fn prepare_endpoint(
@@ -725,9 +815,9 @@ impl ApplyCoordinator {
         device: &DeviceInfo,
         context: &RequestContext,
         desired: &DeviceDesiredState,
-        change_set: &crate::engine::diff::ChangeSet,
+        change_set: &ChangeSet,
         journal_record: &mut TxJournalRecord,
-    ) -> UnderlayResult<()> {
+    ) -> UnderlayResult<DeviceVerifyReport> {
         journal_record.transition_phase(TxPhase::Verifying)?;
         self.journal.put(journal_record)?;
         match client
@@ -740,7 +830,11 @@ impl ApplyCoordinator {
                     AdapterOperationStatus::NoChange | AdapterOperationStatus::Committed
                 ) =>
             {
-                Ok(())
+                Ok(passed_verify_report(
+                    desired.device_id.clone(),
+                    change_set,
+                    verify,
+                ))
             }
             Ok(verify) => {
                 let err = UnderlayError::AdapterOperation {
@@ -926,6 +1020,83 @@ impl ApplyCoordinator {
             errors: Vec::new(),
         })
     }
+}
+
+fn passed_verify_report(
+    device_id: DeviceId,
+    change_set: &ChangeSet,
+    outcome: AdapterOutcome,
+) -> DeviceVerifyReport {
+    DeviceVerifyReport::passed(
+        device_id,
+        VerifyScopeSummary::from_change_set(change_set),
+        outcome.warnings,
+    )
+}
+
+fn failed_apply_verify_report(
+    device_id: &DeviceId,
+    journal_record: &TxJournalRecord,
+    status: &ApplyStatus,
+    code: &str,
+    message: &str,
+) -> DeviceVerifyReport {
+    if is_verify_error_code(code) {
+        let mut report = DeviceVerifyReport::failed(
+            device_id.clone(),
+            verify_scope_from_journal(device_id, journal_record),
+            code.to_string(),
+            message.to_string(),
+            Vec::new(),
+        );
+        if *status == ApplyStatus::InDoubt {
+            report.status = DeviceVerifyStatus::InDoubt;
+        }
+        return report;
+    }
+
+    if *status == ApplyStatus::InDoubt {
+        DeviceVerifyReport::in_doubt(device_id.clone(), code.to_string(), message.to_string())
+    } else {
+        DeviceVerifyReport::skipped(device_id.clone())
+    }
+}
+
+fn mark_verify_report_in_doubt(
+    device_id: &DeviceId,
+    report: Option<DeviceVerifyReport>,
+    code: &str,
+    message: &str,
+) -> DeviceVerifyReport {
+    match report {
+        Some(mut report) => {
+            report.status = DeviceVerifyStatus::InDoubt;
+            report.error_code = Some(code.to_string());
+            report.error_message = Some(message.to_string());
+            report
+        }
+        None => DeviceVerifyReport::in_doubt(
+            device_id.clone(),
+            code.to_string(),
+            message.to_string(),
+        ),
+    }
+}
+
+fn verify_scope_from_journal(
+    device_id: &DeviceId,
+    journal_record: &TxJournalRecord,
+) -> VerifyScopeSummary {
+    journal_record
+        .change_sets
+        .iter()
+        .find(|change_set| change_set.device_id == *device_id)
+        .map(VerifyScopeSummary::from_change_set)
+        .unwrap_or_default()
+}
+
+fn is_verify_error_code(code: &str) -> bool {
+    matches!(code, "VERIFY_FAILED" | "UNEXPECTED_VERIFY_STATUS")
 }
 
 fn with_rollback_failure_context(
