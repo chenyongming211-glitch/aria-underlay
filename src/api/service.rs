@@ -2,6 +2,11 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use crate::adapter_client::{AdapterClientPool, DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS};
+use crate::api::apply_compensation::{
+    filter_domain_intent_to_endpoints, select_retryable_failed_endpoints,
+    DomainApplyCompensationPlan, DomainApplyRecord, DomainApplyRecordStore,
+    InMemoryDomainApplyRecordStore, JsonFileDomainApplyRecordStore,
+};
 use crate::authz::{AuthorizationPolicy, PermitAllAuthorizationPolicy};
 use crate::api::admin_ops::AdminOps;
 use crate::api::apply::device_results_from_plan;
@@ -20,6 +25,7 @@ use crate::api::operations::{
 };
 use crate::api::request::{
     ApplyDomainIntentRequest, ApplyIntentRequest, DriftAuditRequest, RefreshStateRequest,
+    RetryFailedDomainEndpointsRequest,
 };
 use crate::api::response::{
     ApplyIntentResponse, DeviceOnboardingResponse, DriftAuditResponse, DryRunResponse,
@@ -56,7 +62,7 @@ use crate::tx::{
     TxJournalStore,
 };
 use crate::utils::time::now_unix_secs;
-use crate::UnderlayResult;
+use crate::{UnderlayError, UnderlayResult};
 
 #[derive(Debug, Clone)]
 pub struct AriaUnderlayService {
@@ -76,6 +82,7 @@ pub struct AriaUnderlayService {
     adapter_pool: AdapterClientPool,
     confirmed_commit_timeout_secs: u32,
     apply_idempotency: Arc<ApplyIdempotencyRegistry>,
+    domain_apply_records: Arc<dyn DomainApplyRecordStore>,
 }
 
 #[derive(Debug)]
@@ -99,6 +106,15 @@ fn annotate_apply_idempotency_response(
     response
 }
 
+fn validate_non_empty(field: &str, value: &str) -> UnderlayResult<()> {
+    if value.trim().is_empty() {
+        return Err(UnderlayError::InvalidIntent(format!(
+            "{field} must not be empty"
+        )));
+    }
+    Ok(())
+}
+
 impl AriaUnderlayService {
     pub fn new(inventory: DeviceInventory) -> Self {
         Self {
@@ -118,6 +134,7 @@ impl AriaUnderlayService {
             adapter_pool: AdapterClientPool::default(),
             confirmed_commit_timeout_secs: DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
             apply_idempotency: Arc::new(ApplyIdempotencyRegistry::default()),
+            domain_apply_records: Arc::new(InMemoryDomainApplyRecordStore::default()),
         }
     }
 
@@ -142,6 +159,7 @@ impl AriaUnderlayService {
             adapter_pool: AdapterClientPool::default(),
             confirmed_commit_timeout_secs: DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
             apply_idempotency: Arc::new(ApplyIdempotencyRegistry::default()),
+            domain_apply_records: Arc::new(InMemoryDomainApplyRecordStore::default()),
         }
     }
 
@@ -167,6 +185,7 @@ impl AriaUnderlayService {
             adapter_pool: AdapterClientPool::default(),
             confirmed_commit_timeout_secs: DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
             apply_idempotency: Arc::new(ApplyIdempotencyRegistry::default()),
+            domain_apply_records: Arc::new(InMemoryDomainApplyRecordStore::default()),
         }
     }
 
@@ -194,6 +213,7 @@ impl AriaUnderlayService {
             adapter_pool: AdapterClientPool::default(),
             confirmed_commit_timeout_secs: DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
             apply_idempotency: Arc::new(ApplyIdempotencyRegistry::default()),
+            domain_apply_records: Arc::new(InMemoryDomainApplyRecordStore::default()),
         }
     }
 
@@ -222,6 +242,7 @@ impl AriaUnderlayService {
             adapter_pool: AdapterClientPool::default(),
             confirmed_commit_timeout_secs: DEFAULT_CONFIRMED_COMMIT_TIMEOUT_SECS,
             apply_idempotency: Arc::new(ApplyIdempotencyRegistry::default()),
+            domain_apply_records: Arc::new(InMemoryDomainApplyRecordStore::default()),
         }
     }
 
@@ -284,6 +305,14 @@ impl AriaUnderlayService {
         self.apply_idempotency = Arc::new(ApplyIdempotencyRegistry::new(Arc::new(
             JsonFileApplyIdempotencyStore::new(root),
         )));
+        self
+    }
+
+    pub fn with_file_domain_apply_record_store(
+        mut self,
+        root: impl Into<std::path::PathBuf>,
+    ) -> Self {
+        self.domain_apply_records = Arc::new(JsonFileDomainApplyRecordStore::new(root));
         self
     }
 
@@ -369,6 +398,7 @@ impl AriaUnderlayService {
         &self,
         request: ApplyDomainIntentRequest,
     ) -> UnderlayResult<ApplyIntentResponse> {
+        let record_request = request.clone();
         let request_id = request.request_id.clone();
         let trace_id = request
             .trace_id
@@ -422,9 +452,10 @@ impl AriaUnderlayService {
                 idempotency_key.clone(),
                 false,
             );
+            let mut response = response;
+            self.persist_domain_apply_record(record_request, &mut response);
             let mut stored_record =
                 ApplyIdempotencyRecord::new(fingerprint.clone(), response.clone());
-            let mut response = response;
             if let Err(err) = self.apply_idempotency.put(&idempotency_key, &stored_record) {
                 response
                     .warnings
@@ -435,7 +466,8 @@ impl AriaUnderlayService {
             return Ok(response);
         }
 
-        self.apply_coordinator()
+        let mut response = self
+            .apply_coordinator()
             .apply_desired_states(
                 request_id,
                 trace_id,
@@ -443,7 +475,63 @@ impl AriaUnderlayService {
                 request.options.allow_degraded_atomicity,
                 request.options.drift_policy,
             )
-            .await
+            .await?;
+        self.persist_domain_apply_record(record_request, &mut response);
+        Ok(response)
+    }
+
+    pub fn get_domain_apply_compensation_plan(
+        &self,
+        request_id: &str,
+    ) -> UnderlayResult<DomainApplyCompensationPlan> {
+        let record = self.domain_apply_record(request_id)?;
+        Ok(DomainApplyCompensationPlan::from_record(&record))
+    }
+
+    pub async fn retry_failed_domain_endpoints(
+        &self,
+        request: RetryFailedDomainEndpointsRequest,
+    ) -> UnderlayResult<ApplyIntentResponse> {
+        validate_non_empty("retry failed endpoint request_id", &request.request_id)?;
+        validate_non_empty(
+            "retry failed endpoint original_request_id",
+            &request.original_request_id,
+        )?;
+        let record = self.domain_apply_record(&request.original_request_id)?;
+        let endpoint_ids =
+            select_retryable_failed_endpoints(&record, &request.endpoint_ids)?;
+        let intent = filter_domain_intent_to_endpoints(&record.request.intent, &endpoint_ids)?;
+
+        self.apply_domain_intent(ApplyDomainIntentRequest {
+            request_id: request.request_id,
+            trace_id: request.trace_id,
+            idempotency_key: request.idempotency_key,
+            intent,
+            options: record.request.options.clone(),
+        })
+        .await
+    }
+
+    fn domain_apply_record(&self, request_id: &str) -> UnderlayResult<DomainApplyRecord> {
+        validate_non_empty("domain apply request_id", request_id)?;
+        self.domain_apply_records.get(request_id)?.ok_or_else(|| {
+            crate::UnderlayError::InvalidIntent(format!(
+                "domain apply record {request_id} was not found"
+            ))
+        })
+    }
+
+    fn persist_domain_apply_record(
+        &self,
+        request: ApplyDomainIntentRequest,
+        response: &mut ApplyIntentResponse,
+    ) {
+        let record = DomainApplyRecord::new(request, response.clone());
+        if let Err(err) = self.domain_apply_records.put(&record) {
+            response
+                .warnings
+                .push(format!("domain apply record persistence failed: {err}"));
+        }
     }
 
     pub async fn dry_run_domain(
@@ -502,6 +590,21 @@ impl ActivePassiveAriaUnderlayService {
     ) -> UnderlayResult<ApplyIntentResponse> {
         self.ensure_active()?;
         self.service.apply_domain_intent(request).await
+    }
+
+    pub fn get_domain_apply_compensation_plan(
+        &self,
+        request_id: &str,
+    ) -> UnderlayResult<DomainApplyCompensationPlan> {
+        self.service.get_domain_apply_compensation_plan(request_id)
+    }
+
+    pub async fn retry_failed_domain_endpoints(
+        &self,
+        request: RetryFailedDomainEndpointsRequest,
+    ) -> UnderlayResult<ApplyIntentResponse> {
+        self.ensure_active()?;
+        self.service.retry_failed_domain_endpoints(request).await
     }
 
     pub async fn dry_run_domain(

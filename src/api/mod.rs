@@ -1,6 +1,7 @@
 mod admin_ops;
 pub mod alert_lifecycle;
 mod apply;
+pub mod apply_compensation;
 mod apply_coordinator;
 mod drift_ops;
 pub mod operation_alerts;

@@ -1,4 +1,16 @@
+use aria_underlay::api::apply_compensation::{
+    filter_domain_intent_to_endpoints, DomainApplyCompensationPlan, DomainApplyRecord,
+    JsonFileDomainApplyRecordStore,
+};
+use aria_underlay::api::request::{ApplyDomainIntentRequest, ApplyOptions};
+use aria_underlay::api::response::{ApplyIntentResponse, ApplyStatus, DeviceApplyResult};
+use aria_underlay::intent::interface::InterfaceIntent;
+use aria_underlay::intent::vlan::VlanIntent;
+use aria_underlay::intent::{
+    ManagementEndpointIntent, SwitchMemberIntent, UnderlayDomainIntent, UnderlayTopology,
+};
 use aria_underlay::model::DeviceId;
+use aria_underlay::model::{AdminState, DeviceRole, PortMode, Vendor};
 use aria_underlay::tx::{
     choose_strategy, CapabilityFlags, DomainApplyLockTable, EndpointLockTable,
     JsonFileTxJournalStore, LockAcquisitionPolicy, TransactionMode, TransactionStrategy,
@@ -556,6 +568,175 @@ async fn domain_apply_lock_allows_different_domains_to_run_concurrently() {
     .await
     .expect("different domain should not wait")
     .expect("second domain lock should be acquired");
+}
+
+#[test]
+fn compensation_plan_classifies_terminal_failed_and_in_doubt_endpoints() {
+    let response = ApplyIntentResponse {
+        request_id: "req-original".into(),
+        trace_id: "trace-original".into(),
+        idempotency_key: None,
+        reused: false,
+        tx_id: None,
+        status: ApplyStatus::PartialSuccess,
+        strategy: None,
+        device_results: vec![
+            device_result("stack-a", ApplyStatus::Success),
+            device_result("stack-b", ApplyStatus::RolledBack),
+            device_result("stack-c", ApplyStatus::InDoubt),
+        ],
+        warnings: Vec::new(),
+    };
+
+    let plan = DomainApplyCompensationPlan::from_record(&DomainApplyRecord::new(
+        apply_record_request(two_endpoint_domain_intent()),
+        response,
+    ));
+
+    assert_eq!(plan.completed, vec![DeviceId("stack-a".into())]);
+    assert_eq!(plan.retryable_failed, vec![DeviceId("stack-b".into())]);
+    assert_eq!(plan.requires_recovery, vec![DeviceId("stack-c".into())]);
+}
+
+#[test]
+fn compensation_filter_keeps_only_selected_endpoint_scope() {
+    let filtered = filter_domain_intent_to_endpoints(
+        &two_endpoint_domain_intent(),
+        &[DeviceId("stack-b".into())],
+    )
+    .expect("filtering to stack-b should succeed");
+
+    assert_eq!(filtered.endpoints.len(), 1);
+    assert_eq!(filtered.endpoints[0].endpoint_id, "stack-b");
+    assert_eq!(filtered.topology, UnderlayTopology::StackSingleManagementIp);
+    assert_eq!(filtered.members.len(), 1);
+    assert_eq!(filtered.members[0].member_id, "member-b");
+    assert_eq!(filtered.interfaces.len(), 1);
+    assert_eq!(filtered.interfaces[0].device_id, DeviceId("member-b".into()));
+    assert_eq!(filtered.vlans.len(), 1);
+    assert_eq!(filtered.vlans[0].vlan_id, 200);
+}
+
+#[test]
+fn file_domain_apply_record_store_round_trips_records() {
+    let root = temp_journal_dir("apply-record");
+    let store = JsonFileDomainApplyRecordStore::new(&root);
+    let request = apply_record_request(two_endpoint_domain_intent());
+    let response = ApplyIntentResponse {
+        request_id: "req-original".into(),
+        trace_id: "trace-original".into(),
+        idempotency_key: None,
+        reused: false,
+        tx_id: None,
+        status: ApplyStatus::PartialSuccess,
+        strategy: None,
+        device_results: vec![
+            device_result("stack-a", ApplyStatus::Success),
+            device_result("stack-b", ApplyStatus::RolledBack),
+        ],
+        warnings: Vec::new(),
+    };
+    let record = DomainApplyRecord::new(request, response);
+
+    store.put(&record).expect("apply record should persist");
+    let restarted = JsonFileDomainApplyRecordStore::new(&root);
+    let loaded = restarted
+        .get("req-original")
+        .expect("apply record get should succeed")
+        .expect("apply record should exist");
+
+    assert_eq!(loaded.request.request_id, "req-original");
+    assert_eq!(loaded.domain_id, "domain-a");
+    assert_eq!(loaded.response.status, ApplyStatus::PartialSuccess);
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+fn device_result(device_id: &str, status: ApplyStatus) -> DeviceApplyResult {
+    DeviceApplyResult {
+        device_id: DeviceId(device_id.into()),
+        changed: !matches!(&status, ApplyStatus::NoOpSuccess),
+        status,
+        tx_id: None,
+        strategy: None,
+        error_code: None,
+        error_message: None,
+        warnings: Vec::new(),
+    }
+}
+
+fn apply_record_request(intent: UnderlayDomainIntent) -> ApplyDomainIntentRequest {
+    ApplyDomainIntentRequest {
+        request_id: "req-original".into(),
+        trace_id: Some("trace-original".into()),
+        idempotency_key: None,
+        intent,
+        options: ApplyOptions::default(),
+    }
+}
+
+fn two_endpoint_domain_intent() -> UnderlayDomainIntent {
+    UnderlayDomainIntent {
+        domain_id: "domain-a".into(),
+        topology: UnderlayTopology::MlagDualManagementIp,
+        endpoints: vec![
+            ManagementEndpointIntent {
+                endpoint_id: "stack-a".into(),
+                host: "127.0.0.1".into(),
+                port: 830,
+                secret_ref: "local/stack-a".into(),
+                vendor_hint: Some(Vendor::Unknown),
+                model_hint: None,
+            },
+            ManagementEndpointIntent {
+                endpoint_id: "stack-b".into(),
+                host: "127.0.0.1".into(),
+                port: 830,
+                secret_ref: "local/stack-b".into(),
+                vendor_hint: Some(Vendor::Unknown),
+                model_hint: None,
+            },
+        ],
+        members: vec![
+            SwitchMemberIntent {
+                member_id: "member-a".into(),
+                role: Some(DeviceRole::LeafA),
+                management_endpoint_id: "stack-a".into(),
+            },
+            SwitchMemberIntent {
+                member_id: "member-b".into(),
+                role: Some(DeviceRole::LeafB),
+                management_endpoint_id: "stack-b".into(),
+            },
+        ],
+        vlans: vec![VlanIntent {
+            vlan_id: 200,
+            name: Some("prod".into()),
+            description: None,
+        }],
+        interfaces: vec![
+            InterfaceIntent {
+                device_id: DeviceId("member-a".into()),
+                name: "GE1/0/1".into(),
+                admin_state: AdminState::Up,
+                description: None,
+                mode: PortMode::Access { vlan_id: 200 },
+            },
+            InterfaceIntent {
+                device_id: DeviceId("member-b".into()),
+                name: "GE1/0/1".into(),
+                admin_state: AdminState::Up,
+                description: None,
+                mode: PortMode::Access { vlan_id: 200 },
+            },
+        ],
+        acls: Vec::new(),
+        acl_bindings: Vec::new(),
+        delete_vlan_ids: Vec::new(),
+        delete_interfaces: Vec::new(),
+        delete_acl_ids: Vec::new(),
+        delete_acl_bindings: Vec::new(),
+    }
 }
 
 fn temp_journal_dir(name: &str) -> std::path::PathBuf {

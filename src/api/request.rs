@@ -23,6 +23,17 @@ pub struct ApplyDomainIntentRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryFailedDomainEndpointsRequest {
+    pub request_id: String,
+    pub trace_id: Option<String>,
+    pub original_request_id: String,
+    #[serde(default)]
+    pub endpoint_ids: Vec<DeviceId>,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApplyOptions {
     pub dry_run: bool,

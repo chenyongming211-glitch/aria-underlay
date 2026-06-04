@@ -4,6 +4,7 @@ use std::sync::Mutex;
 
 use aria_underlay::api::request::{
     ApplyDomainIntentRequest, ApplyOptions, DriftAuditRequest, RefreshStateRequest,
+    RetryFailedDomainEndpointsRequest,
 };
 use aria_underlay::api::response::ApplyStatus;
 use aria_underlay::api::{AriaUnderlayService, UnderlayService};
@@ -604,6 +605,100 @@ async fn apply_domain_intent_allows_different_domains_to_progress_independently(
 }
 
 #[tokio::test]
+async fn retry_failed_domain_endpoints_replays_only_failed_endpoint() {
+    let stack_a_prepare_calls = Arc::new(AtomicUsize::new(0));
+    let stack_a_endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-a", 100)),
+        prepare_calls: Some(stack_a_prepare_calls.clone()),
+        ..Default::default()
+    })
+    .await;
+    let stack_b_prepare_calls = Arc::new(AtomicUsize::new(0));
+    let stack_b_endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-b", 100)),
+        prepare_calls: Some(stack_b_prepare_calls.clone()),
+        prepare_result: failed_result("PREPARE_FAILED"),
+        ..Default::default()
+    })
+    .await;
+    let inventory = inventory_with_endpoint_routes(&[
+        ("stack-a", stack_a_endpoint),
+        ("stack-b", stack_b_endpoint),
+    ]);
+    let service = AriaUnderlayService::new(inventory);
+
+    let response = service
+        .apply_domain_intent(two_endpoint_apply_request("req-original", "trace-original"))
+        .await
+        .expect("partial apply should return per-endpoint results");
+
+    assert_eq!(response.status, ApplyStatus::PartialSuccess);
+    assert_eq!(stack_a_prepare_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(stack_b_prepare_calls.load(Ordering::SeqCst), 1);
+
+    let plan = service
+        .get_domain_apply_compensation_plan("req-original")
+        .expect("compensation plan should exist");
+    assert_eq!(plan.completed, vec![DeviceId("stack-a".into())]);
+    assert_eq!(plan.retryable_failed, vec![DeviceId("stack-b".into())]);
+    assert!(plan.requires_recovery.is_empty());
+
+    let retry_response = service
+        .retry_failed_domain_endpoints(RetryFailedDomainEndpointsRequest {
+            request_id: "req-retry".into(),
+            trace_id: Some("trace-retry".into()),
+            original_request_id: "req-original".into(),
+            endpoint_ids: Vec::new(),
+            idempotency_key: None,
+        })
+        .await
+        .expect("retry should target only the failed endpoint");
+
+    assert_eq!(retry_response.request_id, "req-retry");
+    assert_eq!(retry_response.device_results.len(), 1);
+    assert_eq!(retry_response.device_results[0].device_id, DeviceId("stack-b".into()));
+    assert_eq!(stack_a_prepare_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(stack_b_prepare_calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn file_domain_apply_record_store_survives_service_recreation() {
+    let stack_a_endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-a", 100)),
+        ..Default::default()
+    })
+    .await;
+    let stack_b_endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-b", 100)),
+        prepare_result: failed_result("PREPARE_FAILED"),
+        ..Default::default()
+    })
+    .await;
+    let inventory = inventory_with_endpoint_routes(&[
+        ("stack-a", stack_a_endpoint),
+        ("stack-b", stack_b_endpoint),
+    ]);
+    let apply_record_root = temp_store_dir("domain-apply-record");
+    let service = AriaUnderlayService::new(inventory.clone())
+        .with_file_domain_apply_record_store(&apply_record_root);
+
+    let response = service
+        .apply_domain_intent(two_endpoint_apply_request("req-persisted", "trace-persisted"))
+        .await
+        .expect("partial apply should persist an apply record");
+    assert_eq!(response.status, ApplyStatus::PartialSuccess);
+
+    let restarted = AriaUnderlayService::new(inventory)
+        .with_file_domain_apply_record_store(&apply_record_root);
+    let plan = restarted
+        .get_domain_apply_compensation_plan("req-persisted")
+        .expect("persisted compensation plan should load after service recreation");
+
+    assert_eq!(plan.retryable_failed, vec![DeviceId("stack-b".into())]);
+    std::fs::remove_dir_all(apply_record_root).ok();
+}
+
+#[tokio::test]
 async fn preflight_fetches_only_desired_scope_to_avoid_unrelated_delete_ops() {
     let current_state_scopes = Arc::new(Mutex::new(Vec::new()));
     let endpoint = start_test_adapter(TestAdapter {
@@ -955,6 +1050,85 @@ fn domain_intent_for_endpoint(
         delete_interfaces: vec![],
         delete_acl_ids: vec![],
         delete_acl_bindings: vec![],
+    }
+}
+
+fn two_endpoint_apply_request(request_id: &str, trace_id: &str) -> ApplyDomainIntentRequest {
+    ApplyDomainIntentRequest {
+        request_id: request_id.into(),
+        trace_id: Some(trace_id.into()),
+        idempotency_key: None,
+        intent: two_endpoint_domain_intent(),
+        options: ApplyOptions {
+            dry_run: false,
+            allow_degraded_atomicity: false,
+            drift_policy: DriftPolicy::ReportOnly,
+            ..Default::default()
+        },
+    }
+}
+
+fn two_endpoint_domain_intent() -> UnderlayDomainIntent {
+    UnderlayDomainIntent {
+        domain_id: "domain-a".into(),
+        topology: UnderlayTopology::MlagDualManagementIp,
+        endpoints: vec![
+            ManagementEndpointIntent {
+                endpoint_id: "stack-a".into(),
+                host: "127.0.0.1".into(),
+                port: 830,
+                secret_ref: "local/stack-a".into(),
+                vendor_hint: Some(Vendor::Unknown),
+                model_hint: None,
+            },
+            ManagementEndpointIntent {
+                endpoint_id: "stack-b".into(),
+                host: "127.0.0.1".into(),
+                port: 830,
+                secret_ref: "local/stack-b".into(),
+                vendor_hint: Some(Vendor::Unknown),
+                model_hint: None,
+            },
+        ],
+        members: vec![
+            SwitchMemberIntent {
+                member_id: "member-a".into(),
+                role: Some(DeviceRole::LeafA),
+                management_endpoint_id: "stack-a".into(),
+            },
+            SwitchMemberIntent {
+                member_id: "member-b".into(),
+                role: Some(DeviceRole::LeafB),
+                management_endpoint_id: "stack-b".into(),
+            },
+        ],
+        vlans: vec![VlanIntent {
+            vlan_id: 200,
+            name: Some("prod".into()),
+            description: None,
+        }],
+        interfaces: vec![
+            InterfaceIntent {
+                device_id: DeviceId("member-a".into()),
+                name: "GE1/0/1".into(),
+                admin_state: AdminState::Up,
+                description: None,
+                mode: PortMode::Access { vlan_id: 200 },
+            },
+            InterfaceIntent {
+                device_id: DeviceId("member-b".into()),
+                name: "GE1/0/1".into(),
+                admin_state: AdminState::Up,
+                description: None,
+                mode: PortMode::Access { vlan_id: 200 },
+            },
+        ],
+        acls: Vec::new(),
+        acl_bindings: Vec::new(),
+        delete_vlan_ids: Vec::new(),
+        delete_interfaces: Vec::new(),
+        delete_acl_ids: Vec::new(),
+        delete_acl_bindings: Vec::new(),
     }
 }
 
