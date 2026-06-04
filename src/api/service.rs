@@ -62,7 +62,7 @@ use crate::tx::{
     TxJournalStore,
 };
 use crate::utils::time::now_unix_secs;
-use crate::{UnderlayError, UnderlayResult};
+use crate::{AdapterErrorDetail, UnderlayError, UnderlayResult};
 
 #[derive(Debug, Clone)]
 pub struct AriaUnderlayService {
@@ -92,6 +92,40 @@ pub struct ActivePassiveAriaUnderlayService {
     startup_recovery: RecoveryReport,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HaLeaseMode {
+    StandaloneAllowed,
+    RequireActiveLease,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HaLeaseStartupPolicy {
+    pub mode: HaLeaseMode,
+    pub lease_config: Option<ActiveLeaseConfig>,
+}
+
+#[derive(Debug)]
+pub enum HaProtectedAriaUnderlayService {
+    Standalone(AriaUnderlayService),
+    ActivePassive(ActivePassiveAriaUnderlayService),
+}
+
+impl HaLeaseStartupPolicy {
+    pub fn standalone_allowed() -> Self {
+        Self {
+            mode: HaLeaseMode::StandaloneAllowed,
+            lease_config: None,
+        }
+    }
+
+    pub fn require_active_lease(lease_config: Option<ActiveLeaseConfig>) -> Self {
+        Self {
+            mode: HaLeaseMode::RequireActiveLease,
+            lease_config,
+        }
+    }
+}
+
 fn annotate_apply_idempotency_response(
     mut response: ApplyIntentResponse,
     request_id: String,
@@ -113,6 +147,19 @@ fn validate_non_empty(field: &str, value: &str) -> UnderlayResult<()> {
         )));
     }
     Ok(())
+}
+
+fn ha_lease_required_error() -> UnderlayError {
+    let code = "HA_LEASE_REQUIRED".to_string();
+    let message =
+        "production HA mode requires active-passive lease configuration before accepting writes"
+            .to_string();
+    UnderlayError::AdapterOperation {
+        code: code.clone(),
+        message: message.clone(),
+        retryable: false,
+        errors: vec![AdapterErrorDetail { code, message }],
+    }
 }
 
 fn apply_scope_lock_keys(request: &ApplyDomainIntentRequest) -> UnderlayResult<Vec<String>> {
@@ -383,6 +430,23 @@ impl AriaUnderlayService {
             lease,
             startup_recovery,
         })
+    }
+
+    pub async fn activate_with_ha_policy(
+        self,
+        policy: HaLeaseStartupPolicy,
+    ) -> UnderlayResult<HaProtectedAriaUnderlayService> {
+        match policy.mode {
+            HaLeaseMode::StandaloneAllowed => {
+                Ok(HaProtectedAriaUnderlayService::Standalone(self))
+            }
+            HaLeaseMode::RequireActiveLease => {
+                let lease_config = policy.lease_config.ok_or_else(ha_lease_required_error)?;
+                self.activate_active_passive(lease_config)
+                    .await
+                    .map(HaProtectedAriaUnderlayService::ActivePassive)
+            }
+        }
     }
 
     fn operation_event_sink(&self) -> Arc<dyn EventSink> {
@@ -671,6 +735,65 @@ impl ActivePassiveAriaUnderlayService {
 
     fn ensure_active(&self) -> UnderlayResult<()> {
         self.lease.ensure_current()
+    }
+}
+
+impl HaProtectedAriaUnderlayService {
+    pub fn is_standalone(&self) -> bool {
+        matches!(self, Self::Standalone(_))
+    }
+
+    pub fn is_active_passive(&self) -> bool {
+        matches!(self, Self::ActivePassive(_))
+    }
+
+    pub fn startup_recovery(&self) -> Option<&RecoveryReport> {
+        match self {
+            Self::Standalone(_) => None,
+            Self::ActivePassive(service) => Some(service.startup_recovery()),
+        }
+    }
+
+    pub async fn apply_domain_intent(
+        &self,
+        request: ApplyDomainIntentRequest,
+    ) -> UnderlayResult<ApplyIntentResponse> {
+        match self {
+            Self::Standalone(service) => service.apply_domain_intent(request).await,
+            Self::ActivePassive(service) => service.apply_domain_intent(request).await,
+        }
+    }
+
+    pub fn get_domain_apply_compensation_plan(
+        &self,
+        request_id: &str,
+    ) -> UnderlayResult<DomainApplyCompensationPlan> {
+        match self {
+            Self::Standalone(service) => service.get_domain_apply_compensation_plan(request_id),
+            Self::ActivePassive(service) => {
+                service.get_domain_apply_compensation_plan(request_id)
+            }
+        }
+    }
+
+    pub async fn retry_failed_domain_endpoints(
+        &self,
+        request: RetryFailedDomainEndpointsRequest,
+    ) -> UnderlayResult<ApplyIntentResponse> {
+        match self {
+            Self::Standalone(service) => service.retry_failed_domain_endpoints(request).await,
+            Self::ActivePassive(service) => service.retry_failed_domain_endpoints(request).await,
+        }
+    }
+
+    pub async fn dry_run_domain(
+        &self,
+        request: ApplyDomainIntentRequest,
+    ) -> UnderlayResult<DryRunResponse> {
+        match self {
+            Self::Standalone(service) => service.dry_run_domain(request).await,
+            Self::ActivePassive(service) => service.dry_run_domain(request).await,
+        }
     }
 }
 
@@ -980,6 +1103,130 @@ impl UnderlayService for ActivePassiveAriaUnderlayService {
     ) -> UnderlayResult<ListOperationSummariesResponse> {
         self.ensure_active()?;
         self.service.list_operation_summaries(request).await
+    }
+}
+
+#[async_trait]
+impl UnderlayService for HaProtectedAriaUnderlayService {
+    async fn initialize_underlay_site(
+        &self,
+        request: InitializeUnderlaySiteRequest,
+    ) -> UnderlayResult<InitializeUnderlaySiteResponse> {
+        match self {
+            Self::Standalone(service) => service.initialize_underlay_site(request).await,
+            Self::ActivePassive(service) => service.initialize_underlay_site(request).await,
+        }
+    }
+
+    async fn register_device(
+        &self,
+        request: RegisterDeviceRequest,
+    ) -> UnderlayResult<RegisterDeviceResponse> {
+        match self {
+            Self::Standalone(service) => service.register_device(request).await,
+            Self::ActivePassive(service) => service.register_device(request).await,
+        }
+    }
+
+    async fn onboard_device(
+        &self,
+        device_id: DeviceId,
+    ) -> UnderlayResult<DeviceOnboardingResponse> {
+        match self {
+            Self::Standalone(service) => service.onboard_device(device_id).await,
+            Self::ActivePassive(service) => service.onboard_device(device_id).await,
+        }
+    }
+
+    async fn apply_intent(
+        &self,
+        request: ApplyIntentRequest,
+    ) -> UnderlayResult<ApplyIntentResponse> {
+        match self {
+            Self::Standalone(service) => service.apply_intent(request).await,
+            Self::ActivePassive(service) => service.apply_intent(request).await,
+        }
+    }
+
+    async fn dry_run(&self, request: ApplyIntentRequest) -> UnderlayResult<DryRunResponse> {
+        match self {
+            Self::Standalone(service) => service.dry_run(request).await,
+            Self::ActivePassive(service) => service.dry_run(request).await,
+        }
+    }
+
+    async fn refresh_state(
+        &self,
+        request: RefreshStateRequest,
+    ) -> UnderlayResult<RefreshStateResponse> {
+        match self {
+            Self::Standalone(service) => service.refresh_state(request).await,
+            Self::ActivePassive(service) => service.refresh_state(request).await,
+        }
+    }
+
+    async fn get_device_state(&self, device_id: DeviceId) -> UnderlayResult<DeviceShadowState> {
+        match self {
+            Self::Standalone(service) => service.get_device_state(device_id).await,
+            Self::ActivePassive(service) => service.get_device_state(device_id).await,
+        }
+    }
+
+    async fn recover_pending_transactions(&self) -> UnderlayResult<RecoveryReport> {
+        match self {
+            Self::Standalone(service) => service.recover_pending_transactions().await,
+            Self::ActivePassive(service) => service.recover_pending_transactions().await,
+        }
+    }
+
+    async fn list_in_doubt_transactions(
+        &self,
+        request: ListInDoubtTransactionsRequest,
+    ) -> UnderlayResult<ListInDoubtTransactionsResponse> {
+        match self {
+            Self::Standalone(service) => service.list_in_doubt_transactions(request).await,
+            Self::ActivePassive(service) => service.list_in_doubt_transactions(request).await,
+        }
+    }
+
+    async fn run_drift_audit(
+        &self,
+        request: DriftAuditRequest,
+    ) -> UnderlayResult<DriftAuditResponse> {
+        match self {
+            Self::Standalone(service) => service.run_drift_audit(request).await,
+            Self::ActivePassive(service) => service.run_drift_audit(request).await,
+        }
+    }
+
+    async fn force_unlock(
+        &self,
+        request: ForceUnlockRequest,
+    ) -> UnderlayResult<ForceUnlockResponse> {
+        match self {
+            Self::Standalone(service) => service.force_unlock(request).await,
+            Self::ActivePassive(service) => service.force_unlock(request).await,
+        }
+    }
+
+    async fn force_resolve_transaction(
+        &self,
+        request: ForceResolveTransactionRequest,
+    ) -> UnderlayResult<ForceResolveTransactionResponse> {
+        match self {
+            Self::Standalone(service) => service.force_resolve_transaction(request).await,
+            Self::ActivePassive(service) => service.force_resolve_transaction(request).await,
+        }
+    }
+
+    async fn list_operation_summaries(
+        &self,
+        request: ListOperationSummariesRequest,
+    ) -> UnderlayResult<ListOperationSummariesResponse> {
+        match self {
+            Self::Standalone(service) => service.list_operation_summaries(request).await,
+            Self::ActivePassive(service) => service.list_operation_summaries(request).await,
+        }
     }
 }
 

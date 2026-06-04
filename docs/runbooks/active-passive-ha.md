@@ -30,7 +30,7 @@ Use `ActiveLeaseConfig` with a lease file under the shared runtime directory, fo
 /var/lib/aria-underlay/ha/active.lock
 ```
 
-The active Core should be constructed through:
+The active Core can be constructed directly through:
 
 ```rust
 let active = service
@@ -40,6 +40,25 @@ let active = service
     ))
     .await?;
 ```
+
+Production launchers should use the fail-closed startup policy instead:
+
+```rust
+let active = service
+    .activate_with_ha_policy(HaLeaseStartupPolicy::require_active_lease(Some(
+        ActiveLeaseConfig::new(
+            "/var/lib/aria-underlay/ha/active.lock",
+            "core-node-a",
+        ),
+    )))
+    .await?;
+```
+
+If `require_active_lease` is configured without a lease config, startup fails
+with `HA_LEASE_REQUIRED`. If another Core owns the same lease, startup fails
+with `HA_LEASE_HELD`. `HaLeaseStartupPolicy::standalone_allowed()` is only for
+local development, test fixtures, or an explicitly accepted single-node
+deployment.
 
 Activation does three things in order:
 

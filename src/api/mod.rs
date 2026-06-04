@@ -24,5 +24,8 @@ pub mod transactions;
 pub mod underlay_service;
 pub mod worker_config_admin;
 
-pub use service::{ActivePassiveAriaUnderlayService, AriaUnderlayService};
+pub use service::{
+    ActivePassiveAriaUnderlayService, AriaUnderlayService, HaLeaseMode,
+    HaLeaseStartupPolicy, HaProtectedAriaUnderlayService,
+};
 pub use underlay_service::UnderlayService;
