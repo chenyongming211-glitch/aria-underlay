@@ -260,6 +260,77 @@ def test_h3c_parser_infers_scoped_default_access_vlan_from_vlan_voice_port_inter
     ]
 
 
+def test_h3c_parser_reads_redacted_s6800_real_sample():
+    sample = (
+        FIXTURES
+        / "real_samples"
+        / "h3c"
+        / "comware7"
+        / "20260604-s6800-54qf-r2612p06-vlan-interface.redacted.xml"
+    )
+    xml = sample.read_text(encoding="utf-8")
+
+    state = H3cStateParser(model_hint="S6800-54QF").parse_running(xml)
+
+    assert {vlan["vlan_id"] for vlan in state["vlans"]} == {
+        1,
+        6,
+        200,
+        201,
+        202,
+        203,
+        1003,
+        1004,
+        1492,
+    }
+    interfaces = {interface["name"]: interface for interface in state["interfaces"]}
+    assert interfaces["Ten-GigabitEthernet1/0/47"]["mode"] == {
+        "kind": "access",
+        "access_vlan": 6,
+        "native_vlan": None,
+        "allowed_vlans": [],
+    }
+    assert interfaces["Ten-GigabitEthernet1/0/21"]["mode"] == {
+        "kind": "trunk",
+        "access_vlan": None,
+        "native_vlan": None,
+        "allowed_vlans": [1, 1003, 1004, 1492],
+    }
+    assert interfaces["Ten-GigabitEthernet1/0/30"]["mode"] == {
+        "kind": "trunk",
+        "access_vlan": None,
+        "native_vlan": None,
+        "allowed_vlans": [1, 200, 201, 202, 203],
+    }
+    permit_all = interfaces["Ten-GigabitEthernet1/0/48"]["mode"]["allowed_vlans"]
+    assert permit_all[0] == 1
+    assert permit_all[-1] == 4094
+    assert len(permit_all) == 4094
+
+    scoped = H3cStateParser(model_hint="S6800-54QF").parse_running(
+        xml,
+        scope=SimpleNamespace(
+            full=False,
+            vlan_ids=[3333],
+            interface_names=["XGE1/0/1"],
+            acl_ids=[],
+        ),
+    )
+    assert scoped["interfaces"] == [
+        {
+            "name": "XGE1/0/1",
+            "admin_state": None,
+            "description": None,
+            "mode": {
+                "kind": "access",
+                "access_vlan": 1,
+                "native_vlan": None,
+                "allowed_vlans": [],
+            },
+        }
+    ]
+
+
 def test_h3c_parser_reads_real_comware_ipv4_advanced_acl_shape():
     state = H3cStateParser(model_hint="S6800-54QF").parse_running(
         """

@@ -78,6 +78,17 @@ exception is approved and recorded with the acceptance result.
 Do not put switch passwords in this repository or in acceptance records. Record
 only the `secret_ref`.
 
+## Observed H3C Lab Profiles
+
+These profiles are read-only evidence for parser and transaction-strategy
+selection. They are not write acceptance by themselves; each model still needs
+the dry-run, apply, verify, and cleanup loop against approved test resources
+before a write surface is marked accepted.
+
+| Model | OS version | Read-only evidence | NETCONF transaction capability | Recommended strategy | Write acceptance status |
+| --- | --- | --- | --- | --- | --- |
+| S6800-54QF | 7.1.070 Release 2612P06 | `adapter-python/tests/fixtures/state_parsers/real_samples/h3c/comware7/20260604-s6800-54qf-r2612p06-vlan-interface.redacted.xml` | `:validate`, `:writable-running`, `:rollback-on-error`; no `:candidate`; no `:confirmed-commit` | `RunningRollbackOnError` | pending approved VLAN/interface write validation |
+
 ## Resource Selection
 
 For each switch/model under test, record these values before writing:
