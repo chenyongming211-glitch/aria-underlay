@@ -140,6 +140,48 @@ operator wrapper. The required evidence is:
 4. Prepare the environment file from
 `docs/examples/real-device-acceptance.env.example`.
 
+## Transaction Preflight
+
+Run the read-only transaction preflight before any real-device write. It checks
+management reachability and prints the transaction scenarios that still require
+explicit scoped write approval. The script does not accept passwords, private
+keys, or raw configuration, and it does not log in to the device.
+
+```bash
+python3 scripts/real_device_transaction_preflight.py \
+  --host "$ARIA_UNDERLAY_MGMT_IP" \
+  --ssh-port 22 \
+  --netconf-port "$ARIA_UNDERLAY_MGMT_PORT" \
+  --vendor h3c \
+  --model "<model-from-display-version>" \
+  --os-version "<version-from-display-version>" \
+  --pretty \
+  --json-report real-device-transaction-preflight.json
+```
+
+The status must be `ready_for_scoped_write_acceptance` before running any write
+probe. A `blocked` status means NETCONF is not reachable from the control node.
+If SSH CLI is not reachable but NETCONF is reachable, NETCONF-only acceptance
+may continue, but CLI cleanup and version capture need another approved path.
+
+Transaction acceptance is separate from command-surface acceptance:
+
+| Scenario | Writes device | Required evidence |
+| --- | --- | --- |
+| Capability and strategy probe | No | Raw capabilities, candidate/validate/confirmed-commit/persist-id flags, recommended strategy |
+| Dry-run ChangePlan | No | Scoped change set, no delete/update outside approved test resources |
+| Idempotent apply reuse | Yes | Same idempotency key returns the same `tx_id`/result; adapter logs show one write |
+| Apply verify report | Yes | `verify_report` confirms scoped readback matches the requested intent |
+| Commit failure discards candidate | Yes, controlled failure | Failure injection or approved fault point plus clean retry evidence |
+| Rollback failure enters InDoubt | Yes, controlled failure | New writes blocked until recovery or audited force-resolve |
+| Startup recovery after crash | Yes, controlled crash | Startup recovery report and final journal state |
+| Force-resolve break-glass | Depends on prior failure | Operator reason, before/after journal, post-resolve readback |
+
+Only the first two scenarios are safe as pure pre-write gates. The other
+scenarios require an approved absent VLAN/ACL and approved idle interfaces, plus
+a cleanup plan that has already passed dry-run. Do not run failure-injection
+cases on production traffic ports.
+
 ## Access Port Acceptance
 
 1. Set only the access variables in the environment.

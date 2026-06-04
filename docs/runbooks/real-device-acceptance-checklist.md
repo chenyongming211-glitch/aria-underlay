@@ -40,6 +40,19 @@ Copy this checklist for every switch/model acceptance run.
 - [ ] Environment file contains no password or private key material.
 - [ ] `real_domain_apply_probe` is available and executable.
 
+## Transaction Preflight
+
+- [ ] `real_device_transaction_preflight.py` was run before any write.
+- [ ] Preflight status is `ready_for_scoped_write_acceptance`.
+- [ ] SSH CLI reachability is recorded, or a NETCONF-only reason is documented.
+- [ ] NETCONF reachability is recorded.
+- [ ] Device model and OS version were captured from a read-only command.
+- [ ] Capability/strategy probe output is recorded.
+- [ ] Chosen test VLAN is absent immediately before write.
+- [ ] Chosen test ACL is absent immediately before write.
+- [ ] Idempotency key for retry acceptance is unique to this run.
+- [ ] Failure-injection scenarios are explicitly approved or marked skipped.
+
 ## Access Dry-Run
 
 - [ ] Dry-run contains `CreateVlan` for the test VLAN.
@@ -147,6 +160,15 @@ Copy this checklist for every switch/model acceptance run.
 - [ ] Cleanup executed with `--yes`.
 - [ ] Cleanup readback shows selected interface/direction binding absent.
 - [ ] Cleanup readback shows test ACL absent.
+
+## Transaction Fault Scenarios
+
+- [ ] Idempotent retry returned the same transaction result without a second device write.
+- [ ] Apply verify report includes scoped readback evidence.
+- [ ] Commit-failure/discard-candidate scenario passed, or was skipped with reason.
+- [ ] Rollback-failure/InDoubt scenario passed, or was skipped with reason.
+- [ ] Startup recovery after crash passed, or was skipped with reason.
+- [ ] Force-resolve break-glass flow passed, or was skipped with reason.
 
 ## Closeout
 

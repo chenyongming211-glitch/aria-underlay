@@ -23,6 +23,9 @@ private keys, session tokens, or full secrets.
 | Test ACL rule description |  |
 | Test ACL binding interface |  |
 | Test ACL binding direction |  |
+| Transaction preflight report |  |
+| Capability probe report |  |
+| Idempotency key |  |
 
 ## Baseline
 
@@ -38,6 +41,20 @@ private keys, session tokens, or full secrets.
 | Existing IPv4 advanced ACL ids |  |
 | Test ACL present before write | No |
 | ACL binding present before write | No |
+
+## Transaction Preflight
+
+| Check | Result |
+| --- | --- |
+| SSH CLI reachable |  |
+| NETCONF reachable |  |
+| Device model and OS captured by read-only command |  |
+| Recommended transaction strategy |  |
+| Candidate support |  |
+| Validate support |  |
+| Confirmed-commit support |  |
+| Persist-id support |  |
+| Preflight status |  |
 
 ## Access Acceptance
 
@@ -110,6 +127,24 @@ private keys, session tokens, or full secrets.
 | Cleanup dry-run showed unbind before ACL delete |  |
 | Cleanup result |  |
 | Cleanup readback result |  |
+
+## Transaction Acceptance
+
+| Check | Result |
+| --- | --- |
+| Idempotent retry tx_id/result |  |
+| Adapter/audit evidence for single write |  |
+| Apply verify_report status |  |
+| Apply verify_report scoped evidence |  |
+| Commit failure discarded candidate |  |
+| Clean retry after commit failure |  |
+| Rollback failure entered InDoubt |  |
+| New write rejected while InDoubt |  |
+| Startup recovery report |  |
+| Final journal state after recovery |  |
+| Force-resolve operator reason |  |
+| Force-resolve before/after journal |  |
+| Post-resolve readback |  |
 
 ## Logs And Follow-Up
 
