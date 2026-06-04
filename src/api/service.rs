@@ -24,8 +24,8 @@ use crate::api::operations::{
     ListOperationSummariesRequest, ListOperationSummariesResponse, OperationSummaryOverview,
 };
 use crate::api::request::{
-    ApplyDomainIntentRequest, ApplyIntentRequest, DriftAuditRequest, RefreshStateRequest,
-    RetryFailedDomainEndpointsRequest,
+    ApplyDomainIntentRequest, ApplyIntentRequest, ApplyLockScope, DriftAuditRequest,
+    RefreshStateRequest, RetryFailedDomainEndpointsRequest,
 };
 use crate::api::response::{
     ApplyIntentResponse, DeviceOnboardingResponse, DriftAuditResponse, DryRunResponse,
@@ -113,6 +113,62 @@ fn validate_non_empty(field: &str, value: &str) -> UnderlayResult<()> {
         )));
     }
     Ok(())
+}
+
+fn apply_scope_lock_keys(request: &ApplyDomainIntentRequest) -> UnderlayResult<Vec<String>> {
+    match request.options.lock_scope {
+        ApplyLockScope::Domain => Ok(vec![format!(
+            "domain:{}",
+            normalized_lock_component("domain_id", &request.intent.domain_id)?
+        )]),
+        ApplyLockScope::Region => {
+            let region_id = request.options.region_id.as_deref().ok_or_else(|| {
+                UnderlayError::InvalidIntent(
+                    "ApplyOptions.region_id is required when lock_scope is Region".into(),
+                )
+            })?;
+            Ok(vec![format!(
+                "region:{}",
+                normalized_lock_component("region_id", region_id)?
+            )])
+        }
+        ApplyLockScope::SwitchPair => {
+            let domain_id = normalized_lock_component("domain_id", &request.intent.domain_id)?;
+            let mut keys = request
+                .intent
+                .endpoints
+                .iter()
+                .map(|endpoint| {
+                    let endpoint_id = normalized_lock_component(
+                        "management endpoint_id",
+                        &endpoint.endpoint_id,
+                    )?;
+                    Ok(format!("switch_pair:{domain_id}:{endpoint_id}"))
+                })
+                .collect::<UnderlayResult<Vec<_>>>()?;
+            keys.sort();
+            keys.dedup();
+            if keys.is_empty() {
+                return Err(UnderlayError::InvalidIntent(
+                    "switch_pair lock scope requires at least one management endpoint".into(),
+                ));
+            }
+            Ok(keys)
+        }
+    }
+}
+
+fn normalized_lock_component(field: &str, value: &str) -> UnderlayResult<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(UnderlayError::InvalidIntent(format!("{field} must not be empty")));
+    }
+    if value.contains(':') {
+        return Err(UnderlayError::InvalidIntent(format!(
+            "{field} must not contain ':'"
+        )));
+    }
+    Ok(value.to_string())
 }
 
 impl AriaUnderlayService {
@@ -404,10 +460,8 @@ impl AriaUnderlayService {
             .trace_id
             .clone()
             .unwrap_or_else(|| request_id.clone());
-        let _domain_guard = self
-            .domain_apply_locks
-            .acquire(&request.intent.domain_id)
-            .await?;
+        let lock_keys = apply_scope_lock_keys(&request)?;
+        let _apply_scope_guard = self.domain_apply_locks.acquire_many(lock_keys).await?;
         let idempotency_key = request
             .idempotency_key
             .as_deref()

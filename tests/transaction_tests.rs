@@ -573,6 +573,56 @@ async fn domain_apply_lock_allows_different_domains_to_run_concurrently() {
     .expect("second domain lock should be acquired");
 }
 
+#[tokio::test]
+async fn domain_apply_lock_serializes_overlapping_scope_key_sets() {
+    let locks = DomainApplyLockTable::default();
+    let first_guard = locks
+        .acquire_many([
+            "switch_pair:domain-a:stack-a",
+            "switch_pair:domain-a:stack-b",
+        ])
+        .await
+        .expect("first multi-scope lock should be acquired");
+    let acquired = Arc::new(AtomicBool::new(false));
+    let second_acquired = acquired.clone();
+    let second_locks = locks.clone();
+
+    let second = tokio::spawn(async move {
+        let _guard = second_locks
+            .acquire_many([
+                "switch_pair:domain-a:stack-b",
+                "switch_pair:domain-a:stack-c",
+            ])
+            .await
+            .expect("second overlapping lock should eventually be acquired");
+        second_acquired.store(true, Ordering::SeqCst);
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(!acquired.load(Ordering::SeqCst));
+
+    drop(first_guard);
+    second.await.expect("second lock task should finish");
+    assert!(acquired.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn domain_apply_lock_allows_disjoint_scope_key_sets() {
+    let locks = DomainApplyLockTable::default();
+    let _first_guard = locks
+        .acquire_many(["switch_pair:domain-a:stack-a"])
+        .await
+        .expect("first scope lock should be acquired");
+
+    let _second_guard = tokio::time::timeout(
+        std::time::Duration::from_millis(50),
+        locks.acquire_many(["switch_pair:domain-a:stack-b"]),
+    )
+    .await
+    .expect("disjoint scope should not wait")
+    .expect("second scope lock should be acquired");
+}
+
 #[test]
 fn compensation_plan_classifies_terminal_failed_and_in_doubt_endpoints() {
     let response = ApplyIntentResponse {

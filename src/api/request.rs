@@ -40,6 +40,10 @@ pub struct ApplyOptions {
     pub allow_degraded_atomicity: bool,
     #[serde(default)]
     pub drift_policy: DriftPolicy,
+    #[serde(default)]
+    pub lock_scope: ApplyLockScope,
+    #[serde(default)]
+    pub region_id: Option<String>,
 }
 
 impl Default for ApplyOptions {
@@ -48,7 +52,22 @@ impl Default for ApplyOptions {
             dry_run: false,
             allow_degraded_atomicity: false,
             drift_policy: DriftPolicy::default(),
+            lock_scope: ApplyLockScope::default(),
+            region_id: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ApplyLockScope {
+    Domain,
+    Region,
+    SwitchPair,
+}
+
+impl Default for ApplyLockScope {
+    fn default() -> Self {
+        Self::Domain
     }
 }
 

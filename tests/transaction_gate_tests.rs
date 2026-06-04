@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use aria_underlay::api::request::{
-    ApplyDomainIntentRequest, ApplyOptions, DriftAuditRequest, RefreshStateRequest,
+    ApplyDomainIntentRequest, ApplyLockScope, ApplyOptions, DriftAuditRequest, RefreshStateRequest,
     RetryFailedDomainEndpointsRequest,
 };
 use aria_underlay::api::response::{ApplyStatus, ApplyVerifyStatus, DeviceVerifyStatus};
@@ -673,6 +673,187 @@ async fn apply_domain_intent_allows_different_domains_to_progress_independently(
 }
 
 #[tokio::test]
+async fn region_lock_scope_serializes_different_domains_in_same_region() {
+    let first_prepare_calls = Arc::new(AtomicUsize::new(0));
+    let first_prepare_release = Arc::new(tokio::sync::Notify::new());
+    let first_endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-a", 100)),
+        prepare_calls: Some(first_prepare_calls.clone()),
+        prepare_release: Some(first_prepare_release.clone()),
+        ..Default::default()
+    })
+    .await;
+    let second_prepare_calls = Arc::new(AtomicUsize::new(0));
+    let second_endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-b", 100)),
+        prepare_calls: Some(second_prepare_calls.clone()),
+        ..Default::default()
+    })
+    .await;
+    let inventory = inventory_with_endpoint_routes(&[
+        ("stack-a", first_endpoint),
+        ("stack-b", second_endpoint),
+    ]);
+    let service = AriaUnderlayService::new(inventory);
+
+    let first_service = service.clone();
+    let first = tokio::spawn(async move {
+        first_service
+            .apply_domain_intent(apply_request_with_lock_scope(
+                "domain-a",
+                "stack-a",
+                200,
+                ApplyLockScope::Region,
+                Some("region-a"),
+            ))
+            .await
+    });
+    wait_for_prepare_count(&first_prepare_calls, 1, "first apply should reach prepare").await;
+
+    let second_service = service.clone();
+    let second = tokio::spawn(async move {
+        second_service
+            .apply_domain_intent(apply_request_with_lock_scope(
+                "domain-b",
+                "stack-b",
+                201,
+                ApplyLockScope::Region,
+                Some("region-a"),
+            ))
+            .await
+    });
+
+    let second_reached_prepare = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        wait_until_prepare_count(&second_prepare_calls, 1),
+    )
+    .await
+    .is_ok();
+    assert!(
+        !second_reached_prepare,
+        "same-region apply should wait before reaching the second endpoint prepare"
+    );
+
+    first_prepare_release.notify_one();
+    let first_response = tokio::time::timeout(std::time::Duration::from_secs(3), first)
+        .await
+        .expect("first apply task should finish")
+        .expect("first apply task should not panic")
+        .expect("first apply should succeed");
+    assert_eq!(first_response.status, ApplyStatus::Success);
+
+    wait_for_prepare_count(
+        &second_prepare_calls,
+        1,
+        "second apply should reach prepare after first releases the region lock",
+    )
+    .await;
+    let second_response = tokio::time::timeout(std::time::Duration::from_secs(3), second)
+        .await
+        .expect("second apply task should finish")
+        .expect("second apply task should not panic")
+        .expect("second apply should succeed");
+    assert_eq!(second_response.status, ApplyStatus::Success);
+}
+
+#[tokio::test]
+async fn switch_pair_lock_scope_allows_disjoint_endpoints_in_same_domain() {
+    let first_prepare_calls = Arc::new(AtomicUsize::new(0));
+    let first_prepare_release = Arc::new(tokio::sync::Notify::new());
+    let first_endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-a", 100)),
+        prepare_calls: Some(first_prepare_calls.clone()),
+        prepare_release: Some(first_prepare_release.clone()),
+        ..Default::default()
+    })
+    .await;
+    let second_prepare_calls = Arc::new(AtomicUsize::new(0));
+    let second_endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-b", 100)),
+        prepare_calls: Some(second_prepare_calls.clone()),
+        ..Default::default()
+    })
+    .await;
+    let inventory = inventory_with_endpoint_routes(&[
+        ("stack-a", first_endpoint),
+        ("stack-b", second_endpoint),
+    ]);
+    let service = AriaUnderlayService::new(inventory);
+
+    let first_service = service.clone();
+    let first = tokio::spawn(async move {
+        first_service
+            .apply_domain_intent(apply_request_with_lock_scope(
+                "domain-a",
+                "stack-a",
+                200,
+                ApplyLockScope::SwitchPair,
+                None,
+            ))
+            .await
+    });
+    wait_for_prepare_count(&first_prepare_calls, 1, "first apply should reach prepare").await;
+
+    let second_service = service.clone();
+    let second = tokio::spawn(async move {
+        second_service
+            .apply_domain_intent(apply_request_with_lock_scope(
+                "domain-a",
+                "stack-b",
+                201,
+                ApplyLockScope::SwitchPair,
+                None,
+            ))
+            .await
+    });
+
+    wait_for_prepare_count(
+        &second_prepare_calls,
+        1,
+        "disjoint switch-pair apply should reach prepare while first endpoint is still active",
+    )
+    .await;
+    let second_response = tokio::time::timeout(std::time::Duration::from_secs(3), second)
+        .await
+        .expect("second apply task should finish")
+        .expect("second apply task should not panic")
+        .expect("second apply should succeed");
+    assert_eq!(second_response.status, ApplyStatus::Success);
+
+    first_prepare_release.notify_one();
+    let first_response = tokio::time::timeout(std::time::Duration::from_secs(3), first)
+        .await
+        .expect("first apply task should finish")
+        .expect("first apply task should not panic")
+        .expect("first apply should succeed");
+    assert_eq!(first_response.status, ApplyStatus::Success);
+}
+
+#[tokio::test]
+async fn region_lock_scope_requires_region_id() {
+    let endpoint = start_fake_adapter(AdapterFailurePoint::None).await;
+    let inventory = inventory_with_endpoint_at(
+        "stack-mgmt",
+        DeviceLifecycleState::Ready,
+        endpoint,
+    );
+    let service = AriaUnderlayService::new(inventory);
+
+    let err = service
+        .apply_domain_intent(apply_request_with_lock_scope(
+            "domain-a",
+            "stack-mgmt",
+            200,
+            ApplyLockScope::Region,
+            None,
+        ))
+        .await
+        .expect_err("region lock scope must fail closed without region_id");
+
+    assert!(format!("{err}").contains("region_id"));
+}
+
+#[tokio::test]
 async fn retry_failed_domain_endpoints_replays_only_failed_endpoint() {
     let stack_a_prepare_calls = Arc::new(AtomicUsize::new(0));
     let stack_a_endpoint = start_test_adapter(TestAdapter {
@@ -1072,6 +1253,20 @@ fn apply_request_for_domain_endpoint(
             ..Default::default()
         },
     }
+}
+
+fn apply_request_with_lock_scope(
+    domain_id: &str,
+    endpoint_id: &str,
+    vlan_id: u16,
+    lock_scope: ApplyLockScope,
+    region_id: Option<&str>,
+) -> ApplyDomainIntentRequest {
+    let mut request =
+        apply_request_for_domain_endpoint(domain_id, endpoint_id, vlan_id, DriftPolicy::ReportOnly);
+    request.options.lock_scope = lock_scope;
+    request.options.region_id = region_id.map(str::to_string);
+    request
 }
 
 fn domain_intent(vlan_id: u16) -> UnderlayDomainIntent {
