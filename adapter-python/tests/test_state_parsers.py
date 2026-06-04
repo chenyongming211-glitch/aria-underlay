@@ -145,6 +145,64 @@ def test_h3c_parser_reads_real_comware_vlan_shape_with_model_hint():
     ]
 
 
+def test_h3c_parser_infers_scoped_default_access_vlan_from_ifmgr_only_interface():
+    state = H3cStateParser(model_hint="S5560-54C-EI").parse_running(
+        """
+        <data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+          <top xmlns="http://www.h3c.com/netconf/config:1.0">
+            <Ifmgr>
+              <Interfaces>
+                <Interface>
+                  <IfIndex>30</IfIndex>
+                </Interface>
+              </Interfaces>
+            </Ifmgr>
+            <VLAN>
+              <AccessInterfaces>
+                <Interface>
+                  <IfIndex>13</IfIndex>
+                  <PVID>144</PVID>
+                </Interface>
+              </AccessInterfaces>
+              <TrunkInterfaces>
+                <Interface>
+                  <IfIndex>49</IfIndex>
+                  <PermitVlanList>1-4094</PermitVlanList>
+                </Interface>
+              </TrunkInterfaces>
+              <VLANs>
+                <VLANID>
+                  <ID>144</ID>
+                  <Name>tenant-access</Name>
+                </VLANID>
+              </VLANs>
+            </VLAN>
+          </top>
+        </data>
+        """,
+        scope=SimpleNamespace(
+            full=False,
+            vlan_ids=[3333],
+            interface_names=["GE1/0/30"],
+            acl_ids=[],
+        ),
+    )
+
+    assert state["interfaces"] == [
+        {
+            "name": "GE1/0/30",
+            "admin_state": None,
+            "description": None,
+            "mode": {
+                "kind": "access",
+                "access_vlan": 1,
+                "native_vlan": None,
+                "allowed_vlans": [],
+            },
+        }
+    ]
+
+
 def test_h3c_parser_reads_real_comware_ipv4_advanced_acl_shape():
     state = H3cStateParser(model_hint="S6800-54QF").parse_running(
         """
