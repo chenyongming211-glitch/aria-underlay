@@ -451,6 +451,159 @@ async fn apply_domain_intent_reuses_persisted_response_after_service_recreation(
 }
 
 #[tokio::test]
+async fn apply_domain_intent_serializes_same_domain_requests() {
+    let first_prepare_calls = Arc::new(AtomicUsize::new(0));
+    let first_prepare_release = Arc::new(tokio::sync::Notify::new());
+    let first_endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-a", 100)),
+        prepare_calls: Some(first_prepare_calls.clone()),
+        prepare_release: Some(first_prepare_release.clone()),
+        ..Default::default()
+    })
+    .await;
+    let second_prepare_calls = Arc::new(AtomicUsize::new(0));
+    let second_endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-b", 100)),
+        prepare_calls: Some(second_prepare_calls.clone()),
+        ..Default::default()
+    })
+    .await;
+    let inventory = inventory_with_endpoint_routes(&[
+        ("stack-a", first_endpoint),
+        ("stack-b", second_endpoint),
+    ]);
+    let service = AriaUnderlayService::new(inventory);
+
+    let first_service = service.clone();
+    let first = tokio::spawn(async move {
+        first_service
+            .apply_domain_intent(apply_request_for_domain_endpoint(
+                "domain-a",
+                "stack-a",
+                200,
+                DriftPolicy::ReportOnly,
+            ))
+            .await
+    });
+    wait_for_prepare_count(&first_prepare_calls, 1, "first apply should reach prepare").await;
+
+    let second_service = service.clone();
+    let second = tokio::spawn(async move {
+        second_service
+            .apply_domain_intent(apply_request_for_domain_endpoint(
+                "domain-a",
+                "stack-b",
+                201,
+                DriftPolicy::ReportOnly,
+            ))
+            .await
+    });
+
+    let second_reached_prepare = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        wait_until_prepare_count(&second_prepare_calls, 1),
+    )
+    .await
+    .is_ok();
+    assert!(
+        !second_reached_prepare,
+        "same-domain apply should wait before reaching the second endpoint prepare"
+    );
+
+    first_prepare_release.notify_one();
+    let first_response = tokio::time::timeout(std::time::Duration::from_secs(3), first)
+        .await
+        .expect("first apply task should finish")
+        .expect("first apply task should not panic")
+        .expect("first apply should succeed");
+    assert_eq!(first_response.status, ApplyStatus::Success);
+
+    wait_for_prepare_count(
+        &second_prepare_calls,
+        1,
+        "second apply should reach prepare after first releases the domain lock",
+    )
+    .await;
+    let second_response = tokio::time::timeout(std::time::Duration::from_secs(3), second)
+        .await
+        .expect("second apply task should finish")
+        .expect("second apply task should not panic")
+        .expect("second apply should succeed");
+    assert_eq!(second_response.status, ApplyStatus::Success);
+}
+
+#[tokio::test]
+async fn apply_domain_intent_allows_different_domains_to_progress_independently() {
+    let first_prepare_calls = Arc::new(AtomicUsize::new(0));
+    let first_prepare_release = Arc::new(tokio::sync::Notify::new());
+    let first_endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-a", 100)),
+        prepare_calls: Some(first_prepare_calls.clone()),
+        prepare_release: Some(first_prepare_release.clone()),
+        ..Default::default()
+    })
+    .await;
+    let second_prepare_calls = Arc::new(AtomicUsize::new(0));
+    let second_endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-b", 100)),
+        prepare_calls: Some(second_prepare_calls.clone()),
+        ..Default::default()
+    })
+    .await;
+    let inventory = inventory_with_endpoint_routes(&[
+        ("stack-a", first_endpoint),
+        ("stack-b", second_endpoint),
+    ]);
+    let service = AriaUnderlayService::new(inventory);
+
+    let first_service = service.clone();
+    let first = tokio::spawn(async move {
+        first_service
+            .apply_domain_intent(apply_request_for_domain_endpoint(
+                "domain-a",
+                "stack-a",
+                200,
+                DriftPolicy::ReportOnly,
+            ))
+            .await
+    });
+    wait_for_prepare_count(&first_prepare_calls, 1, "first apply should reach prepare").await;
+
+    let second_service = service.clone();
+    let second = tokio::spawn(async move {
+        second_service
+            .apply_domain_intent(apply_request_for_domain_endpoint(
+                "domain-b",
+                "stack-b",
+                201,
+                DriftPolicy::ReportOnly,
+            ))
+            .await
+    });
+
+    wait_for_prepare_count(
+        &second_prepare_calls,
+        1,
+        "different-domain apply should reach prepare while first domain is still active",
+    )
+    .await;
+    let second_response = tokio::time::timeout(std::time::Duration::from_secs(3), second)
+        .await
+        .expect("second apply task should finish")
+        .expect("second apply task should not panic")
+        .expect("second apply should succeed");
+    assert_eq!(second_response.status, ApplyStatus::Success);
+
+    first_prepare_release.notify_one();
+    let first_response = tokio::time::timeout(std::time::Duration::from_secs(3), first)
+        .await
+        .expect("first apply task should finish")
+        .expect("first apply task should not panic")
+        .expect("first apply should succeed");
+    assert_eq!(first_response.status, ApplyStatus::Success);
+}
+
+#[tokio::test]
 async fn preflight_fetches_only_desired_scope_to_avoid_unrelated_delete_ops() {
     let current_state_scopes = Arc::new(Mutex::new(Vec::new()));
     let endpoint = start_test_adapter(TestAdapter {
@@ -735,11 +888,20 @@ fn apply_request(drift_policy: DriftPolicy) -> ApplyDomainIntentRequest {
 }
 
 fn apply_request_with_vlan(vlan_id: u16, drift_policy: DriftPolicy) -> ApplyDomainIntentRequest {
+    apply_request_for_domain_endpoint("domain-a", "stack-mgmt", vlan_id, drift_policy)
+}
+
+fn apply_request_for_domain_endpoint(
+    domain_id: &str,
+    endpoint_id: &str,
+    vlan_id: u16,
+    drift_policy: DriftPolicy,
+) -> ApplyDomainIntentRequest {
     ApplyDomainIntentRequest {
         request_id: "req-apply".into(),
         trace_id: Some("trace-apply".into()),
         idempotency_key: None,
-        intent: domain_intent(vlan_id),
+        intent: domain_intent_for_endpoint(domain_id, endpoint_id, vlan_id),
         options: ApplyOptions {
             dry_run: false,
             allow_degraded_atomicity: false,
@@ -750,21 +912,30 @@ fn apply_request_with_vlan(vlan_id: u16, drift_policy: DriftPolicy) -> ApplyDoma
 }
 
 fn domain_intent(vlan_id: u16) -> UnderlayDomainIntent {
+    domain_intent_for_endpoint("domain-a", "stack-mgmt", vlan_id)
+}
+
+fn domain_intent_for_endpoint(
+    domain_id: &str,
+    endpoint_id: &str,
+    vlan_id: u16,
+) -> UnderlayDomainIntent {
+    let member_id = format!("{endpoint_id}-member");
     UnderlayDomainIntent {
-        domain_id: "domain-a".into(),
+        domain_id: domain_id.into(),
         topology: UnderlayTopology::StackSingleManagementIp,
         endpoints: vec![ManagementEndpointIntent {
-            endpoint_id: "stack-mgmt".into(),
+            endpoint_id: endpoint_id.into(),
             host: "127.0.0.1".into(),
             port: 830,
-            secret_ref: "local/stack-mgmt".into(),
+            secret_ref: format!("local/{endpoint_id}"),
             vendor_hint: Some(Vendor::Unknown),
             model_hint: None,
         }],
         members: vec![SwitchMemberIntent {
-            member_id: "member-a".into(),
+            member_id: member_id.clone(),
             role: Some(DeviceRole::LeafA),
-            management_endpoint_id: "stack-mgmt".into(),
+            management_endpoint_id: endpoint_id.into(),
         }],
         vlans: vec![VlanIntent {
             vlan_id,
@@ -772,7 +943,7 @@ fn domain_intent(vlan_id: u16) -> UnderlayDomainIntent {
             description: None,
         }],
         interfaces: vec![InterfaceIntent {
-            device_id: DeviceId("member-a".into()),
+            device_id: DeviceId(member_id),
             name: "GE1/0/1".into(),
             admin_state: AdminState::Up,
             description: None,
@@ -784,6 +955,24 @@ fn domain_intent(vlan_id: u16) -> UnderlayDomainIntent {
         delete_interfaces: vec![],
         delete_acl_ids: vec![],
         delete_acl_bindings: vec![],
+    }
+}
+
+async fn wait_for_prepare_count(calls: &AtomicUsize, expected: usize, context: &str) {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        wait_until_prepare_count(calls, expected),
+    )
+    .await
+    .expect(context);
+}
+
+async fn wait_until_prepare_count(calls: &AtomicUsize, expected: usize) {
+    loop {
+        if calls.load(Ordering::SeqCst) >= expected {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 }
 
@@ -834,6 +1023,29 @@ fn inventory_with_endpoint_at(
     adapter_endpoint: String,
 ) -> DeviceInventory {
     let inventory = DeviceInventory::default();
+    insert_inventory_endpoint(&inventory, device_id, state, adapter_endpoint);
+    inventory
+}
+
+fn inventory_with_endpoint_routes(routes: &[(&str, String)]) -> DeviceInventory {
+    let inventory = DeviceInventory::default();
+    for (device_id, adapter_endpoint) in routes {
+        insert_inventory_endpoint(
+            &inventory,
+            device_id,
+            DeviceLifecycleState::Ready,
+            adapter_endpoint.clone(),
+        );
+    }
+    inventory
+}
+
+fn insert_inventory_endpoint(
+    inventory: &DeviceInventory,
+    device_id: &str,
+    state: DeviceLifecycleState,
+    adapter_endpoint: String,
+) {
     inventory
         .insert(DeviceInfo {
             tenant_id: "tenant-a".into(),
@@ -850,7 +1062,6 @@ fn inventory_with_endpoint_at(
             lifecycle_state: state,
         })
         .expect("endpoint device should be inserted");
-    inventory
 }
 
 async fn start_fake_adapter(failure_point: AdapterFailurePoint) -> String {

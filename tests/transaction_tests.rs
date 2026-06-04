@@ -1,8 +1,8 @@
 use aria_underlay::model::DeviceId;
 use aria_underlay::tx::{
-    choose_strategy, CapabilityFlags, EndpointLockTable, JsonFileTxJournalStore,
-    LockAcquisitionPolicy, TransactionMode, TransactionStrategy, TxContext, TxJournalRecord,
-    TxJournalStore, TxPhase,
+    choose_strategy, CapabilityFlags, DomainApplyLockTable, EndpointLockTable,
+    JsonFileTxJournalStore, LockAcquisitionPolicy, TransactionMode, TransactionStrategy,
+    TxContext, TxJournalRecord, TxJournalStore, TxPhase,
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -512,6 +512,50 @@ async fn endpoint_lock_policy_times_out_instead_of_waiting_forever() {
         .expect_err("second lock should time out");
 
     assert!(format!("{err}").contains("ENDPOINT_LOCK_TIMEOUT"));
+}
+
+#[tokio::test]
+async fn domain_apply_lock_serializes_same_domain_writers() {
+    let locks = DomainApplyLockTable::default();
+    let first_guard = locks
+        .acquire("domain-a")
+        .await
+        .expect("first domain lock should be acquired");
+    let acquired = Arc::new(AtomicBool::new(false));
+    let second_acquired = acquired.clone();
+    let second_locks = locks.clone();
+
+    let second = tokio::spawn(async move {
+        let _guard = second_locks
+            .acquire("domain-a")
+            .await
+            .expect("second domain lock should eventually be acquired");
+        second_acquired.store(true, Ordering::SeqCst);
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(!acquired.load(Ordering::SeqCst));
+
+    drop(first_guard);
+    second.await.expect("second lock task should finish");
+    assert!(acquired.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn domain_apply_lock_allows_different_domains_to_run_concurrently() {
+    let locks = DomainApplyLockTable::default();
+    let _first_guard = locks
+        .acquire("domain-a")
+        .await
+        .expect("first domain lock should be acquired");
+
+    let _second_guard = tokio::time::timeout(
+        std::time::Duration::from_millis(50),
+        locks.acquire("domain-b"),
+    )
+    .await
+    .expect("different domain should not wait")
+    .expect("second domain lock should be acquired");
 }
 
 fn temp_journal_dir(name: &str) -> std::path::PathBuf {

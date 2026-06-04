@@ -52,7 +52,8 @@ use crate::telemetry::{
 };
 use crate::tx::recovery::RecoveryReport;
 use crate::tx::{
-    EndpointLockTable, InMemoryTxJournalStore, LockAcquisitionPolicy, TxJournalStore,
+    DomainApplyLockTable, EndpointLockTable, InMemoryTxJournalStore, LockAcquisitionPolicy,
+    TxJournalStore,
 };
 use crate::utils::time::now_unix_secs;
 use crate::UnderlayResult;
@@ -61,6 +62,7 @@ use crate::UnderlayResult;
 pub struct AriaUnderlayService {
     inventory: DeviceInventory,
     journal: Arc<dyn TxJournalStore>,
+    domain_apply_locks: DomainApplyLockTable,
     endpoint_locks: EndpointLockTable,
     lock_policy: LockAcquisitionPolicy,
     secret_store: Arc<dyn SecretStore>,
@@ -102,6 +104,7 @@ impl AriaUnderlayService {
         Self {
             inventory,
             journal: Arc::new(InMemoryTxJournalStore::default()),
+            domain_apply_locks: DomainApplyLockTable::default(),
             endpoint_locks: EndpointLockTable::default(),
             lock_policy: LockAcquisitionPolicy::default(),
             secret_store: Arc::new(InMemorySecretStore::default()),
@@ -125,6 +128,7 @@ impl AriaUnderlayService {
         Self {
             inventory,
             journal,
+            domain_apply_locks: DomainApplyLockTable::default(),
             endpoint_locks: EndpointLockTable::default(),
             lock_policy: LockAcquisitionPolicy::default(),
             secret_store: Arc::new(InMemorySecretStore::default()),
@@ -149,6 +153,7 @@ impl AriaUnderlayService {
         Self {
             inventory,
             journal,
+            domain_apply_locks: DomainApplyLockTable::default(),
             endpoint_locks,
             lock_policy: LockAcquisitionPolicy::default(),
             secret_store: Arc::new(InMemorySecretStore::default()),
@@ -175,6 +180,7 @@ impl AriaUnderlayService {
         Self {
             inventory,
             journal,
+            domain_apply_locks: DomainApplyLockTable::default(),
             endpoint_locks,
             lock_policy,
             secret_store,
@@ -202,6 +208,7 @@ impl AriaUnderlayService {
         Self {
             inventory,
             journal,
+            domain_apply_locks: DomainApplyLockTable::default(),
             endpoint_locks,
             lock_policy,
             secret_store,
@@ -367,6 +374,10 @@ impl AriaUnderlayService {
             .trace_id
             .clone()
             .unwrap_or_else(|| request_id.clone());
+        let _domain_guard = self
+            .domain_apply_locks
+            .acquire(&request.intent.domain_id)
+            .await?;
         let idempotency_key = request
             .idempotency_key
             .as_deref()
