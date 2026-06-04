@@ -263,6 +263,7 @@ impl ApplyVerifyReport {
         } else {
             ApplyVerifyStatus::Skipped
         };
+        let attention_required = !failed.is_empty() || !in_doubt.is_empty();
 
         Self {
             status,
@@ -270,7 +271,7 @@ impl ApplyVerifyReport {
             failed,
             skipped,
             in_doubt,
-            attention_required: !failed.is_empty() || !in_doubt.is_empty(),
+            attention_required,
             warning_count,
         }
     }

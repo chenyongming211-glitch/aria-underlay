@@ -794,7 +794,11 @@ impl ApplyCoordinator {
                     journal_record,
                     err,
                 )
-                .await
+                .await?;
+                Err(UnderlayError::Internal(
+                    "verify rollback unexpectedly completed without returning the primary error"
+                        .into(),
+                ))
             }
             Err(err) => {
                 self.rollback_after_endpoint_failure_preserving_primary(
@@ -804,7 +808,11 @@ impl ApplyCoordinator {
                     journal_record,
                     err,
                 )
-                .await
+                .await?;
+                Err(UnderlayError::Internal(
+                    "verify rollback unexpectedly completed without returning the primary error"
+                        .into(),
+                ))
             }
         }
     }
