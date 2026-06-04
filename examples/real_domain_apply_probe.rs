@@ -115,6 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             dry_run: false,
             allow_degraded_atomicity: allow_degraded,
             drift_policy: DriftPolicy::ReportOnly,
+            ..Default::default()
         },
     };
 
