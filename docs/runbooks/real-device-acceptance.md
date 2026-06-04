@@ -87,7 +87,7 @@ before a write surface is marked accepted.
 
 | Model | OS version | Read-only evidence | NETCONF transaction capability | Recommended strategy | Write acceptance status |
 | --- | --- | --- | --- | --- | --- |
-| S6800-54QF | 7.1.070 Release 2612P06 | `adapter-python/tests/fixtures/state_parsers/real_samples/h3c/comware7/20260604-s6800-54qf-r2612p06-vlan-interface.redacted.xml` | `:validate`, `:writable-running`, `:rollback-on-error`; no `:candidate`; no `:confirmed-commit` | `RunningRollbackOnError` | pending approved VLAN/interface write validation |
+| S6800-54QF | 7.1.070 Release 2612P06 | `adapter-python/tests/fixtures/state_parsers/real_samples/h3c/comware7/20260604-s6800-54qf-r2612p06-vlan-interface.redacted.xml` | `:validate`, `:writable-running`, `:rollback-on-error`; no `:candidate`; no `:confirmed-commit` | `RunningRollbackOnError` | access VLAN write/readback/cleanup accepted on 2026-06-04; see `docs/runbooks/real-device-acceptance-record-s6800-20260604.md` |
 
 ## Resource Selection
 
