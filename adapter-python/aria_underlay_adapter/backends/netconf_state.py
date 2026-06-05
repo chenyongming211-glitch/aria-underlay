@@ -290,12 +290,6 @@ def verify_interfaces(desired_state, observed: dict, scope=None) -> None:
             raise _verify_mismatch(
                 f"interface {interface_name} should be absent but exists in observed state",
             )
-    for name in _scoped_interface_names(scope, observed):
-        key = _interface_alias_key(name)
-        if key not in desired_by_name and key in observed_by_name:
-            raise _verify_mismatch(
-                f"interface {name} should be absent but exists in observed scoped state",
-            )
     for desired_interface in _desired_interfaces_in_scope(desired_state, scope):
         name = _field(desired_interface, "name")
         observed_interface = observed_by_name.get(_interface_alias_key(name))

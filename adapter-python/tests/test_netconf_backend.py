@@ -1696,6 +1696,57 @@ def test_verify_running_accepts_interface_alias_names_from_scoped_state():
     backend.verify_running(desired, scope=_Scope(False, [100], ["GE1/0/1"]))
 
 
+def test_verify_running_allows_scoped_interface_for_acl_binding_only_verify():
+    session = _RecordingSession()
+    parser = _StaticStateParser(
+        state={
+            "vlans": [],
+            "interfaces": [
+                {
+                    "name": "GigabitEthernet1/0/30",
+                    "admin_state": None,
+                    "description": None,
+                    "mode": {
+                        "kind": "access",
+                        "access_vlan": 1,
+                        "native_vlan": None,
+                        "allowed_vlans": [],
+                    },
+                }
+            ],
+            "acls": [
+                {
+                    "acl_id": 3999,
+                    "name": None,
+                    "description": "ARIA binding ACL",
+                    "rules": [],
+                }
+            ],
+            "acl_bindings": [
+                {
+                    "interface_name": "GigabitEthernet1/0/30",
+                    "direction": "inbound",
+                    "acl_id": 3999,
+                }
+            ],
+        }
+    )
+    backend = _BackendWithSession(session, state_parser=parser)
+    desired = pb2.DesiredDeviceState(
+        device_id="leaf-a",
+        acls=[pb2.AclConfig(acl_id=3999, description="ARIA binding ACL")],
+        acl_bindings=[
+            pb2.AclBinding(
+                interface_name="GE1/0/30",
+                direction=pb2.ACL_DIRECTION_INBOUND,
+                acl_id=3999,
+            )
+        ],
+    )
+
+    backend.verify_running(desired, scope=_Scope(False, [], ["GE1/0/30"], [3999]))
+
+
 def test_verify_running_treats_missing_observed_admin_state_as_unknown():
     session = _RecordingSession()
     parser = _StaticStateParser(

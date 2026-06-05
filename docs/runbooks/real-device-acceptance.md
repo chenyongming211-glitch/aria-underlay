@@ -11,9 +11,11 @@ acceptance procedure. The current supported acceptance surface is:
 - Trunk port allowed VLAN update.
 - Access/trunk interface description update.
 - Isolated numeric IPv4 advanced ACL create/read/verify.
-- Isolated numeric IPv4 basic ACL create/read/verify is implemented in offline
-  acceptance but still pending real-device validation.
-- IPv4 advanced ACL rule description.
+- Isolated numeric IPv4 basic ACL create/read/verify on accepted H3C S6800 and
+  S5560 lab profiles.
+- IPv4 advanced ACL rule description where the exact target model accepts the
+  H3C XML field; keep rule description unset on S5560 7.1.070 packet-filter
+  binding acceptance.
 - Interface packet-filter binding for an isolated numeric IPv4 advanced ACL.
 - Scoped get-current-state readback and verify.
 
@@ -88,6 +90,7 @@ before a write surface is marked accepted.
 | Model | OS version | Read-only evidence | NETCONF transaction capability | Recommended strategy | Write acceptance status |
 | --- | --- | --- | --- | --- | --- |
 | S6800-54QF | 7.1.070 Release 2612P06 | `adapter-python/tests/fixtures/state_parsers/real_samples/h3c/comware7/20260604-s6800-54qf-r2612p06-vlan-interface.redacted.xml` | `:validate`, `:writable-running`, `:rollback-on-error`; no `:candidate`; no `:confirmed-commit` | `RunningRollbackOnError` | access VLAN write/readback/cleanup accepted on 2026-06-04; Basic IPv4 ACL write/readback/cleanup accepted on 2026-06-05; see `docs/runbooks/real-device-acceptance-record-s6800-20260604.md` and `docs/runbooks/real-device-acceptance-record-s6800-basic-acl-20260605.md` |
+| S5560 | 7.1.070 | `docs/runbooks/real-device-acceptance-record-s5560-basic-acl-binding-20260605.md` | `:validate`, `:writable-running`, `:rollback-on-error`; no `:candidate`; no `:confirmed-commit` | `RunningRollbackOnError` | Basic IPv4 ACL write/readback/cleanup and IPv4 advanced ACL packet-filter binding write/readback/cleanup accepted on 2026-06-05; see `docs/runbooks/real-device-acceptance-record-s5560-basic-acl-binding-20260605.md` |
 
 ## Resource Selection
 
@@ -457,8 +460,9 @@ Read back the ACL scope again. The test ACL must be absent.
 ## Basic IPv4 ACL Acceptance
 
 Basic IPv4 ACL has offline renderer/parser/mock acceptance coverage and S6800
-write/readback/cleanup acceptance. Use this case only on an approved lab switch
-and keep it isolated from all packet-filter, QoS, PBR, NQA, and BGP consumers.
+and S5560 write/readback/cleanup acceptance. Use this case only on an approved
+lab switch and keep it isolated from all packet-filter, QoS, PBR, NQA, and BGP
+consumers.
 
 1. Choose an absent numeric Basic IPv4 ACL id.
 
@@ -469,9 +473,10 @@ is `2998-2999`, but the actual candidate must come from live readback.
 2. Configure only source-based `ip` rules.
 
 Basic IPv4 ACL rules must not set destination, source port, or destination port
-matches. On H3C S6800 Comware 7.1.070 R2612P06, `IPv4BasicRules/Rule`
-does not accept `Description`; keep rule description unset and validate only the
-ACL group description.
+matches. On the accepted H3C S6800 Comware 7.1.070 R2612P06 and S5560
+Comware 7.1.070 lab profiles, `IPv4BasicRules/Rule` does not accept
+`Description`; keep rule description unset and validate only the ACL group
+description.
 Set `ARIA_UNDERLAY_TEST_ACL_KIND=basic_ipv4` and unset any destination or port
 match variables inherited from the advanced ACL example:
 
@@ -511,6 +516,12 @@ ACL, stop and clean it manually before reusing the id.
 This case proves the interface packet-filter binding boundary. It creates an
 isolated ACL and binds it to one approved interface/direction. It does not
 prove PBR, QoS traffic-classifier, NQA, BGP, or other ACL consumers.
+
+The S5560 7.1.070 acceptance path passed with an Advanced IPv4 ACL group
+description but no ACL rule description. On that profile,
+`IPv4AdvanceRules/Rule/Description` was rejected by the NETCONF server, so leave
+`ARIA_UNDERLAY_ACL_RULE_DESCRIPTION` unset unless the exact model profile has
+accepted the field.
 
 1. Confirm the candidate ACL and binding target are clean.
 

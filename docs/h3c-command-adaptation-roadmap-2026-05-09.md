@@ -118,14 +118,15 @@ Not in Batch 1 implementation:
 
 Basic IPv4 ACL has an offline MVP: domain/proto kind, H3C renderer/parser,
 mock NETCONF apply/readback, and offline acceptance coverage are in place.
-S6800 real-device write/readback/cleanup acceptance is complete; S5560 and
+S6800 and S5560 real-device write/readback/cleanup acceptance is complete;
 additional Comware profiles still require the same loop before being marked
 accepted. Continue to add only one ACL family at a time; do not combine IPv6,
 named ACL, QoS, PBR, NQA, or BGP in one implementation batch.
 
 Recommended order:
 
-1. Extend Basic IPv4 ACL real-device acceptance to S5560 or the next target model.
+1. Extend Basic IPv4 ACL acceptance to the next target model only when an
+   approved lab device is available.
 2. Named IPv4 ACL only if real devices expose a stable NETCONF shape.
 3. IPv6 ACL after IPv4 variants have parser/renderer/cleanup parity.
 
