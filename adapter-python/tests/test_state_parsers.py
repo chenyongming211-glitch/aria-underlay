@@ -331,6 +331,105 @@ def test_h3c_parser_reads_redacted_s6800_real_sample():
     ]
 
 
+def test_h3c_parser_reads_redacted_s5560_basic_acl_real_sample():
+    sample = (
+        FIXTURES
+        / "real_samples"
+        / "h3c"
+        / "comware7"
+        / "20260605-s5560-r71070-basic-acl.redacted.xml"
+    )
+    xml = sample.read_text(encoding="utf-8")
+
+    state = H3cStateParser(model_hint="S5560").parse_running(
+        xml,
+        scope=SimpleNamespace(full=False, vlan_ids=[], interface_names=[], acl_ids=[2999]),
+    )
+
+    assert state["acls"] == [
+        {
+            "acl_id": 2999,
+            "kind": "basic_ipv4",
+            "name": None,
+            "description": "aria-basic-acl-s5560",
+            "rules": [
+                {
+                    "sequence": 10,
+                    "action": "permit",
+                    "protocol": "ip",
+                    "source": {"address": "192.0.2.2", "wildcard": "0.0.0.0"},
+                    "destination": None,
+                    "source_port_eq": None,
+                    "destination_port_eq": None,
+                    "description": None,
+                }
+            ],
+        }
+    ]
+    assert state["acl_bindings"] == []
+
+
+def test_h3c_parser_reads_redacted_s5560_acl_binding_real_sample():
+    sample = (
+        FIXTURES
+        / "real_samples"
+        / "h3c"
+        / "comware7"
+        / "20260605-s5560-r71070-acl-binding.redacted.xml"
+    )
+    xml = sample.read_text(encoding="utf-8")
+
+    state = H3cStateParser(model_hint="S5560").parse_running(
+        xml,
+        scope=SimpleNamespace(
+            full=False,
+            vlan_ids=[],
+            interface_names=["GigabitEthernet1/0/30"],
+            acl_ids=[3999],
+        ),
+    )
+
+    assert state["interfaces"] == [
+        {
+            "name": "GigabitEthernet1/0/30",
+            "admin_state": None,
+            "description": None,
+            "mode": {
+                "kind": "access",
+                "access_vlan": 1,
+                "native_vlan": None,
+                "allowed_vlans": [],
+            },
+        }
+    ]
+    assert state["acls"] == [
+        {
+            "acl_id": 3999,
+            "name": None,
+            "description": "aria-acl-binding-s5560",
+            "rules": [
+                {
+                    "sequence": 10,
+                    "action": "permit",
+                    "protocol": "ip",
+                    "source": {"address": "192.0.2.3", "wildcard": "0.0.0.0"},
+                    "destination": {"address": "198.51.100.3", "wildcard": "0.0.0.0"},
+                    "source_port_eq": None,
+                    "destination_port_eq": None,
+                    "description": None,
+                }
+            ],
+        }
+    ]
+    assert state["acl_bindings"] == [
+        {
+            "interface_name": "GigabitEthernet1/0/30",
+            "direction": "inbound",
+            "acl_id": 3999,
+        }
+    ]
+
+
 def test_h3c_parser_reads_real_comware_ipv4_advanced_acl_shape():
     state = H3cStateParser(model_hint="S6800-54QF").parse_running(
         """

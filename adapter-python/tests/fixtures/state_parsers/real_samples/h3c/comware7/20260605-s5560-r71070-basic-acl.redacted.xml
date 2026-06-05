@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nc:data xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <top xmlns="http://www.h3c.com/netconf/config:1.0">
+    <ACL>
+      <Groups>
+        <Group>
+          <GroupType>1</GroupType>
+          <GroupID>2999</GroupID>
+          <Description>aria-basic-acl-s5560</Description>
+        </Group>
+      </Groups>
+      <IPv4BasicRules>
+        <Rule>
+          <GroupID>2999</GroupID>
+          <RuleID>10</RuleID>
+          <Action>2</Action>
+          <SrcAny>false</SrcAny>
+          <SrcIPv4>
+            <SrcIPv4Addr>192.0.2.2</SrcIPv4Addr>
+            <SrcIPv4Wildcard>0.0.0.0</SrcIPv4Wildcard>
+          </SrcIPv4>
+        </Rule>
+      </IPv4BasicRules>
+    </ACL>
+  </top>
+</nc:data>
