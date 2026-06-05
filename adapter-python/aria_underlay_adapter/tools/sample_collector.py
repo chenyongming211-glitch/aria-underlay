@@ -74,6 +74,28 @@ _PASSWORD_ELEMENTS = {
     "AuthenticationKey",
 }
 
+_PASSWORD_ATTRIBUTE_SUFFIXES = ("password", "passphrase", "secret", "key")
+
+
+def _local_xml_name(name: str) -> str:
+    """Return the local XML name without an ElementTree namespace prefix."""
+    return name.split("}")[-1] if "}" in name else name
+
+
+def _normalized_xml_name(name: str) -> str:
+    """Normalize XML names for security-field matching."""
+    return _local_xml_name(name).replace("_", "").replace("-", "").lower()
+
+
+def _is_password_attribute(name: str) -> bool:
+    normalized = _normalized_xml_name(name)
+    return normalized.endswith(_PASSWORD_ATTRIBUTE_SUFFIXES)
+
+
+def _is_community_attribute(name: str) -> bool:
+    return "community" in _normalized_xml_name(name)
+
+
 # Element names that typically contain AS numbers
 _AS_NUMBER_ELEMENTS = {
     "ASNumber",
@@ -177,7 +199,7 @@ class SampleCollector:
         self, element: ElementTree.Element, report: SanitizationReport
     ) -> None:
         """Recursively sanitize an XML element."""
-        tag_local = element.tag.split("}")[-1] if "}" in element.tag else element.tag
+        tag_local = _local_xml_name(element.tag)
 
         # Check if this is a password element
         if tag_local in _PASSWORD_ELEMENTS:
@@ -211,7 +233,20 @@ class SampleCollector:
         element.text = self._sanitize_ip_text(element.text, report)
         element.tail = self._sanitize_ip_text(element.tail, report)
         for name, value in list(element.attrib.items()):
-            element.attrib[name] = self._sanitize_ip_text(value, report) or ""
+            if _is_community_attribute(name):
+                if value and value.strip():
+                    report.community_strings_redacted += 1
+                    element.attrib[name] = "[REDACTED]"
+                else:
+                    element.attrib[name] = ""
+            elif _is_password_attribute(name):
+                if value and value.strip():
+                    report.passwords_redacted += 1
+                    element.attrib[name] = "[REDACTED]"
+                else:
+                    element.attrib[name] = ""
+            else:
+                element.attrib[name] = self._sanitize_ip_text(value, report) or ""
 
         # Recursively process children
         for child in element:
@@ -385,12 +420,40 @@ Examples:
             print(f"Error: Input file not found: {args.from_file}", file=sys.stderr)
             return 1
 
+        try:
+            input_path = args.from_file.resolve(strict=True)
+            output_path = args.output.resolve(strict=False)
+        except OSError as e:
+            print(f"Error: Failed to resolve input/output path: {e}", file=sys.stderr)
+            return 1
+
+        if input_path == output_path:
+            print(
+                "Error: --from-file and --output must be different paths",
+                file=sys.stderr,
+            )
+            return 1
+
         print(f"Reading raw XML from: {args.from_file}")
-        raw_xml = args.from_file.read_text(encoding="utf-8")
+        try:
+            raw_xml = args.from_file.read_text(encoding="utf-8")
+        except UnicodeDecodeError as e:
+            print(
+                f"Error: Input file is not valid UTF-8: {args.from_file}: {e}",
+                file=sys.stderr,
+            )
+            return 1
+        except OSError as e:
+            print(f"Error: Failed to read input file: {e}", file=sys.stderr)
+            return 1
 
         print("Sanitizing sensitive information...")
         collector = SampleCollector()
-        sanitized_xml, report = collector.sanitize_xml(raw_xml)
+        try:
+            sanitized_xml, report = collector.sanitize_xml(raw_xml)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
 
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(sanitized_xml, encoding="utf-8")

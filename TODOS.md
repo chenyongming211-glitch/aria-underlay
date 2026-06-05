@@ -122,12 +122,12 @@
 
 ## P3: 待修 — 2026-06-05 deferred bug hardening
 
-**状态**：当前有效列表见 `docs/bug-inventory-current-2026-06-05.md`。这些不是 P0/P1 事务正确性 bug，主要是 sample collector、YANG schema 边界和 adapter 输入一致性 hardening。
+**状态**：当前有效列表见 `docs/bug-inventory-current-2026-06-05.md`。这些不是 P0/P1 事务正确性 bug，主要是 sample collector CLI 安全策略、YANG schema 边界和 adapter 输入一致性 hardening。#15、#16、#17-remain 已在第一批清理中修复。
 
 **建议顺序**：
-- 先修和真实样本采集直接相关的 sample collector / YANG schema 小问题：#15、#16、#17-remain、#18、#20。
-- 再修 #12，使 YANG namespace extraction 更适合大型厂商 schema。
-- #11、#13、#14、#19 后置，除非 sample collector 要变成多人/生产环境工具。
+- 第二批：YANG library / schema 边界：#18、#20、#12。
+- 第三批：sample collector CLI 安全策略：#13、#14。
+- 第四批：adapter 输入语义一致性：#11、#19。
 
 **不阻塞**：
 - 不阻塞 BGP read-only audit / real-sample calibration。

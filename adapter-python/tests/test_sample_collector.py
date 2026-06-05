@@ -1,10 +1,12 @@
 """Tests for device sample collector and sanitization."""
+import sys
 import pytest
 from xml.etree import ElementTree
 
 from aria_underlay_adapter.tools.sample_collector import (
     SampleCollector,
     SanitizationReport,
+    main,
 )
 
 
@@ -332,6 +334,37 @@ class TestSampleCollector:
         assert collector._ip_mapping["10.0.0.1"] in sanitized
         assert report.ip_addresses_replaced == 1
 
+    def test_sensitive_attributes_are_redacted_by_attribute_name(self):
+        """Password/community-like XML attributes must not leak raw values."""
+        xml = """
+        <config>
+            <Peer
+                password="raw-password"
+                authKey="raw-key"
+                sharedSecret="raw-secret"
+                community="65000:1"
+                ip="10.0.0.1"
+            />
+        </config>
+        """
+        collector = SampleCollector()
+        sanitized, report = collector.sanitize_xml(xml)
+        root = ElementTree.fromstring(sanitized)
+        peer = root.find(".//Peer")
+
+        assert peer.attrib["password"] == "[REDACTED]"
+        assert peer.attrib["authKey"] == "[REDACTED]"
+        assert peer.attrib["sharedSecret"] == "[REDACTED]"
+        assert peer.attrib["community"] == "[REDACTED]"
+        assert peer.attrib["ip"] == collector._ip_mapping["10.0.0.1"]
+        assert "raw-password" not in sanitized
+        assert "raw-key" not in sanitized
+        assert "raw-secret" not in sanitized
+        assert "65000:1" not in sanitized
+        assert report.passwords_redacted == 3
+        assert report.community_strings_redacted == 1
+        assert report.ip_addresses_replaced == 1
+
     def test_ip_replacement_pool_fails_closed_instead_of_colliding(self):
         """The fixed documentation IPv4 pool must not silently reuse replacements."""
         ip_count = 763
@@ -345,3 +378,75 @@ class TestSampleCollector:
 
         with pytest.raises(ValueError, match="documentation IPv4 replacement pool exhausted"):
             collector.sanitize_xml(xml)
+
+
+class TestSampleCollectorCli:
+    """Tests for sample collector CLI safety behavior."""
+
+    def test_from_file_rejects_non_utf8_input(self, tmp_path, monkeypatch, capsys):
+        raw_path = tmp_path / "raw.xml"
+        output_path = tmp_path / "sanitized.xml"
+        raw_path.write_bytes(b"\xff\xfe\x00<config/>")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "collect-device-sample",
+                "--from-file",
+                str(raw_path),
+                "--output",
+                str(output_path),
+            ],
+        )
+
+        assert main() == 1
+        captured = capsys.readouterr()
+
+        assert "not valid UTF-8" in captured.err
+        assert not output_path.exists()
+
+    def test_from_file_rejects_malformed_xml(self, tmp_path, monkeypatch, capsys):
+        raw_path = tmp_path / "raw.xml"
+        output_path = tmp_path / "sanitized.xml"
+        raw_path.write_text("<config><Unclosed>", encoding="utf-8")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "collect-device-sample",
+                "--from-file",
+                str(raw_path),
+                "--output",
+                str(output_path),
+            ],
+        )
+
+        assert main() == 1
+        captured = capsys.readouterr()
+
+        assert "Failed to parse XML" in captured.err
+        assert not output_path.exists()
+
+    def test_from_file_rejects_same_input_and_output_path(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        raw_path = tmp_path / "raw.xml"
+        original = "<config><Password>secret</Password></config>"
+        raw_path.write_text(original, encoding="utf-8")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "collect-device-sample",
+                "--from-file",
+                str(raw_path),
+                "--output",
+                str(raw_path),
+            ],
+        )
+
+        assert main() == 1
+        captured = capsys.readouterr()
+
+        assert "must be different paths" in captured.err
+        assert raw_path.read_text(encoding="utf-8") == original
