@@ -147,8 +147,8 @@ def validate_vlan_id(value: int, field: str) -> int:
 
 def validate_acl_id(value: int) -> int:
     acl_id = int(value)
-    if not 3000 <= acl_id <= 3999:
-        raise ValueError(f"advanced ACL ID out of range: {acl_id}")
+    if not 2000 <= acl_id <= 3999:
+        raise ValueError(f"numeric IPv4 ACL ID out of range: {acl_id}")
     return acl_id
 
 
@@ -225,7 +225,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         action="append",
         default=[],
-        help="Isolated H3C advanced IPv4 ACL ID to delete after ACL acceptance. May be repeated.",
+        help="Isolated H3C numeric IPv4 ACL ID to delete after ACL acceptance. May be repeated.",
     )
     parser.add_argument("--unbind-acl-interface", help="Interface to unbind a test ACL from.")
     parser.add_argument(
@@ -237,7 +237,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--unbind-acl-id",
         type=int,
-        help="Isolated H3C advanced IPv4 ACL ID to unbind from --unbind-acl-interface.",
+        help="Isolated H3C numeric IPv4 ACL ID to unbind from --unbind-acl-interface.",
     )
     parser.add_argument("--description-interface", help="Interface description to restore or clear.")
     parser.add_argument("--description", help="Description text to restore.")
@@ -323,7 +323,7 @@ def build_payloads(args: argparse.Namespace) -> list[tuple[str, str, str | list[
             )
         )
     for acl_id in args.delete_acl:
-        payloads.append(("netconf", f"delete advanced IPv4 ACL {acl_id}", build_acl_delete_payload(acl_id)))
+        payloads.append(("netconf", f"delete IPv4 ACL {acl_id}", build_acl_delete_payload(acl_id)))
     if not payloads:
         raise SystemExit("no cleanup operation requested")
     return payloads

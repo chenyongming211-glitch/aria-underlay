@@ -470,7 +470,9 @@ is `2998-2999`, but the actual candidate must come from live readback.
 2. Configure only source-based `ip` rules.
 
 Basic IPv4 ACL rules must not set destination, source port, or destination port
-matches. Keep rule descriptions short and ASCII for first-device validation.
+matches. On H3C S6800 Comware 7.1.070 R2612P06, `IPv4BasicRules/Rule`
+does not accept `Description`; keep rule description unset and validate only the
+ACL group description.
 Set `ARIA_UNDERLAY_TEST_ACL_KIND=basic_ipv4` and unset any destination or port
 match variables inherited from the advanced ACL example:
 
@@ -487,7 +489,7 @@ unset ARIA_UNDERLAY_ACL_RULE_DESTINATION
 unset ARIA_UNDERLAY_ACL_RULE_DESTINATION_WILDCARD
 unset ARIA_UNDERLAY_ACL_RULE_SOURCE_PORT_EQ
 unset ARIA_UNDERLAY_ACL_RULE_DESTINATION_PORT_EQ
-export ARIA_UNDERLAY_ACL_RULE_DESCRIPTION="aria isolated basic acl rule"
+unset ARIA_UNDERLAY_ACL_RULE_DESCRIPTION
 ```
 
 3. Run the real apply probe, then read back `top/ACL`.
@@ -496,7 +498,7 @@ Acceptance requires:
 
 - The test ACL exists under the Basic IPv4 rule family.
 - The ACL description matches when configured.
-- The test rule sequence, action, source, and rule description match.
+- The test rule sequence, action, and source match.
 - No destination or port match is present in readback.
 - No ACL binding has been added.
 

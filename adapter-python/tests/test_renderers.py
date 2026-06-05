@@ -449,7 +449,6 @@ def test_h3c_renderer_builds_ipv4_basic_acl_edit_config_document():
                             action="permit",
                             protocol="ip",
                             source=_AclEndpoint("192.0.2.0", "0.0.0.255"),
-                            description="allow redacted source",
                         )
                     ],
                 )
@@ -470,12 +469,40 @@ def test_h3c_renderer_builds_ipv4_basic_acl_edit_config_document():
     assert basic_rules[0].find(f"{{{ns}}}RuleID").text == "5"
     assert basic_rules[0].find(f"{{{ns}}}Action").text == "2"
     assert basic_rules[0].find(f"{{{ns}}}ProtocolType") is None
-    assert basic_rules[0].find(f"{{{ns}}}Description").text == "allow redacted source"
+    assert basic_rules[0].find(f"{{{ns}}}Description") is None
     assert (
         basic_rules[0].find(f"{{{ns}}}SrcIPv4/{{{ns}}}SrcIPv4Addr").text
         == "192.0.2.0"
     )
     assert basic_rules[0].find(f"{{{ns}}}DstIPv4") is None
+
+
+def test_h3c_renderer_rejects_ipv4_basic_acl_rule_description():
+    with pytest.raises(
+        ValueError,
+        match="basic ACL rule descriptions are not supported",
+    ):
+        H3cRenderer().render_edit_config(
+            _DesiredState(
+                vlans=[],
+                interfaces=[],
+                acls=[
+                    _Acl(
+                        acl_id=2001,
+                        kind="basic_ipv4",
+                        rules=[
+                            _AclRule(
+                                sequence=5,
+                                action="permit",
+                                protocol="ip",
+                                source=_AclEndpoint("192.0.2.0", "0.0.0.255"),
+                                description="unsupported on S6800",
+                            )
+                        ],
+                    )
+                ],
+            )
+        )
 
 
 def test_h3c_renderer_builds_interface_acl_binding_document():

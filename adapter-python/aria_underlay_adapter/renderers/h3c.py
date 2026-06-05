@@ -382,6 +382,8 @@ class H3cRenderer:
         elif protocol != "ip":
             raise ValueError("H3C IPv4 basic ACL rules must use ip protocol")
         description = _optional_text(rule, "description")
+        if kind == "basic_ipv4" and description is not None:
+            raise ValueError("H3C IPv4 basic ACL rule descriptions are not supported")
         if description is not None:
             children.append(
                 XmlElement("Description", namespace=self.ACL_NAMESPACE, children=[description])

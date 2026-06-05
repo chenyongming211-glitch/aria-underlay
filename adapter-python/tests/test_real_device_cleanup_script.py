@@ -66,6 +66,19 @@ def test_acl_delete_payload_uses_netconf_delete_operation():
     assert group.find("{http://www.h3c.com/netconf/config:1.0}GroupID").text == "3999"
 
 
+def test_basic_acl_delete_payload_uses_netconf_delete_operation():
+    cleanup = _load_cleanup_module()
+
+    payload = cleanup.build_acl_delete_payload(2999)
+    root = ElementTree.fromstring(payload)
+    group = root.find(".//{http://www.h3c.com/netconf/config:1.0}Group")
+
+    assert group is not None
+    assert group.attrib["{urn:ietf:params:xml:ns:netconf:base:1.0}operation"] == "delete"
+    assert group.find("{http://www.h3c.com/netconf/config:1.0}GroupType").text == "1"
+    assert group.find("{http://www.h3c.com/netconf/config:1.0}GroupID").text == "2999"
+
+
 def test_acl_binding_delete_payload_uses_netconf_delete_operation():
     cleanup = _load_cleanup_module()
 
@@ -107,7 +120,7 @@ def test_acl_binding_cleanup_runs_before_acl_delete():
     payloads = cleanup.build_payloads(args)
 
     assert payloads[0][1] == "unbind ACL 3999 inbound from GigabitEthernet1/0/18"
-    assert payloads[1][1] == "delete advanced IPv4 ACL 3999"
+    assert payloads[1][1] == "delete IPv4 ACL 3999"
 
 
 def test_interface_description_cleanup_payload_restores_description():
