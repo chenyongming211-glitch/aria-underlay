@@ -397,6 +397,7 @@ unset ARIA_UNDERLAY_ACCESS_INTERFACE
 unset ARIA_UNDERLAY_TRUNK_INTERFACE
 unset ARIA_UNDERLAY_TEST_VLAN
 export ARIA_UNDERLAY_TEST_ACL_ID=<absent-acl-id>
+export ARIA_UNDERLAY_TEST_ACL_KIND=advanced_ipv4
 export ARIA_UNDERLAY_TEST_ACL_DESCRIPTION="aria isolated acl"
 export ARIA_UNDERLAY_ACL_RULE_SEQUENCE=10
 export ARIA_UNDERLAY_ACL_RULE_ACTION=permit
@@ -470,6 +471,24 @@ is `2998-2999`, but the actual candidate must come from live readback.
 
 Basic IPv4 ACL rules must not set destination, source port, or destination port
 matches. Keep rule descriptions short and ASCII for first-device validation.
+Set `ARIA_UNDERLAY_TEST_ACL_KIND=basic_ipv4` and unset any destination or port
+match variables inherited from the advanced ACL example:
+
+```bash
+export ARIA_UNDERLAY_TEST_ACL_ID=<absent-basic-acl-id>
+export ARIA_UNDERLAY_TEST_ACL_KIND=basic_ipv4
+export ARIA_UNDERLAY_TEST_ACL_DESCRIPTION="aria isolated basic acl"
+export ARIA_UNDERLAY_ACL_RULE_SEQUENCE=10
+export ARIA_UNDERLAY_ACL_RULE_ACTION=permit
+export ARIA_UNDERLAY_ACL_RULE_PROTOCOL=ip
+export ARIA_UNDERLAY_ACL_RULE_SOURCE=192.0.2.1
+export ARIA_UNDERLAY_ACL_RULE_SOURCE_WILDCARD=0.0.0.0
+unset ARIA_UNDERLAY_ACL_RULE_DESTINATION
+unset ARIA_UNDERLAY_ACL_RULE_DESTINATION_WILDCARD
+unset ARIA_UNDERLAY_ACL_RULE_SOURCE_PORT_EQ
+unset ARIA_UNDERLAY_ACL_RULE_DESTINATION_PORT_EQ
+export ARIA_UNDERLAY_ACL_RULE_DESCRIPTION="aria isolated basic acl rule"
+```
 
 3. Run the real apply probe, then read back `top/ACL`.
 

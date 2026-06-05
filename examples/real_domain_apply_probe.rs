@@ -169,6 +169,7 @@ fn desired_acls() -> Result<Vec<AclIntent>, Box<dyn std::error::Error>> {
         return Ok(Vec::new());
     };
     let acl_id = acl_id.parse::<u16>()?;
+    let kind = acl_kind(optional_env("ARIA_UNDERLAY_TEST_ACL_KIND").as_deref())?;
     let rule = AclRule {
         sequence: env_u16("ARIA_UNDERLAY_ACL_RULE_SEQUENCE", 10)?,
         action: acl_action(
@@ -200,7 +201,7 @@ fn desired_acls() -> Result<Vec<AclIntent>, Box<dyn std::error::Error>> {
 
     Ok(vec![AclIntent {
         acl_id,
-        kind: AclKind::AdvancedIpv4,
+        kind,
         name: None,
         description: optional_env("ARIA_UNDERLAY_TEST_ACL_DESCRIPTION"),
         rules: vec![rule],
@@ -413,6 +414,24 @@ fn acl_protocol(value: &str) -> Result<AclProtocol, Box<dyn std::error::Error>> 
     }
 }
 
+fn acl_kind(value: Option<&str>) -> Result<AclKind, Box<dyn std::error::Error>> {
+    match value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("advanced_ipv4")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "advanced_ipv4" | "ipv4_advanced" | "advanced" => Ok(AclKind::AdvancedIpv4),
+        "basic_ipv4" | "ipv4_basic" | "basic" => Ok(AclKind::BasicIpv4),
+        other => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unsupported ACL kind {other}"),
+        )
+        .into()),
+    }
+}
+
 fn acl_direction(value: &str) -> Result<AclDirection, Box<dyn std::error::Error>> {
     match value.trim().to_ascii_lowercase().as_str() {
         "inbound" | "in" => Ok(AclDirection::Inbound),
@@ -479,4 +498,39 @@ fn parse_vlan_list(value: String) -> Result<Vec<u16>, Box<dyn std::error::Error>
         .into());
     }
     Ok(vlans)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn acl_kind_defaults_to_advanced_ipv4() {
+        assert_eq!(
+            acl_kind(None).expect("default ACL kind should parse"),
+            AclKind::AdvancedIpv4
+        );
+        assert_eq!(
+            acl_kind(Some("")).expect("empty ACL kind should parse"),
+            AclKind::AdvancedIpv4
+        );
+    }
+
+    #[test]
+    fn acl_kind_accepts_basic_ipv4_for_real_device_probe() {
+        assert_eq!(
+            acl_kind(Some("basic_ipv4")).expect("basic ACL kind should parse"),
+            AclKind::BasicIpv4
+        );
+        assert_eq!(
+            acl_kind(Some("basic")).expect("basic ACL alias should parse"),
+            AclKind::BasicIpv4
+        );
+    }
+
+    #[test]
+    fn acl_kind_rejects_unknown_value() {
+        let error = acl_kind(Some("named")).expect_err("named ACL is not supported");
+        assert!(error.to_string().contains("unsupported ACL kind named"));
+    }
 }
