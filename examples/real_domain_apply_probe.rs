@@ -4,7 +4,8 @@ use std::io;
 use aria_underlay::api::request::{ApplyDomainIntentRequest, ApplyOptions};
 use aria_underlay::api::{AriaUnderlayService, UnderlayService};
 use aria_underlay::device::{DeviceInventory, HostKeyPolicy, RegisterDeviceRequest};
-use aria_underlay::engine::diff::ChangeOp;
+use aria_underlay::engine::diff::{ChangeOp, ChangeSet};
+use aria_underlay::engine::normalize::canonical_interface_name;
 use aria_underlay::intent::interface::InterfaceIntent;
 use aria_underlay::intent::vlan::VlanIntent;
 use aria_underlay::intent::{
@@ -12,8 +13,8 @@ use aria_underlay::intent::{
     UnderlayTopology,
 };
 use aria_underlay::model::{
-    AclAction, AclDirection, AclEndpoint, AclKind, AclProtocol, AclRule, AdminState, DeviceId,
-    DeviceRole, PortMode, Vendor,
+    AclAction, AclBinding, AclDirection, AclEndpoint, AclKind, AclProtocol, AclRule, AdminState,
+    DeviceId, DeviceRole, PortMode, Vendor,
 };
 use aria_underlay::state::drift::DriftPolicy;
 
@@ -263,7 +264,7 @@ fn ensure_requested_acls_are_creates(
 }
 
 fn ensure_requested_acl_bindings_are_creates(
-    change_sets: &[aria_underlay::engine::diff::ChangeSet],
+    change_sets: &[ChangeSet],
     bindings: &[AclBindingIntent],
 ) -> Result<(), Box<dyn std::error::Error>> {
     for binding in bindings {
@@ -274,9 +275,7 @@ fn ensure_requested_acl_bindings_are_creates(
                 matches!(
                     op,
                     ChangeOp::CreateAclBinding(created)
-                        if created.interface_name == binding.interface_name
-                            && created.direction == binding.direction
-                            && created.acl_id == binding.acl_id
+                        if acl_binding_create_matches_request(created, binding)
                 )
             });
         if !created {
@@ -291,6 +290,13 @@ fn ensure_requested_acl_bindings_are_creates(
         }
     }
     Ok(())
+}
+
+fn acl_binding_create_matches_request(created: &AclBinding, requested: &AclBindingIntent) -> bool {
+    canonical_interface_name(&created.interface_name)
+        == canonical_interface_name(&requested.interface_name)
+        && created.direction == requested.direction
+        && created.acl_id == requested.acl_id
 }
 
 fn desired_interfaces(
@@ -532,5 +538,39 @@ mod tests {
     fn acl_kind_rejects_unknown_value() {
         let error = acl_kind(Some("named")).expect_err("named ACL is not supported");
         assert!(error.to_string().contains("unsupported ACL kind named"));
+    }
+
+    #[test]
+    fn acl_binding_create_check_accepts_canonical_interface_alias() {
+        let created = AclBinding {
+            interface_name: "GE1/0/30".into(),
+            direction: AclDirection::Inbound,
+            acl_id: 3999,
+        };
+        let requested = AclBindingIntent {
+            device_id: DeviceId("member-a".into()),
+            interface_name: "GigabitEthernet1/0/30".into(),
+            direction: AclDirection::Inbound,
+            acl_id: 3999,
+        };
+
+        assert!(acl_binding_create_matches_request(&created, &requested));
+    }
+
+    #[test]
+    fn acl_binding_create_check_still_rejects_different_direction() {
+        let created = AclBinding {
+            interface_name: "GE1/0/30".into(),
+            direction: AclDirection::Outbound,
+            acl_id: 3999,
+        };
+        let requested = AclBindingIntent {
+            device_id: DeviceId("member-a".into()),
+            interface_name: "GigabitEthernet1/0/30".into(),
+            direction: AclDirection::Inbound,
+            acl_id: 3999,
+        };
+
+        assert!(!acl_binding_create_matches_request(&created, &requested));
     }
 }
