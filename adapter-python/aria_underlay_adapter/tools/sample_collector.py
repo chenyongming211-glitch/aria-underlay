@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import sys
 import hashlib
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -289,7 +290,7 @@ def collect_and_sanitize_sample(
     password: str,
     output_path: Path,
     *,
-    hostkey_verify: bool = False,
+    hostkey_verify: bool = True,
 ) -> SanitizationReport:
     """Collect device configuration and save sanitized sample.
 
@@ -364,13 +365,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Collect and sanitize device configuration samples",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
         epilog="""
 Examples:
-  # Collect from H3C device
+  # Collect from H3C device (prompts for password)
   collect-device-sample --device 10.0.0.1 --user admin --output h3c-sample.xml
 
-  # With custom port
-  collect-device-sample --device 10.0.0.1 --port 830 --user admin --output sample.xml
+  # Non-interactive password source
+  export ARIA_SAMPLE_PASSWORD=...
+  collect-device-sample --device 10.0.0.1 --user admin --password-env ARIA_SAMPLE_PASSWORD --output sample.xml
 
   # From saved raw XML (no device connection)
   collect-device-sample --from-file raw.xml --output sanitized.xml
@@ -392,8 +395,8 @@ Examples:
         help="NETCONF username",
     )
     parser.add_argument(
-        "--password",
-        help="NETCONF password (will prompt if not provided)",
+        "--password-env",
+        help="Environment variable containing the NETCONF password",
     )
     parser.add_argument(
         "--output",
@@ -407,9 +410,9 @@ Examples:
         help="Sanitize existing XML file instead of connecting to device",
     )
     parser.add_argument(
-        "--verify-hostkey",
+        "--skip-hostkey-verify",
         action="store_true",
-        help="Verify SSH host key (default: skip verification)",
+        help="Skip SSH host key verification (unsafe; lab use only)",
     )
 
     args = parser.parse_args()
@@ -485,11 +488,26 @@ Examples:
     if not args.device or not args.user:
         parser.error("--device and --user are required when not using --from-file")
 
-    password = args.password
-    if not password:
+    password = ""
+    if args.password_env:
+        password = os.environ.get(args.password_env, "")
+        if not password:
+            print(
+                f"Error: Password environment variable is not set: {args.password_env}",
+                file=sys.stderr,
+            )
+            return 1
+    else:
         import getpass
 
         password = getpass.getpass(f"Password for {args.user}@{args.device}: ")
+
+    if args.skip_hostkey_verify:
+        print(
+            "WARNING: SSH host key verification is disabled; use only in lab "
+            "or after separately verifying the device identity.",
+            file=sys.stderr,
+        )
 
     try:
         collect_and_sanitize_sample(
@@ -498,7 +516,7 @@ Examples:
             username=args.user,
             password=password,
             output_path=args.output,
-            hostkey_verify=args.verify_hostkey,
+            hostkey_verify=not args.skip_hostkey_verify,
         )
         return 0
     except Exception as e:

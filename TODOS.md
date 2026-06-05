@@ -122,10 +122,9 @@
 
 ## P3: 待修 — 2026-06-05 deferred bug hardening
 
-**状态**：当前有效列表见 `docs/bug-inventory-current-2026-06-05.md`。这些不是 P0/P1 事务正确性 bug，主要是 sample collector CLI 安全策略和 adapter 输入一致性 hardening。#15、#16、#17-remain 已在第一批清理中修复；#18、#20、#12 已在第二批清理中修复。
+**状态**：当前有效列表见 `docs/bug-inventory-current-2026-06-05.md`。这些不是 P0/P1 事务正确性 bug，主要是 adapter 输入一致性 hardening。#15、#16、#17-remain 已在第一批清理中修复；#18、#20、#12 已在第二批清理中修复；#13、#14 已在第三批清理中修复。
 
 **建议顺序**：
-- 第三批：sample collector CLI 安全策略：#13、#14。
 - 第四批：adapter 输入语义一致性：#11、#19。
 
 **不阻塞**：

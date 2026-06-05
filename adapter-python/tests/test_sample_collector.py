@@ -3,6 +3,7 @@ import sys
 import pytest
 from xml.etree import ElementTree
 
+import aria_underlay_adapter.tools.sample_collector as sample_collector_module
 from aria_underlay_adapter.tools.sample_collector import (
     SampleCollector,
     SanitizationReport,
@@ -382,6 +383,105 @@ class TestSampleCollector:
 
 class TestSampleCollectorCli:
     """Tests for sample collector CLI safety behavior."""
+
+    def test_cli_rejects_password_argument(self, tmp_path, monkeypatch, capsys):
+        raw_path = tmp_path / "raw.xml"
+        output_path = tmp_path / "sanitized.xml"
+        raw_path.write_text("<config/>", encoding="utf-8")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "collect-device-sample",
+                "--from-file",
+                str(raw_path),
+                "--output",
+                str(output_path),
+                "--password",
+                "secret",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        captured = capsys.readouterr()
+
+        assert exc_info.value.code == 2
+        assert "unrecognized arguments: --password" in captured.err
+        assert not output_path.exists()
+
+    def test_device_collection_verifies_hostkey_by_default(
+        self, tmp_path, monkeypatch
+    ):
+        calls = {}
+
+        def fake_collect(**kwargs):
+            calls.update(kwargs)
+            return SanitizationReport()
+
+        monkeypatch.setenv("ARIA_SAMPLE_PASSWORD", "secret")
+        monkeypatch.setattr(
+            sample_collector_module,
+            "collect_and_sanitize_sample",
+            fake_collect,
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "collect-device-sample",
+                "--device",
+                "10.0.0.1",
+                "--user",
+                "admin",
+                "--password-env",
+                "ARIA_SAMPLE_PASSWORD",
+                "--output",
+                str(tmp_path / "sample.xml"),
+            ],
+        )
+
+        assert main() == 0
+        assert calls["password"] == "secret"
+        assert calls["hostkey_verify"] is True
+
+    def test_device_collection_requires_explicit_warning_for_skipped_hostkey(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        calls = {}
+
+        def fake_collect(**kwargs):
+            calls.update(kwargs)
+            return SanitizationReport()
+
+        monkeypatch.setenv("ARIA_SAMPLE_PASSWORD", "secret")
+        monkeypatch.setattr(
+            sample_collector_module,
+            "collect_and_sanitize_sample",
+            fake_collect,
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "collect-device-sample",
+                "--device",
+                "10.0.0.1",
+                "--user",
+                "admin",
+                "--password-env",
+                "ARIA_SAMPLE_PASSWORD",
+                "--skip-hostkey-verify",
+                "--output",
+                str(tmp_path / "sample.xml"),
+            ],
+        )
+
+        assert main() == 0
+        captured = capsys.readouterr()
+
+        assert calls["hostkey_verify"] is False
+        assert "WARNING: SSH host key verification is disabled" in captured.err
 
     def test_from_file_rejects_non_utf8_input(self, tmp_path, monkeypatch, capsys):
         raw_path = tmp_path / "raw.xml"

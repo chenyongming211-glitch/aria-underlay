@@ -70,8 +70,8 @@ Python 负责厂商适配和设备脏活
 已知 bug 状态：
 
 - 当前有效清单见 [当前缺陷 / 技术债清单 (2026-06-05)](docs/bug-inventory-current-2026-06-05.md)。
-- 2026-05-31 全面 code review 发现的 22 个 bug 中，#1-#10、#12、#15-#18、#20 和 #22 已关闭；#21 的旧碰撞描述已核实为过期。
-- 当前没有已知 P0/P1 事务正确性或 recovery 崩溃安全 open bug；剩余 4 个 confirmed-open 项均为 P3/deferred hardening，主要集中在 sample collector CLI 安全策略和少量 adapter 输入一致性。
+- 2026-05-31 全面 code review 发现的 22 个 bug 中，#1-#10、#12-#18、#20 和 #22 已关闭；#21 的旧碰撞描述已核实为过期。
+- 当前没有已知 P0/P1 事务正确性或 recovery 崩溃安全 open bug；剩余 2 个 confirmed-open 项均为 P3/deferred hardening，集中在少量 adapter 输入一致性。
 - Python Adapter gRPC TLS/mTLS 已支持：通过 `ARIA_UNDERLAY_ADAPTER_TLS_CERT_FILE`、`ARIA_UNDERLAY_ADAPTER_TLS_KEY_FILE` 启用 TLS；可选 `ARIA_UNDERLAY_ADAPTER_TLS_CA_CERT_FILE` 启用 mTLS 客户端证书验证。Rust `AdapterClientPool` 支持 `TlsConfig` 用于 `https://` endpoint。默认仍为 insecure loopback 以保持向后兼容。
 
 仍然明确不是完整生产闭环：
