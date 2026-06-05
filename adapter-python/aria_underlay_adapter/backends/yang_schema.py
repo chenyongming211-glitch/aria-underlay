@@ -180,14 +180,14 @@ def _extract_schema_text(rpc_reply) -> str:
 def _extract_namespace(schema_text: str) -> str:
     """Extract the YANG module namespace from the schema text.
 
-    Looks for ``namespace "..."`` or ``namespace '...'`` in the first
-    2000 characters. Handles both multi-line and single-line schemas.
+    Looks for ``namespace "..."`` or ``namespace '...'`` across the schema
+    text. Handles both multi-line and single-line schemas.
     """
     if not schema_text:
         return ""
     import re
-    header = schema_text[:2000]
-    match = re.search(r'namespace\s+["\']([^"\']+)["\']', header)
+
+    match = re.search(r'namespace\s+["\']([^"\']+)["\']', schema_text)
     if match:
         return match.group(1)
     return ""
@@ -283,29 +283,38 @@ def load_yang_library(
 
     index = json.loads(index_path.read_text(encoding="utf-8"))
     modules: list[YangSchemaResult] = []
+    warnings: list[str] = []
     for entry in index.get("modules", []):
         name = entry.get("name", "")
         revision = entry.get("revision", "")
         schema_text = ""
-        if entry.get("schema_downloaded", False):
+        schema_downloaded = entry.get("schema_downloaded", False)
+        schema_size_bytes = entry.get("schema_size_bytes", 0)
+        error = entry.get("error", "")
+        if schema_downloaded:
             filename = _yang_filename(name, revision)
             schema_path = library_dir / filename
             if schema_path.exists():
                 schema_text = schema_path.read_text(encoding="utf-8")
+            else:
+                schema_downloaded = False
+                schema_size_bytes = 0
+                error = f"missing schema file: {filename}"
+                warnings.append(f"YANG schema index entry skipped {name}: {error}")
         modules.append(
             YangSchemaResult(
                 name=name,
                 revision=revision,
                 namespace=entry.get("namespace", ""),
                 schema_text=schema_text,
-                schema_size_bytes=entry.get("schema_size_bytes", 0),
-                schema_downloaded=entry.get("schema_downloaded", False),
+                schema_size_bytes=schema_size_bytes,
+                schema_downloaded=schema_downloaded,
                 format=entry.get("format", "yang"),
-                error=entry.get("error", ""),
+                error=error,
             )
         )
 
-    return YangCollectionResult(modules=modules)
+    return YangCollectionResult(modules=modules, warnings=warnings)
 
 
 def _library_dir_for_device(
@@ -330,6 +339,9 @@ def _default_library_root() -> Path:
 def _safe_path_component(value: str) -> str:
     """Sanitize a vendor/model/version string for use as a directory name."""
     cleaned = value.strip().replace("/", "_").replace("\\", "_")
+    while ".." in cleaned:
+        cleaned = cleaned.replace("..", "_")
+    cleaned = cleaned.strip()
     if not cleaned:
         return "unknown"
     return cleaned

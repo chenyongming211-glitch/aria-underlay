@@ -183,17 +183,14 @@ Python 适配器 可以进程无状态，但事务产物不能无状态。
 
 ### 2.7 Deferred bug backlog note - 2026-06-03
 
-After the completed fixes for #1-#10, #15-#17, and #22 from `docs/bug-inventory-2026-05-31-code-review.md`, the current effective bug status is maintained in `docs/bug-inventory-current-2026-06-05.md`. #21's original collision analysis is stale because current device-name anonymization uses a larger hash output space.
+After the completed fixes for #1-#10, #12, #15-#18, #20, and #22 from `docs/bug-inventory-2026-05-31-code-review.md`, the current effective bug status is maintained in `docs/bug-inventory-current-2026-06-05.md`. #21's original collision analysis is stale because current device-name anonymization uses a larger hash output space.
 
 Deferred confirmed-open backlog:
 
 - #11: `_port_mode_to_proto` numeric `kind` handling or parser contract clarification.
-- #12: YANG namespace extraction beyond the first 2000 characters.
 - #13: sample collector `--password` process-list exposure.
 - #14: sample collector host-key verification default/warning behavior.
-- #18: YANG library path component `..` sanitization.
 - #19: Python NETCONF confirmed-commit timeout zero-value semantics.
-- #20: `load_yang_library` missing schema file consistency.
 
 #22 was fixed before starting request-level idempotency, domain / region orchestration, failed endpoint retry APIs, and apply-after-verify reporting.
 

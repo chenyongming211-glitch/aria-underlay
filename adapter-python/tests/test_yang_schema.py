@@ -10,6 +10,7 @@ import pytest
 from aria_underlay_adapter.backends.yang_schema import (
     YangCollectionResult,
     YangSchemaResult,
+    _safe_path_component,
     collect_yang_schemas,
     load_yang_library,
     save_yang_library,
@@ -67,6 +68,26 @@ def test_collect_yang_schemas_downloads_advertised_modules():
         assert module.schema_downloaded is True
         assert module.schema_size_bytes > 0
         assert module.namespace  # each schema text declares a namespace
+
+
+def test_collect_yang_schemas_extracts_namespace_beyond_short_preamble():
+    schema = (
+        "module late-namespace {\n"
+        + ("  // vendor extension preamble\n" * 120)
+        + '  namespace "http://example.com/late-namespace";\n'
+        + "}"
+    )
+    session = _mock_session_with_schemas({"late-namespace": schema})
+
+    result = collect_yang_schemas(
+        session,
+        [
+            "http://example.com/yang?module=late-namespace&revision=2026-06-05",
+        ],
+    )
+
+    module = result.modules[0]
+    assert module.namespace == "http://example.com/late-namespace"
 
 
 def test_collect_yang_schemas_records_errors_for_unsupported_modules():
@@ -172,6 +193,50 @@ def test_load_yang_library_returns_none_when_missing(tmp_path: Path):
         base_dir=str(tmp_path),
     )
     assert result is None
+
+
+def test_load_yang_library_marks_missing_downloaded_schema_as_skipped(tmp_path: Path):
+    collection = YangCollectionResult(
+        modules=[
+            YangSchemaResult(
+                name="h3c-vlan",
+                revision="2021-07-15",
+                namespace="http://www.h3c.com/yang/vlan",
+                schema_text='module h3c-vlan { namespace "http://www.h3c.com/yang/vlan"; }',
+                schema_size_bytes=59,
+                schema_downloaded=True,
+                format="yang",
+            ),
+        ]
+    )
+    library_dir = save_yang_library(
+        collection,
+        vendor="h3c",
+        model="S5560",
+        os_version="Comware7",
+        base_dir=str(tmp_path),
+    )
+    (library_dir / "h3c-vlan@2021-07-15.yang").unlink()
+
+    loaded = load_yang_library(
+        vendor="h3c",
+        model="S5560",
+        os_version="Comware7",
+        base_dir=str(tmp_path),
+    )
+
+    assert loaded is not None
+    module = loaded.modules[0]
+    assert module.schema_downloaded is False
+    assert module.schema_text == ""
+    assert "missing schema file" in module.error
+    assert any("missing schema file" in warning for warning in loaded.warnings)
+
+
+def test_safe_path_component_removes_parent_directory_segments():
+    assert ".." not in _safe_path_component("..")
+    assert ".." not in _safe_path_component("../S5560")
+    assert ".." not in _safe_path_component("Comware/../7")
 
 
 def test_yang_schema_result_to_summary_dict():
