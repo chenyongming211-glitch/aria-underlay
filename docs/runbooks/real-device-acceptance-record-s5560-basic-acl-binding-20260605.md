@@ -6,7 +6,7 @@
 | --- | --- |
 | Date | 2026-06-05 |
 | Operator | Codex with user-approved lab resources |
-| Repository commit SHA | `TBD_FINAL_COMMIT` |
+| Repository commit SHA | `f0c156cd0ad1d620765d3b17a6bcb691357c620c` |
 | GitHub Actions run | Basic ACL probe artifact from `26991348307`; ACL binding probe artifact from `26999407466` |
 | Adapter image | Local Python adapter from this workspace, real NETCONF mode |
 | Device IP | `10.58.8.120` lab switch |
