@@ -87,7 +87,7 @@ before a write surface is marked accepted.
 
 | Model | OS version | Read-only evidence | NETCONF transaction capability | Recommended strategy | Write acceptance status |
 | --- | --- | --- | --- | --- | --- |
-| S6800-54QF | 7.1.070 Release 2612P06 | `adapter-python/tests/fixtures/state_parsers/real_samples/h3c/comware7/20260604-s6800-54qf-r2612p06-vlan-interface.redacted.xml` | `:validate`, `:writable-running`, `:rollback-on-error`; no `:candidate`; no `:confirmed-commit` | `RunningRollbackOnError` | access VLAN write/readback/cleanup accepted on 2026-06-04; see `docs/runbooks/real-device-acceptance-record-s6800-20260604.md` |
+| S6800-54QF | 7.1.070 Release 2612P06 | `adapter-python/tests/fixtures/state_parsers/real_samples/h3c/comware7/20260604-s6800-54qf-r2612p06-vlan-interface.redacted.xml` | `:validate`, `:writable-running`, `:rollback-on-error`; no `:candidate`; no `:confirmed-commit` | `RunningRollbackOnError` | access VLAN write/readback/cleanup accepted on 2026-06-04; Basic IPv4 ACL write/readback/cleanup accepted on 2026-06-05; see `docs/runbooks/real-device-acceptance-record-s6800-20260604.md` and `docs/runbooks/real-device-acceptance-record-s6800-basic-acl-20260605.md` |
 
 ## Resource Selection
 
@@ -456,10 +456,9 @@ Read back the ACL scope again. The test ACL must be absent.
 
 ## Basic IPv4 ACL Acceptance
 
-Basic IPv4 ACL has offline renderer/parser/mock acceptance coverage, but it is
-not yet marked accepted on real H3C hardware. Use this case only on an approved
-lab switch and keep it isolated from all packet-filter, QoS, PBR, NQA, and BGP
-consumers.
+Basic IPv4 ACL has offline renderer/parser/mock acceptance coverage and S6800
+write/readback/cleanup acceptance. Use this case only on an approved lab switch
+and keep it isolated from all packet-filter, QoS, PBR, NQA, and BGP consumers.
 
 1. Choose an absent numeric Basic IPv4 ACL id.
 
