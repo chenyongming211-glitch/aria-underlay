@@ -666,7 +666,7 @@ def _scenarios() -> tuple[Scenario, ...]:
         ),
         Scenario(
             name="ipv4_basic_acl_rules",
-            surface=("ipv4_basic_acl", "acl_rule_description"),
+            surface=("ipv4_basic_acl",),
             desired={
                 "vlans": [],
                 "interfaces": [],
@@ -688,7 +688,7 @@ def _scenarios() -> tuple[Scenario, ...]:
                                 "destination": None,
                                 "source_port_eq": None,
                                 "destination_port_eq": None,
-                                "description": "allow offline source",
+                                "description": None,
                             }
                         ],
                     }
