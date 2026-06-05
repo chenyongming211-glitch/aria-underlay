@@ -6,7 +6,7 @@
 
 **状态**：已完成并通过 GitHub Actions（run `26683402767`）。生产事务路径通过 `TxJournalRecord::transition_phase()` 进行 phase 变更；`with_phase()` 仍保留给测试 fixture 和后续 public-field 封装迁移。
 
-**前置条件**：当前 bug 清单已经更新到 `docs/bug-inventory-current-2026-05-30.md`，无已知非条件 open bug；Python Adapter gRPC TLS/mTLS 已修复。Rust 本地无 `cargo`，Rust 编译/测试必须通过 GitHub Actions 验证。
+**前置条件**：当前有效 bug 清单已经更新到 `docs/bug-inventory-current-2026-06-05.md`。事务正确性 / recovery 崩溃安全方向无已知 P0/P1 open bug；剩余 P3 hardening 已单独记录。Python Adapter gRPC TLS/mTLS 已修复。Rust 本地无 `cargo`，Rust 编译/测试必须通过 GitHub Actions 验证。
 
 **已完成内容**：本阶段只做显式状态机验证，没有和 Product HTTP TLS 或 worker event bus 打包。详细方案见 `~/.gstack/projects/chenyongming211-glitch-aria-underlay/ceo-plans/structural-refactor-20260530.md`，但以本节修正后的边界为准。
 
@@ -117,6 +117,22 @@
 **工作量**：M
 **优先级**：P1（高风险功能写入前的只读证据层）
 **依赖**：DeviceModelProfile / ChangePlan / Offline H3C Acceptance Runner 已落地
+
+---
+
+## P3: 待修 — 2026-06-05 deferred bug hardening
+
+**状态**：当前有效列表见 `docs/bug-inventory-current-2026-06-05.md`。这些不是 P0/P1 事务正确性 bug，主要是 sample collector、YANG schema 边界和 adapter 输入一致性 hardening。
+
+**建议顺序**：
+- 先修和真实样本采集直接相关的 sample collector / YANG schema 小问题：#15、#16、#17-remain、#18、#20。
+- 再修 #12，使 YANG namespace extraction 更适合大型厂商 schema。
+- #11、#13、#14、#19 后置，除非 sample collector 要变成多人/生产环境工具。
+
+**不阻塞**：
+- 不阻塞 BGP read-only audit / real-sample calibration。
+- 不阻塞 H3C ACL 已有验收路径。
+- 不应在没有真实设备 path-level evidence 前推进 BGP 写配置。
 
 ---
 

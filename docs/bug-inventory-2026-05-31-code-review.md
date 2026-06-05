@@ -1,6 +1,10 @@
 # 代码 Review 缺陷清单 — 2026-05-31
 
 > 本次 review 覆盖 Rust Core（事务引擎、状态机、worker、GC、recovery）和 Python Adapter（NETCONF backend、driver、tools、YANG schema），共发现并核实 22 个 bug。
+>
+> 状态说明：本文保留 2026-05-31 的原始 review 证据和修复建议。当前有效
+> open/closed 状态见 `docs/bug-inventory-current-2026-06-05.md`；不要再把本文
+> 的 “下一步行动” 当作当前 open bug 队列。
 
 ## 核实基线
 
@@ -430,7 +434,7 @@ match = re.search(r'namespace\s+["\']([^"\']+)["\']', header)
 
 ---
 
-## 下一步行动
+## 下一步行动（历史记录，已由 2026-06-05 当前清单取代）
 
 - [ ] 创建 GitHub issue 跟踪 #1-#6
 - [ ] 为 #1（状态机转换 bug）编写复现测试

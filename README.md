@@ -69,10 +69,9 @@ Python 负责厂商适配和设备脏活
 
 已知 bug 状态：
 
-- 2026-05-30 前有效清单见 [旧缺陷清单](docs/bug-inventory-current-2026-05-30.md)，该清单中所有已确认 bug 已清零。
-- 2026-05-31 全面 code review 发现 22 个新 bug（1 CRITICAL / 5 HIGH / 6 MEDIUM / 10 LOW），详见 [Code Review 缺陷清单](docs/bug-inventory-2026-05-31-code-review.md)。
-- CRITICAL bug（非 ConfirmedCommit 策略的成功事务报告 InDoubt）已修复（commit `23f0e27`）。
-- 剩余 21 个 bug（5 HIGH / 6 MEDIUM / 10 LOW）待修复，已按优先级记录。
+- 当前有效清单见 [当前缺陷 / 技术债清单 (2026-06-05)](docs/bug-inventory-current-2026-06-05.md)。
+- 2026-05-31 全面 code review 发现的 22 个 bug 中，#1-#10 和 #22 已关闭；#17 的 XML attribute IP 脱敏已关闭但 secret/community attribute hardening 仍保留；#21 的旧碰撞描述已核实为过期。
+- 当前没有已知 P0/P1 事务正确性或 recovery 崩溃安全 open bug；剩余约 10 个 confirmed-open 项均为 P3/deferred hardening，主要集中在 sample collector、YANG schema 边界和少量 adapter 输入一致性。
 - Python Adapter gRPC TLS/mTLS 已支持：通过 `ARIA_UNDERLAY_ADAPTER_TLS_CERT_FILE`、`ARIA_UNDERLAY_ADAPTER_TLS_KEY_FILE` 启用 TLS；可选 `ARIA_UNDERLAY_ADAPTER_TLS_CA_CERT_FILE` 启用 mTLS 客户端证书验证。Rust `AdapterClientPool` 支持 `TlsConfig` 用于 `https://` endpoint。默认仍为 insecure loopback 以保持向后兼容。
 
 仍然明确不是完整生产闭环：
@@ -89,7 +88,8 @@ Python 负责厂商适配和设备脏活
 - [需求说明](docs/aria-underlay-requirements.md)
 - [开发方案](docs/aria-underlay-development-plan.md)
 - [详细开发计划](docs/implementation-plan.md)
-- [Code Review 缺陷清单 (2026-05-31)](docs/bug-inventory-2026-05-31-code-review.md) — **最新**，22 个 bug 记录
+- [当前缺陷 / 技术债清单 (2026-06-05)](docs/bug-inventory-current-2026-06-05.md) — **最新有效 bug 状态**
+- [Code Review 缺陷清单 (2026-05-31)](docs/bug-inventory-2026-05-31-code-review.md) — 原始 22 个 bug review 记录
 - [旧缺陷清单 (2026-05-30)](docs/bug-inventory-current-2026-05-30.md) — 历史基线，已清零
 - [真实设备验收手册](docs/runbooks/real-device-acceptance.md)
 - [离线 H3C 验收 runner](docs/runbooks/offline-h3c-acceptance.md)
