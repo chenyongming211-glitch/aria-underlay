@@ -179,10 +179,14 @@ class NetconfBackedDriver:
         prepared_candidate_checksum: str | None = None,
     ):
         try:
+            if strategy == pb2.TRANSACTION_STRATEGY_CONFIRMED_COMMIT:
+                confirm_timeout_secs = _validated_confirm_timeout_secs(
+                    confirm_timeout_secs
+                )
             result = self._backend.commit_candidate(
                 strategy=strategy,
                 tx_id=tx_id,
-                confirm_timeout_secs=confirm_timeout_secs or 120,
+                confirm_timeout_secs=confirm_timeout_secs,
                 prepared_candidate_checksum=prepared_candidate_checksum,
             )
         except AdapterError as error:
@@ -451,7 +455,7 @@ class NetconfBackedDriver:
             raise _parsed_state_error(f"{path} must be an object")
 
         raw_kind = mode.get("kind")
-        kind = raw_kind.strip().lower() if isinstance(raw_kind, str) else raw_kind
+        kind = _normalized_port_mode_kind(raw_kind)
         if kind == "trunk":
             native_vlan = _optional_parsed_vlan_id(
                 mode.get("native_vlan"),
@@ -742,6 +746,28 @@ def _parsed_state_error(summary: str) -> AdapterError:
         raw_error_summary=summary,
         retryable=False,
     )
+
+
+def _normalized_port_mode_kind(raw_kind):
+    if isinstance(raw_kind, str):
+        return raw_kind.strip().lower()
+    if raw_kind == pb2.PORT_MODE_KIND_ACCESS:
+        return "access"
+    if raw_kind == pb2.PORT_MODE_KIND_TRUNK:
+        return "trunk"
+    return raw_kind
+
+
+def _validated_confirm_timeout_secs(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise AdapterError(
+            code="NETCONF_INVALID_CONFIRM_TIMEOUT",
+            message="confirmed-commit timeout must be a positive integer",
+            normalized_error="invalid confirmed commit timeout",
+            raw_error_summary=f"confirm_timeout_secs={value!r}",
+            retryable=False,
+        )
+    return value
 
 
 def _failed_result(error: AdapterError):

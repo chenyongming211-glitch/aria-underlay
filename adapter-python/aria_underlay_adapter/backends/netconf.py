@@ -89,6 +89,18 @@ TRANSACTION_STRATEGY_CANDIDATE_COMMIT = 2
 TRANSACTION_STRATEGY_RUNNING_ROLLBACK_ON_ERROR = 3
 
 
+def _validate_confirm_timeout_secs(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise AdapterError(
+            code="NETCONF_INVALID_CONFIRM_TIMEOUT",
+            message="NETCONF confirmed-commit timeout must be a positive integer",
+            normalized_error="invalid confirmed commit timeout",
+            raw_error_summary=f"confirm_timeout_secs={value!r}",
+            retryable=False,
+        )
+    return value
+
+
 class CandidateConfigRenderer(Protocol):
     production_ready: bool
 
@@ -491,6 +503,7 @@ class NcclientNetconfBackend:
                     raw_error_summary="CommitRequest.context.tx_id is empty",
                     retryable=False,
                 )
+            confirm_timeout_secs = _validate_confirm_timeout_secs(confirm_timeout_secs)
 
         if strategy == TRANSACTION_STRATEGY_RUNNING_ROLLBACK_ON_ERROR:
             return CandidateCommitResult()
@@ -611,7 +624,7 @@ class NcclientNetconfBackend:
             try:
                 session.commit(
                     confirmed=True,
-                    timeout=confirm_timeout_secs or 120,
+                    timeout=confirm_timeout_secs,
                     persist=tx_id,
                 )
             except Exception as exc:

@@ -6,7 +6,7 @@
 
 **状态**：已完成并通过 GitHub Actions（run `26683402767`）。生产事务路径通过 `TxJournalRecord::transition_phase()` 进行 phase 变更；`with_phase()` 仍保留给测试 fixture 和后续 public-field 封装迁移。
 
-**前置条件**：当前有效 bug 清单已经更新到 `docs/bug-inventory-current-2026-06-05.md`。事务正确性 / recovery 崩溃安全方向无已知 P0/P1 open bug；剩余 P3 hardening 已单独记录。Python Adapter gRPC TLS/mTLS 已修复。Rust 本地无 `cargo`，Rust 编译/测试必须通过 GitHub Actions 验证。
+**前置条件**：当前有效 bug 清单已经更新到 `docs/bug-inventory-current-2026-06-05.md`。当前无 confirmed-open bug；PBR/BGP 写配置仍需真实设备 path-level evidence 后再开放。Python Adapter gRPC TLS/mTLS 已修复。Rust 本地无 `cargo`，Rust 编译/测试必须通过 GitHub Actions 验证。
 
 **已完成内容**：本阶段只做显式状态机验证，没有和 Product HTTP TLS 或 worker event bus 打包。详细方案见 `~/.gstack/projects/chenyongming211-glitch-aria-underlay/ceo-plans/structural-refactor-20260530.md`，但以本节修正后的边界为准。
 
@@ -120,12 +120,13 @@
 
 ---
 
-## P3: 待修 — 2026-06-05 deferred bug hardening
+## P3: 已完成 — 2026-06-05 deferred bug hardening
 
-**状态**：当前有效列表见 `docs/bug-inventory-current-2026-06-05.md`。这些不是 P0/P1 事务正确性 bug，主要是 adapter 输入一致性 hardening。#15、#16、#17-remain 已在第一批清理中修复；#18、#20、#12 已在第二批清理中修复；#13、#14 已在第三批清理中修复。
+**状态**：当前有效列表见 `docs/bug-inventory-current-2026-06-05.md`。#15、#16、#17-remain 已在第一批清理中修复；#18、#20、#12 已在第二批清理中修复；#13、#14 已在第三批清理中修复；#11、#19 已在第四批清理中修复。
 
-**建议顺序**：
-- 第四批：adapter 输入语义一致性：#11、#19。
+**结果**：
+- 当前无 confirmed-open bug。
+- 不把 PBR/BGP read-only parser/offline evidence 等同于生产写配置证据。
 
 **不阻塞**：
 - 不阻塞 BGP read-only audit / real-sample calibration。

@@ -1241,6 +1241,25 @@ def test_commit_candidate_starts_confirmed_commit_with_persist_token():
     ]
 
 
+def test_commit_candidate_rejects_zero_confirm_timeout_before_touching_device():
+    session = _RecordingSession()
+    backend = _BackendWithSession(session)
+
+    try:
+        backend.commit_candidate(
+            strategy=TRANSACTION_STRATEGY_CONFIRMED_COMMIT,
+            tx_id="tx-1",
+            confirm_timeout_secs=0,
+        )
+    except AdapterError as error:
+        assert error.code == "NETCONF_INVALID_CONFIRM_TIMEOUT"
+        assert error.retryable is False
+    else:
+        raise AssertionError("zero confirmed-commit timeout should fail closed")
+
+    assert session.calls == []
+
+
 def test_commit_candidate_rejects_confirmed_commit_without_tx_id():
     session = _RecordingSession()
     backend = _BackendWithSession(session)

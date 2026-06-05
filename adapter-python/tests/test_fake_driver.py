@@ -116,6 +116,39 @@ def test_invalid_port_mode_kind_returns_adapter_error():
         raise AssertionError("invalid port mode should fail")
 
 
+def test_port_mode_accepts_numeric_proto_kind_values():
+    driver = FakeDriver(profile="confirmed")
+
+    access = driver._port_mode_to_proto(
+        {"kind": pb2.PORT_MODE_KIND_ACCESS, "access_vlan": 100}
+    )
+    trunk = driver._port_mode_to_proto(
+        {
+            "kind": pb2.PORT_MODE_KIND_TRUNK,
+            "native_vlan": 10,
+            "allowed_vlans": [10, 20],
+        }
+    )
+
+    assert access.kind == pb2.PORT_MODE_KIND_ACCESS
+    assert access.access_vlan == 100
+    assert trunk.kind == pb2.PORT_MODE_KIND_TRUNK
+    assert trunk.native_vlan == 10
+    assert list(trunk.allowed_vlans) == [10, 20]
+
+
+def test_confirmed_commit_rejects_zero_timeout_in_driver():
+    response = FakeDriver(profile="confirmed").commit(
+        tx_id="tx-1",
+        device=_Device(),
+        strategy=pb2.TRANSACTION_STRATEGY_CONFIRMED_COMMIT,
+        confirm_timeout_secs=0,
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
+    assert response.result.errors[0].code == "NETCONF_INVALID_CONFIRM_TIMEOUT"
+
+
 def test_force_unlock_calls_driver_when_break_glass_enabled():
     service = UnderlayAdapterService(_Registry(FakeDriver(profile="confirmed")))
     response = service.ForceUnlock(
