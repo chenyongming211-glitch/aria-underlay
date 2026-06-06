@@ -4,8 +4,9 @@ use aria_underlay::intent::validation::{
 };
 use aria_underlay::intent::vlan::VlanIntent;
 use aria_underlay::intent::{
-    AclBindingIntent, AclIntent, ManagementEndpointIntent, SwitchIntent, SwitchMemberIntent,
-    SwitchPairIntent, UnderlayDomainIntent, UnderlayTopology,
+    AclBindingIntent, AclIntent, BgpNeighborDeleteIntent, BgpNeighborIntent,
+    BgpProcessDeleteIntent, BgpProcessIntent, ManagementEndpointIntent, SwitchIntent,
+    SwitchMemberIntent, SwitchPairIntent, UnderlayDomainIntent, UnderlayTopology,
 };
 use aria_underlay::model::{
     AclAction, AclConfig, AclDirection, AclEndpoint, AclKind, AclProtocol, AclRule, AdminState,
@@ -286,6 +287,66 @@ fn domain_accepts_explicit_delete_intents_for_isolated_targets() {
     validate_underlay_domain_intent(&intent).expect("delete intent should validate");
 }
 
+#[test]
+fn domain_rejects_invalid_bgp_neighbor_address() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    intent.bgp_neighbors = vec![bgp_neighbor_intent("default", "not-an-ip")];
+
+    let err = validate_underlay_domain_intent(&intent).unwrap_err();
+
+    assert!(format!("{err}").contains("invalid BGP neighbor address not-an-ip"));
+}
+
+#[test]
+fn domain_rejects_invalid_bgp_neighbor_delete_address() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    intent.delete_bgp_neighbors = vec![BgpNeighborDeleteIntent {
+        device_id: DeviceId("member-a".into()),
+        vrf: "default".into(),
+        address: "10.0.0.999".into(),
+    }];
+
+    let err = validate_underlay_domain_intent(&intent).unwrap_err();
+
+    assert!(format!("{err}").contains("invalid BGP neighbor delete address 10.0.0.999"));
+}
+
+#[test]
+fn domain_rejects_invalid_bgp_router_id() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    intent.bgp_processes = vec![bgp_process_intent("default", Some("foo"))];
+
+    let err = validate_underlay_domain_intent(&intent).unwrap_err();
+
+    assert!(format!("{err}").contains("invalid BGP router_id foo"));
+}
+
+#[test]
+fn domain_rejects_blank_bgp_router_id() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    intent.bgp_processes = vec![bgp_process_intent("default", Some("   "))];
+
+    let err = validate_underlay_domain_intent(&intent).unwrap_err();
+
+    assert!(format!("{err}").contains("BGP router_id is empty"));
+}
+
+#[test]
+fn domain_rejects_bgp_neighbor_upsert_under_deleted_process() {
+    let mut intent = domain_intent(UnderlayTopology::StackSingleManagementIp);
+    intent.delete_bgp_processes = vec![BgpProcessDeleteIntent {
+        device_id: DeviceId("member-a".into()),
+        vrf: "blue".into(),
+    }];
+    intent.bgp_neighbors = vec![bgp_neighbor_intent("blue", "203.0.113.10")];
+
+    let err = validate_underlay_domain_intent(&intent).unwrap_err();
+
+    assert!(format!("{err}").contains(
+        "cannot delete BGP process member-a/blue and upsert BGP neighbor member-a/blue/203.0.113.10"
+    ));
+}
+
 fn switch_pair_intent() -> SwitchPairIntent {
     SwitchPairIntent {
         pair_id: "pair-a".into(),
@@ -406,5 +467,26 @@ fn acl_binding_intent(acl_id: u16) -> AclBindingIntent {
         interface_name: "GE1/0/1".into(),
         direction: AclDirection::Inbound,
         acl_id,
+    }
+}
+
+fn bgp_process_intent(vrf: &str, router_id: Option<&str>) -> BgpProcessIntent {
+    BgpProcessIntent {
+        device_id: DeviceId("member-a".into()),
+        vrf: vrf.into(),
+        local_as: 65_000,
+        router_id: router_id.map(str::to_string),
+    }
+}
+
+fn bgp_neighbor_intent(vrf: &str, address: &str) -> BgpNeighborIntent {
+    BgpNeighborIntent {
+        device_id: DeviceId("member-a".into()),
+        vrf: vrf.into(),
+        address: address.into(),
+        remote_as: 65_001,
+        description: None,
+        import_policy: None,
+        export_policy: None,
     }
 }
