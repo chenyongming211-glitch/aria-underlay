@@ -436,7 +436,7 @@ fn change_plan_without_profile_defaults_to_vendor_private_and_empty_unsupported(
 }
 
 #[test]
-fn change_plan_with_write_rejected_profile_reports_unsupported_paths() {
+fn acl_change_is_not_rejected_when_pbr_write_readiness_is_rejected() {
     let profile = DeviceModelProfile {
         profile_id: "h3c:S5560:Comware7".to_string(),
         vendor: Vendor::H3c,
@@ -444,11 +444,8 @@ fn change_plan_with_write_rejected_profile_reports_unsupported_paths() {
         os_version: "Comware7".to_string(),
         paths: vec![],
         pbr_write_readiness: WriteReadiness::WriteRejected,
-        bgp_write_readiness: WriteReadiness::WriteRejected,
-        rejection_reasons: vec![
-            "pbr: no path-level write evidence".to_string(),
-            "bgp: no path-level writing evidence".to_string(),
-        ],
+        bgp_write_readiness: WriteReadiness::WriteSafe,
+        rejection_reasons: vec!["pbr: no path-level write evidence".to_string()],
         yang_module_count: 0,
     };
     let change_set = ChangeSet {
@@ -458,9 +455,9 @@ fn change_plan_with_write_rejected_profile_reports_unsupported_paths() {
 
     let plan = build_change_plan_with_profile(&change_set, Some(&profile));
 
-    assert_eq!(plan.unsupported_paths.len(), 1);
-    assert!(plan.unsupported_paths[0].starts_with("pbr:"));
-    assert_eq!(plan.write_decision, DryRunWriteDecision::Rejected);
+    assert_eq!(plan.blast_radius, BlastRadius::PolicyReference);
+    assert!(plan.unsupported_paths.is_empty());
+    assert_eq!(plan.write_decision, DryRunWriteDecision::AllowedVendorPrivate);
 }
 
 #[test]
@@ -498,14 +495,14 @@ fn change_plan_with_write_safe_profile_reports_standard_model_decision() {
 }
 
 #[test]
-fn change_plan_with_read_only_profile_reports_read_only_for_policy_changes() {
+fn acl_change_is_not_read_only_when_bgp_write_readiness_is_read_only() {
     let profile = DeviceModelProfile {
         profile_id: "h3c:S5560:Comware7".to_string(),
         vendor: Vendor::H3c,
         model: "S5560".to_string(),
         os_version: "Comware7".to_string(),
         paths: vec![],
-        pbr_write_readiness: WriteReadiness::ReadOnly,
+        pbr_write_readiness: WriteReadiness::WriteSafe,
         bgp_write_readiness: WriteReadiness::ReadOnly,
         rejection_reasons: vec![],
         yang_module_count: 0,
@@ -517,6 +514,7 @@ fn change_plan_with_read_only_profile_reports_read_only_for_policy_changes() {
 
     let plan = build_change_plan_with_profile(&change_set, Some(&profile));
 
-    assert_eq!(plan.write_decision, DryRunWriteDecision::ReadOnly);
+    assert_eq!(plan.blast_radius, BlastRadius::PolicyReference);
     assert!(plan.unsupported_paths.is_empty());
+    assert_eq!(plan.write_decision, DryRunWriteDecision::AllowedVendorPrivate);
 }
