@@ -139,7 +139,8 @@ def format_summary(report: dict[str, Any]) -> str:
             lines.append(
                 "- {}: passed [{}], changed={}, write_decision={}, "
                 "blast_radius={}, vrfs={}, bgp_neighbors={}, "
-                "route_policies={}, pbr_policies={}, acl_refs={}, interfaces={}".format(
+                "route_policies={}, missing_route_policies={}, "
+                "pbr_policies={}, acl_refs={}, interfaces={}".format(
                     audit["name"],
                     ", ".join(audit["surface"]),
                     str(audit["changed"]).lower(),
@@ -148,6 +149,7 @@ def format_summary(report: dict[str, Any]) -> str:
                     _format_summary_values(touched_scope.get("affected_vrfs", [])),
                     _format_summary_values(touched_scope.get("bgp_neighbors", [])),
                     _format_summary_values(touched_scope.get("route_policy_refs", [])),
+                    _format_summary_values(audit.get("missing_route_policy_refs", [])),
                     _format_summary_values(touched_scope.get("pbr_policy_refs", [])),
                     _format_summary_values(touched_scope.get("acl_refs", [])),
                     _format_summary_values(touched_scope.get("interfaces", [])),
@@ -169,8 +171,8 @@ def format_summary(report: dict[str, Any]) -> str:
             lines.append(
                 "- {}: passed [{}], sample={}, changed={}, "
                 "write_decision={}, blast_radius={}, vrfs={}, "
-                "bgp_neighbors={}, route_policies={}, pbr_policies={}, "
-                "acl_refs={}, interfaces={}".format(
+                "bgp_neighbors={}, route_policies={}, missing_route_policies={}, "
+                "pbr_policies={}, acl_refs={}, interfaces={}".format(
                     audit["name"],
                     ", ".join(audit["surface"]),
                     audit["sample_path"],
@@ -180,6 +182,7 @@ def format_summary(report: dict[str, Any]) -> str:
                     _format_summary_values(touched_scope.get("affected_vrfs", [])),
                     _format_summary_values(touched_scope.get("bgp_neighbors", [])),
                     _format_summary_values(touched_scope.get("route_policy_refs", [])),
+                    _format_summary_values(audit.get("missing_route_policy_refs", [])),
                     _format_summary_values(touched_scope.get("pbr_policy_refs", [])),
                     _format_summary_values(touched_scope.get("acl_refs", [])),
                     _format_summary_values(touched_scope.get("interfaces", [])),
@@ -361,9 +364,13 @@ def _run_pbr_bgp_read_only_audit(parser: H3cStateParser) -> dict[str, Any]:
             "warnings": [],
             "pbr": {},
             "bgp": {},
+            "route_policy_dependencies": [],
+            "missing_route_policy_refs": [],
             "touched_scope": _empty_high_risk_touched_scope(),
             "error": _error_payload(exc),
         }
+    route_policy_dependencies = _bgp_route_policy_dependencies(audit)
+    missing_route_policy_refs = _missing_route_policy_refs(route_policy_dependencies)
 
     return {
         "name": "pbr_bgp_high_risk_read_only",
@@ -378,6 +385,8 @@ def _run_pbr_bgp_read_only_audit(parser: H3cStateParser) -> dict[str, Any]:
             "bgp: no path-level write evidence",
             "pbr: no path-level write evidence",
         ],
+        "route_policy_dependencies": route_policy_dependencies,
+        "missing_route_policy_refs": missing_route_policy_refs,
         "touched_scope": audit["touched_scope"],
         "pbr": audit["pbr"],
         "bgp": audit["bgp"],
@@ -423,6 +432,8 @@ def _run_pbr_bgp_real_sample_audit(
         unsupported_paths.append("bgp: no path-level write evidence")
     if "pbr" in audit["features_present"]:
         unsupported_paths.append("pbr: no path-level write evidence")
+    route_policy_dependencies = _bgp_route_policy_dependencies(audit)
+    missing_route_policy_refs = _missing_route_policy_refs(route_policy_dependencies)
 
     return {
         "name": f"real_sample:{sample.name}",
@@ -436,6 +447,8 @@ def _run_pbr_bgp_real_sample_audit(
         "features_present": audit["features_present"],
         "blast_radius": "routing_control_plane",
         "unsupported_paths": unsupported_paths,
+        "route_policy_dependencies": route_policy_dependencies,
+        "missing_route_policy_refs": missing_route_policy_refs,
         "touched_scope": audit["touched_scope"],
         "pbr": audit["pbr"],
         "bgp": audit["bgp"],
@@ -462,6 +475,8 @@ def _failed_real_sample_audit(sample: Path, exc: Exception) -> dict[str, Any]:
         "warnings": [],
         "pbr": {},
         "bgp": {},
+        "route_policy_dependencies": [],
+        "missing_route_policy_refs": [],
         "touched_scope": _empty_high_risk_touched_scope(),
         "error": _error_payload(exc),
     }
@@ -494,6 +509,47 @@ def _empty_high_risk_audit() -> dict[str, Any]:
         },
         "warnings": ["no PBR/BGP config detected in sample"],
     }
+
+
+def _bgp_route_policy_dependencies(audit: dict[str, Any]) -> list[dict[str, str]]:
+    dependencies: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for detail in audit.get("bgp", {}).get("neighbor_details", []):
+        address = detail.get("address")
+        if not address:
+            continue
+        vrf = detail.get("vrf") or "default"
+        neighbor_node = f"bgp-neighbor {vrf} {address}"
+        for direction, field in (("import", "import_policy"), ("export", "export_policy")):
+            policy = detail.get(field)
+            if not policy:
+                continue
+            dependency = (neighbor_node, policy, direction)
+            if dependency in seen:
+                continue
+            seen.add(dependency)
+            dependencies.append(
+                {
+                    "from": neighbor_node,
+                    "to": f"route-policy {policy}",
+                    "direction": direction,
+                }
+            )
+    return dependencies
+
+
+def _missing_route_policy_refs(
+    route_policy_dependencies: list[dict[str, str]],
+) -> list[str]:
+    refs = []
+    seen = set()
+    for dependency in route_policy_dependencies:
+        policy = dependency["to"].removeprefix("route-policy ").strip()
+        if not policy or policy in seen:
+            continue
+        seen.add(policy)
+        refs.append(policy)
+    return refs
 
 
 def _empty_high_risk_touched_scope() -> dict[str, list[Any]]:

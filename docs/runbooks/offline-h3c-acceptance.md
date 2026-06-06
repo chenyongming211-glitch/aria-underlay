@@ -62,8 +62,11 @@ affected VRFs, BGP AS numbers, neighbors, route-policy references, PBR policy
 references, ACL references, interfaces, raw XML paths, and warnings. BGP audit
 also includes `neighbor_details` with local AS, neighbor address, remote AS,
 session state, import/export policy, VRF, and the raw XML path for each parsed
-neighbor. The report returns `write_decision=read_only` with unsupported paths
-until real path-level write evidence exists.
+neighbor. The report also derives BGP `route_policy_dependencies` and
+`missing_route_policy_refs`; because the offline runner has no SoT evidence
+input, parsed route-policy refs are reported as missing evidence. The report
+returns `write_decision=read_only` with unsupported paths until real path-level
+write evidence exists.
 
 ## PBR/BGP Real-Sample Calibration
 
@@ -88,6 +91,7 @@ reported under `real_sample_audits` with:
 - `write_decision`.
 - structured `touched_scope`.
 - structured BGP `neighbor_details` when BGP nodes are present.
+- BGP `route_policy_dependencies` and `missing_route_policy_refs`.
 - `unsupported_paths`.
 - `warnings`.
 

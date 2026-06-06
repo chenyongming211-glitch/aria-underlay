@@ -52,6 +52,29 @@ pub struct SotPolicyIntent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SotPrefixList {
+    pub device_id: String,
+    pub name: String,
+    pub address_family: String,
+    pub owner: String,
+    pub source: SotSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SotRoutePolicy {
+    pub device_id: String,
+    pub name: String,
+    pub owner: String,
+    #[serde(default)]
+    pub referenced_acl_ids: Vec<u16>,
+    #[serde(default)]
+    pub referenced_prefix_lists: Vec<String>,
+    #[serde(default)]
+    pub referenced_community_lists: Vec<String>,
+    pub source: SotSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SotBgpNeighbor {
     pub device_id: String,
     pub vrf: String,
@@ -68,6 +91,8 @@ pub struct SotSnapshot {
     pub vlans: Vec<SotVlan>,
     pub acls: Vec<SotAcl>,
     pub policy_intents: Vec<SotPolicyIntent>,
+    pub prefix_lists: Vec<SotPrefixList>,
+    pub route_policies: Vec<SotRoutePolicy>,
     pub bgp_neighbors: Vec<SotBgpNeighbor>,
 }
 
@@ -76,8 +101,10 @@ impl SotSnapshot {
         let device_ids = self.validate_devices()?;
         self.validate_interfaces(&device_ids)?;
         self.validate_vlans(&device_ids)?;
-        self.validate_acls(&device_ids)?;
+        let acl_keys = self.validate_acls(&device_ids)?;
         self.validate_policy_intents(&device_ids)?;
+        let prefix_list_keys = self.validate_prefix_lists(&device_ids)?;
+        self.validate_route_policies(&device_ids, &acl_keys, &prefix_list_keys)?;
         self.validate_bgp_neighbors(&device_ids)?;
         Ok(())
     }
@@ -139,7 +166,10 @@ impl SotSnapshot {
         Ok(())
     }
 
-    fn validate_acls(&self, device_ids: &BTreeSet<&str>) -> Result<(), String> {
+    fn validate_acls(
+        &self,
+        device_ids: &BTreeSet<&str>,
+    ) -> Result<BTreeSet<(String, u16)>, String> {
         let mut seen = BTreeSet::new();
         for acl in &self.acls {
             ensure_known_device(
@@ -152,12 +182,12 @@ impl SotSnapshot {
                 &acl.source,
                 format!("SoT acl {}/{} source", acl.device_id, acl.acl_id),
             )?;
-            let key = (acl.device_id.as_str(), acl.acl_id);
-            if !seen.insert(key) {
+            let key = (acl.device_id.clone(), acl.acl_id);
+            if !seen.insert(key.clone()) {
                 return Err(format!("duplicate SoT acl {}/{}", acl.device_id, acl.acl_id));
             }
         }
-        Ok(())
+        Ok(seen)
     }
 
     fn validate_policy_intents(&self, device_ids: &BTreeSet<&str>) -> Result<(), String> {
@@ -180,6 +210,93 @@ impl SotSnapshot {
                     "duplicate SoT policy {}/{}",
                     policy.device_id, policy_id
                 ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_prefix_lists(
+        &self,
+        device_ids: &BTreeSet<&str>,
+    ) -> Result<BTreeSet<(String, String)>, String> {
+        let mut seen = BTreeSet::new();
+        for prefix_list in &self.prefix_lists {
+            ensure_known_device(
+                device_ids,
+                &prefix_list.device_id,
+                format!("SoT prefix-list {}", prefix_list.name),
+            )?;
+            let name = require_non_empty("SoT prefix-list name", &prefix_list.name)?;
+            require_non_empty(
+                format!("SoT prefix-list {name} address_family"),
+                &prefix_list.address_family,
+            )?;
+            require_non_empty(format!("SoT prefix-list {name} owner"), &prefix_list.owner)?;
+            validate_source(
+                &prefix_list.source,
+                format!("SoT prefix-list {}/{} source", prefix_list.device_id, name),
+            )?;
+            let key = (prefix_list.device_id.clone(), name.to_string());
+            if !seen.insert(key) {
+                return Err(format!(
+                    "duplicate SoT prefix-list {}/{}",
+                    prefix_list.device_id, name
+                ));
+            }
+        }
+        Ok(seen)
+    }
+
+    fn validate_route_policies(
+        &self,
+        device_ids: &BTreeSet<&str>,
+        acl_keys: &BTreeSet<(String, u16)>,
+        prefix_list_keys: &BTreeSet<(String, String)>,
+    ) -> Result<(), String> {
+        let mut seen = BTreeSet::new();
+        for policy in &self.route_policies {
+            ensure_known_device(
+                device_ids,
+                &policy.device_id,
+                format!("SoT route policy {}", policy.name),
+            )?;
+            let name = require_non_empty("SoT route policy name", &policy.name)?;
+            require_non_empty(format!("SoT route policy {name} owner"), &policy.owner)?;
+            validate_source(
+                &policy.source,
+                format!("SoT route policy {}/{} source", policy.device_id, name),
+            )?;
+            let key = (policy.device_id.as_str(), name);
+            if !seen.insert(key) {
+                return Err(format!(
+                    "duplicate SoT route policy {}/{}",
+                    policy.device_id, name
+                ));
+            }
+            for acl_id in &policy.referenced_acl_ids {
+                if !acl_keys.contains(&(policy.device_id.clone(), *acl_id)) {
+                    return Err(format!(
+                        "SoT route policy {}/{} references unknown ACL {}",
+                        policy.device_id, name, acl_id
+                    ));
+                }
+            }
+            for prefix_list in &policy.referenced_prefix_lists {
+                let prefix_list =
+                    require_non_empty("SoT route policy referenced_prefix_list", prefix_list)?;
+                if !prefix_list_keys.contains(&(policy.device_id.clone(), prefix_list.to_string()))
+                {
+                    return Err(format!(
+                        "SoT route policy {}/{} references unknown prefix-list {}",
+                        policy.device_id, name, prefix_list
+                    ));
+                }
+            }
+            for community_list in &policy.referenced_community_lists {
+                require_non_empty(
+                    "SoT route policy referenced_community_list",
+                    community_list,
+                )?;
             }
         }
         Ok(())

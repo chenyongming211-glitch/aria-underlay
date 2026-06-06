@@ -91,7 +91,7 @@
 
 ## P1: 进行中 — PBR/BGP read-only parser/audit + BGP dry-run gated intent skeleton
 
-**状态**：初版已落地在 Python adapter：`H3cStateParser` 会从 running XML 中识别 PBR/BGP 高风险配置，输出 `high_risk_audit` 和结构化 `touched_scope`；offline H3C acceptance report 新增 `read_only_audits`，明确 `write_decision=read_only`、`blast_radius=routing_control_plane`、unsupported paths、affected VRFs、BGP AS、BGP neighbors、route-policy refs、PBR policy refs、ACL refs 和 interfaces。BGP 审计已升级到邻居级细节：local AS、remote AS、session state、import/export policy、VRF 和 per-neighbor raw path。PBR/BGP real-sample calibration harness 已接入：可从脱敏 H3C running XML 样本目录生成 `real_sample_audits`；目录缺失或当前无样本时 CI 不失败。BGP intent / dry-run gated skeleton 已接入 domain/proto/ChangePlan：可以表达 BGP process、neighbor 和 route-policy reference，并在缺少 path-level evidence 时结构化拒绝写入。当前仍不生成 PBR/BGP renderer，不进入 adapter 写配置路径。
+**状态**：初版已落地在 Python adapter：`H3cStateParser` 会从 running XML 中识别 PBR/BGP 高风险配置，输出 `high_risk_audit` 和结构化 `touched_scope`；offline H3C acceptance report 新增 `read_only_audits`，明确 `write_decision=read_only`、`blast_radius=routing_control_plane`、unsupported paths、affected VRFs、BGP AS、BGP neighbors、route-policy refs、PBR policy refs、ACL refs 和 interfaces。BGP 审计已升级到邻居级细节：local AS、remote AS、session state、import/export policy、VRF 和 per-neighbor raw path。PBR/BGP real-sample calibration harness 已接入：可从脱敏 H3C running XML 样本目录生成 `real_sample_audits`；目录缺失或当前无样本时 CI 不失败。BGP intent / dry-run gated skeleton 已接入 domain/proto/ChangePlan：可以表达 BGP process、neighbor 和 route-policy reference；ChangePlan 输出 BGP route-policy dependency edges、`route_policy_dependencies` 和 `missing_route_policy_refs`，缺少 policy evidence 或 path-level evidence 时结构化拒绝写入。当前仍不生成 PBR/BGP renderer，不进入 adapter 写配置路径。
 
 **做什么**：先把 PBR/BGP 作为只读审计对象接入 parser 和离线报告，让系统能发现现网中是否已经存在 PBR/BGP、涉及哪些 VRF/neighbor/policy/ACL/interface，以及为什么当前必须拒绝自动写入。
 
@@ -102,11 +102,13 @@
 - Offline H3C acceptance runner 可通过 `--pbr-bgp-sample-dir` 加载脱敏真实样本，输出每个样本的 `real_sample_audits`；样本缺失时保持非失败。
 - PBR 默认 blast radius 为 `policy_reference`；BGP 默认 blast radius 为 `routing_control_plane`。
 - BGP process / neighbor intent 进入 desired state、shadow diff 和 ChangePlan；dry-run 输出 BGP dependency edges、rollback order、routing blast radius 和 unsupported paths。
+- BGP neighbor import/export policy 会进入 ChangePlan route-policy dependency；missing policy evidence 会输出为 `missing_route_policy_refs` 和 `bgp: missing route-policy evidence ...`。
 - 未满足 path-level read/write evidence 时，PBR/BGP 写入保持 read-only/rejected。
 
 **不做**：
 - 不实现 PBR/BGP renderer。
 - 不把 BGP intent 放入 adapter prepare/render/commit 写路径；Python NETCONF backend 收到 BGP desired state 会直接返回 `BGP_WRITE_UNSUPPORTED`。
+- 不把 SoT route-policy / prefix-list evidence 当作 BGP 写入许可；它只用于 dry-run 依赖完整性检查。
 - 不把 parser 识别到的 PBR/BGP 现网节点写入 shadow/expected store。
 - 不声明真实 H3C 设备 PBR/BGP XML 结构已经完整覆盖；真实设备样本到位后继续校准 parser。
 

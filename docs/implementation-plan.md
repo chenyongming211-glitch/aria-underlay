@@ -1124,6 +1124,8 @@ SotSnapshot {
   vlans
   acls
   policies
+  route_policies
+  prefix_lists
   bgp_neighbors
   ownership
   model_profile_refs
@@ -1133,6 +1135,10 @@ SotSnapshot {
 NetBox、Nautobot、上层 Aria API 或文件导入都只能作为 connector。connector 输出
 snapshot，核心事务路径只依赖 snapshot，不依赖外部 SoT 的分页、字段命名或 API
 故障模型。
+
+BGP 相关 SoT 边界只提供依赖证据：route-policy、prefix-list、ACL 引用和来源元数据。
+这些 evidence 可让 ChangePlan 判断 import/export policy 引用是否完整，但不代表设备
+已经具备 BGP 写入能力，也不能绕过 DeviceModelProfile 的 path-level write gate。
 
 #### 12.3.3 ChangePlan
 
