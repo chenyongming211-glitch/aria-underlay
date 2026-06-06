@@ -1,6 +1,6 @@
 use aria_underlay::sot::snapshot::{
-    SotAcl, SotBgpNeighbor, SotDevice, SotInterface, SotPolicyIntent, SotSnapshot, SotSource,
-    SotVlan,
+    SotAcl, SotBgpNeighbor, SotDevice, SotInterface, SotPolicyIntent, SotPrefixList,
+    SotRoutePolicy, SotSnapshot, SotSource, SotVlan,
 };
 
 #[test]
@@ -79,8 +79,43 @@ fn sot_snapshot_expresses_policy_and_bgp_inputs_without_external_connector_types
         Some("h3c:s5560:v7")
     );
     assert_eq!(snapshot.policy_intents[0].owner, "tenant-a");
+    assert_eq!(snapshot.prefix_lists[0].name, "PL-TENANT-A");
+    assert_eq!(snapshot.route_policies[0].name, "RP-IN");
+    assert_eq!(
+        snapshot.route_policies[0].referenced_prefix_lists,
+        vec!["PL-TENANT-A".to_string()]
+    );
+    assert_eq!(snapshot.route_policies[0].referenced_acl_ids, vec![3001]);
     assert_eq!(snapshot.bgp_neighbors[0].remote_as, 65_001);
     assert_eq!(snapshot.bgp_neighbors[0].source.system, "file");
+}
+
+#[test]
+fn sot_snapshot_rejects_route_policy_missing_prefix_list_reference() {
+    let mut snapshot = base_snapshot();
+    snapshot.route_policies[0]
+        .referenced_prefix_lists
+        .push("PL-MISSING".to_string());
+
+    let err = snapshot.validate().unwrap_err();
+
+    assert_eq!(
+        err,
+        "SoT route policy leaf-1/RP-IN references unknown prefix-list PL-MISSING"
+    );
+}
+
+#[test]
+fn sot_snapshot_rejects_route_policy_missing_acl_reference() {
+    let mut snapshot = base_snapshot();
+    snapshot.route_policies[0].referenced_acl_ids.push(3999);
+
+    let err = snapshot.validate().unwrap_err();
+
+    assert_eq!(
+        err,
+        "SoT route policy leaf-1/RP-IN references unknown ACL 3999"
+    );
 }
 
 fn base_snapshot() -> SotSnapshot {
@@ -116,6 +151,22 @@ fn base_snapshot() -> SotSnapshot {
             device_id: "leaf-1".to_string(),
             policy_id: "pbr-tenant-a".to_string(),
             owner: "tenant-a".to_string(),
+            source: source(),
+        }],
+        prefix_lists: vec![SotPrefixList {
+            device_id: "leaf-1".to_string(),
+            name: "PL-TENANT-A".to_string(),
+            address_family: "ipv4".to_string(),
+            owner: "tenant-a".to_string(),
+            source: source(),
+        }],
+        route_policies: vec![SotRoutePolicy {
+            device_id: "leaf-1".to_string(),
+            name: "RP-IN".to_string(),
+            owner: "tenant-a".to_string(),
+            referenced_acl_ids: vec![3001],
+            referenced_prefix_lists: vec!["PL-TENANT-A".to_string()],
+            referenced_community_lists: vec!["CL-TENANT-A".to_string()],
             source: source(),
         }],
         bgp_neighbors: vec![SotBgpNeighbor {

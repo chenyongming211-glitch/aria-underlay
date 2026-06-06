@@ -124,6 +124,19 @@ def test_offline_h3c_acceptance_reports_pbr_bgp_read_only_audit():
                 "bgp: no path-level write evidence",
                 "pbr: no path-level write evidence",
             ],
+            "route_policy_dependencies": [
+                {
+                    "from": "bgp-neighbor tenant-a 192.0.2.1",
+                    "to": "route-policy rp-in",
+                    "direction": "import",
+                },
+                {
+                    "from": "bgp-neighbor tenant-a 192.0.2.1",
+                    "to": "route-policy rp-out",
+                    "direction": "export",
+                },
+            ],
+            "missing_route_policy_refs": ["rp-in", "rp-out"],
             "touched_scope": {
                 "affected_vrfs": ["tenant-a"],
                 "bgp_as_numbers": [65001],
@@ -182,6 +195,7 @@ def test_offline_h3c_acceptance_summary_marks_parser_loop(capsys):
     assert "vrfs=tenant-a" in captured.err
     assert "bgp_neighbors=192.0.2.1" in captured.err
     assert "route_policies=rp-in,rp-out" in captured.err
+    assert "missing_route_policies=rp-in,rp-out" in captured.err
     assert "pbr_policies=pbr-tenant-a" in captured.err
     assert "acl_refs=3999" in captured.err
     assert "interfaces=GigabitEthernet1/0/13" in captured.err
@@ -220,6 +234,22 @@ def test_offline_h3c_acceptance_loads_pbr_bgp_real_samples(tmp_path):
     assert sample_audit["unsupported_paths"] == [
         "bgp: no path-level write evidence",
         "pbr: no path-level write evidence",
+    ]
+    assert sample_audit["route_policy_dependencies"] == [
+        {
+            "from": "bgp-neighbor tenant-b 203.0.113.10",
+            "to": "route-policy rp-redacted-in",
+            "direction": "import",
+        },
+        {
+            "from": "bgp-neighbor tenant-b 203.0.113.10",
+            "to": "route-policy rp-redacted-out",
+            "direction": "export",
+        },
+    ]
+    assert sample_audit["missing_route_policy_refs"] == [
+        "rp-redacted-in",
+        "rp-redacted-out",
     ]
     assert sample_audit["bgp"]["neighbor_details"] == [
         {
