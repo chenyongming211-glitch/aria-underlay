@@ -1,5 +1,14 @@
 # 当前缺陷 / 技术债清单 — 2026-06-05
 
+> ⚠️ **本文已被 2026-06-06 全量代码 review 取代**
+>
+> 最新 bug 清单见 [全量代码 Review 缺陷清单 (2026-06-06)](bug-inventory-2026-06-06-code-review.md)，
+> 发现 26 个新 bug（7 HIGH + 6 MEDIUM + 13 LOW）。
+>
+> ---
+>
+> 以下内容为历史基线，保留作为 2026-05-31 review 后的有效状态记录。
+
 > 当前有效 bug 基线。本文接续 `docs/bug-inventory-2026-05-31-code-review.md`
 > 的 22 项 code-review 缺陷清单，并按 `main` / commit `f28d0ee`
 > 重新核实状态。旧清单保留原始 review 证据，不再直接作为 open bug 队列使用。

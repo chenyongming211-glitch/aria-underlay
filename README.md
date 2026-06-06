@@ -69,9 +69,10 @@ Python 负责厂商适配和设备脏活
 
 已知 bug 状态：
 
-- 当前有效清单见 [当前缺陷 / 技术债清单 (2026-06-05)](docs/bug-inventory-current-2026-06-05.md)。
+- **最新**：2026-06-06 全量代码 review 发现 26 个 bug（7 HIGH + 6 MEDIUM + 13 LOW），详见 [全量代码 Review 缺陷清单 (2026-06-06)](docs/bug-inventory-2026-06-06-code-review.md)。
+- 2026-06-05 基线清单见 [当前缺陷 / 技术债清单 (2026-06-05)](docs/bug-inventory-current-2026-06-05.md)，其中 #1-#20 和 #22 已关闭。
 - 2026-05-31 全面 code review 发现的 22 个 bug 中，#1-#20 和 #22 已关闭；#21 的旧碰撞描述已核实为过期。
-- 当前没有已知 confirmed-open bug；PBR/BGP 写配置仍需真实设备 path-level evidence 后再开放。
+- PBR/BGP 写配置仍需真实设备 path-level evidence 后再开放。
 - Python Adapter gRPC TLS/mTLS 已支持：通过 `ARIA_UNDERLAY_ADAPTER_TLS_CERT_FILE`、`ARIA_UNDERLAY_ADAPTER_TLS_KEY_FILE` 启用 TLS；可选 `ARIA_UNDERLAY_ADAPTER_TLS_CA_CERT_FILE` 启用 mTLS 客户端证书验证。Rust `AdapterClientPool` 支持 `TlsConfig` 用于 `https://` endpoint。默认仍为 insecure loopback 以保持向后兼容。
 
 仍然明确不是完整生产闭环：
@@ -88,7 +89,8 @@ Python 负责厂商适配和设备脏活
 - [需求说明](docs/aria-underlay-requirements.md)
 - [开发方案](docs/aria-underlay-development-plan.md)
 - [详细开发计划](docs/implementation-plan.md)
-- [当前缺陷 / 技术债清单 (2026-06-05)](docs/bug-inventory-current-2026-06-05.md) — **最新有效 bug 状态**
+- [全量代码 Review 缺陷清单 (2026-06-06)](docs/bug-inventory-2026-06-06-code-review.md) — **最新 review 发现的 26 个 bug**
+- [当前缺陷 / 技术债清单 (2026-06-05)](docs/bug-inventory-current-2026-06-05.md) — 2026-05-31 review 后的有效基线
 - [Code Review 缺陷清单 (2026-05-31)](docs/bug-inventory-2026-05-31-code-review.md) — 原始 22 个 bug review 记录
 - [旧缺陷清单 (2026-05-30)](docs/bug-inventory-current-2026-05-30.md) — 历史基线，已清零
 - [真实设备验收手册](docs/runbooks/real-device-acceptance.md)
