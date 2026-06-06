@@ -50,7 +50,8 @@
 - **文件**: `adapter-python/aria_underlay_adapter/backends/netconf.py:508-509, 711-717`
 - **描述**: `prepare_candidate` 对 writable-running 设备直接将变更写入 running config，但 `rollback_candidate` 对 `RUNNING_ROLLBACK_ON_ERROR` 策略直接抛 `NETCONF_ROLLBACK_STRATEGY_UNSUPPORTED`
 - **影响**: prepare 成功后无法回滚（实际影响取决于 Rust coordinator 是否会对 writable-running 路径调用 rollback）
-- **状态**: 部分确认 — `commit_candidate` 对该策略正确返回 no-op，但 rollback 路径未实现
+- **状态**: 已修复 — `fix: reject writable-running rollback prepare`
+- **修复说明**: 暂不把 writable-running rollback-on-error 当作可写事务路径；prepare 阶段 fail-closed，避免直接写 running 后无法跨设备补偿回滚
 
 ### H5: BGP neighbor 地址缺少 IPv4 格式验证
 
@@ -213,10 +214,10 @@
 3. **M1+M2** — Shadow 级联删除与 BGP neighbor stage 已修复
 4. **M3+M4** — Python verify enum crash 与 H3C interface delete 重复输出已修复
 5. **H3** — Apply lock scope 已按 domain 串行化，防止跨 scope 绕过互斥
+6. **H4** — writable-running rollback-on-error 已在 prepare 阶段 fail-closed
 
 **P2（剩余设计/低频正确性项）：**
-1. **H4** — writable-running rollback 实现
-2. **M5** — 幂等性持久化失败时的 in-memory slot 处理
+1. **M5** — 幂等性持久化失败时的 in-memory slot 处理
 
 **P3（边缘/低影响）：**
 - L1-L13 可纳入后续迭代，其中 L1-L3 需要 proto schema 扩展

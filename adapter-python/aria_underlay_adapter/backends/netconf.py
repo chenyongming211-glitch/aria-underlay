@@ -294,8 +294,16 @@ class NcclientNetconfBackend:
                     and capability.supports_writable_running
                     and capability.supports_rollback_on_error
                 ):
-                    self._edit_running_with_rollback_on_error(session, desired_state)
-                    return PreparedCandidateResult()
+                    raise AdapterError(
+                        code="NETCONF_PREPARE_STRATEGY_UNSUPPORTED",
+                        message="NETCONF prepare requires rollback after successful prepare",
+                        normalized_error="prepare strategy unsupported",
+                        raw_error_summary=(
+                            "writable-running rollback-on-error cannot provide post-prepare "
+                            "rollback for multi-device transaction compensation"
+                        ),
+                        retryable=False,
+                    )
                 if not capability.supports_candidate:
                     raise AdapterError(
                         code="NETCONF_PREPARE_STRATEGY_UNSUPPORTED",
