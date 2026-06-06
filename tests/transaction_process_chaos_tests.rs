@@ -1092,6 +1092,10 @@ fn domain_intent(vlan_id: u16) -> UnderlayDomainIntent {
         delete_interfaces: vec![],
         delete_acl_ids: vec![],
         delete_acl_bindings: vec![],
+        bgp_processes: vec![],
+        bgp_neighbors: vec![],
+        delete_bgp_processes: vec![],
+        delete_bgp_neighbors: vec![],
     }
 }
 
@@ -1156,6 +1160,10 @@ fn multi_endpoint_domain_intent(vlan_id: u16) -> UnderlayDomainIntent {
         delete_interfaces: vec![],
         delete_acl_ids: vec![],
         delete_acl_bindings: vec![],
+        bgp_processes: vec![],
+        bgp_neighbors: vec![],
+        delete_bgp_processes: vec![],
+        delete_bgp_neighbors: vec![],
     }
 }
 

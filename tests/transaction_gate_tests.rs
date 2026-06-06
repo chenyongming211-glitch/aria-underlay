@@ -1313,6 +1313,10 @@ fn domain_intent_for_endpoint(
         delete_interfaces: vec![],
         delete_acl_ids: vec![],
         delete_acl_bindings: vec![],
+        bgp_processes: vec![],
+        bgp_neighbors: vec![],
+        delete_bgp_processes: vec![],
+        delete_bgp_neighbors: vec![],
     }
 }
 
@@ -1392,6 +1396,10 @@ fn two_endpoint_domain_intent() -> UnderlayDomainIntent {
         delete_interfaces: Vec::new(),
         delete_acl_ids: Vec::new(),
         delete_acl_bindings: Vec::new(),
+        bgp_processes: Vec::new(),
+        bgp_neighbors: Vec::new(),
+        delete_bgp_processes: Vec::new(),
+        delete_bgp_neighbors: Vec::new(),
     }
 }
 

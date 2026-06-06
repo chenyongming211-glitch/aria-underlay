@@ -126,5 +126,9 @@ fn stack_single_management_ip_intent() -> UnderlayDomainIntent {
         delete_interfaces: vec![],
         delete_acl_ids: vec![],
         delete_acl_bindings: vec![],
+        bgp_processes: vec![],
+        bgp_neighbors: vec![],
+        delete_bgp_processes: vec![],
+        delete_bgp_neighbors: vec![],
     }
 }

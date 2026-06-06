@@ -859,6 +859,10 @@ fn two_endpoint_domain_intent() -> UnderlayDomainIntent {
         delete_interfaces: Vec::new(),
         delete_acl_ids: Vec::new(),
         delete_acl_bindings: Vec::new(),
+        bgp_processes: Vec::new(),
+        bgp_neighbors: Vec::new(),
+        delete_bgp_processes: Vec::new(),
+        delete_bgp_neighbors: Vec::new(),
     }
 }
 

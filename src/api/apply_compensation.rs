@@ -308,6 +308,30 @@ pub fn filter_domain_intent_to_endpoints(
             .filter(|binding| selected_members.contains(&binding.device_id))
             .cloned()
             .collect(),
+        bgp_processes: intent
+            .bgp_processes
+            .iter()
+            .filter(|process| selected_members.contains(&process.device_id))
+            .cloned()
+            .collect(),
+        bgp_neighbors: intent
+            .bgp_neighbors
+            .iter()
+            .filter(|neighbor| selected_members.contains(&neighbor.device_id))
+            .cloned()
+            .collect(),
+        delete_bgp_processes: intent
+            .delete_bgp_processes
+            .iter()
+            .filter(|process| selected_members.contains(&process.device_id))
+            .cloned()
+            .collect(),
+        delete_bgp_neighbors: intent
+            .delete_bgp_neighbors
+            .iter()
+            .filter(|neighbor| selected_members.contains(&neighbor.device_id))
+            .cloned()
+            .collect(),
     })
 }
 
