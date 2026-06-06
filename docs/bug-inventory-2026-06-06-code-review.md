@@ -56,6 +56,7 @@
 - **文件**: `src/intent/validation.rs:452, 479`
 - **描述**: BGP neighbor address 只做 `validate_non_empty`，不验证 IPv4 格式。对比 `validate_acl_endpoint`（line 545）使用 `parse::<Ipv4Addr>()`
 - **影响**: `"not-an-ip"` 或 `"10.0.0.999"` 可通过验证直达设备
+- **状态**: 已修复 — `fix: validate bgp intent addresses and process conflicts`
 - **修复建议**: 添加 `address.parse::<Ipv4Addr>()` 验证
 
 ### H6: BGP router_id 零验证
@@ -63,6 +64,7 @@
 - **文件**: `src/intent/validation.rs:390-415`
 - **描述**: `validate_bgp_processes` 从未检查 `router_id: Option<String>`。`normalize.rs:94` 只处理 `Some("")`，不处理 `Some("   ")`（纯空白）或 `Some("foo")`
 - **影响**: 无效 router_id 可直达设备导致 NETCONF 错误
+- **状态**: 已修复 — `fix: validate bgp intent addresses and process conflicts`
 - **修复建议**: 当 `router_id` 为 `Some(value)` 时解析为 `Ipv4Addr`，同时 trim 空白
 
 ### H7: BGP process 删除与 neighbor 新增不交叉验证
@@ -70,6 +72,7 @@
 - **文件**: `src/intent/validation.rs:195-206`
 - **描述**: 可以在同一 intent 中删除 BGP process（`delete_bgp_processes`）又在该 VRF 下新增 neighbor（`bgp_neighbors`），无交叉验证
 - **影响**: Change plan 会先删 process 再创建 neighbor，设备上会失败
+- **状态**: 已修复 — `fix: validate bgp intent addresses and process conflicts`
 - **修复建议**: 添加交叉验证，检查 neighbor 的 VRF 不在 process delete 列表中
 
 ## MEDIUM — 特定条件下导致错误结果

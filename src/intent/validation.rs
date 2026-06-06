@@ -201,6 +201,7 @@ pub fn validate_underlay_domain_intent(intent: &UnderlayDomainIntent) -> Underla
     validate_bgp_neighbors(
         &intent.bgp_neighbors,
         &intent.delete_bgp_neighbors,
+        &intent.delete_bgp_processes,
         &member_ids,
         "underlay domain",
     )?;
@@ -405,6 +406,11 @@ fn validate_bgp_processes(
                 process.device_id.0, vrf
             )));
         }
+        if let Some(router_id) = &process.router_id {
+            let router_id = router_id.trim();
+            validate_non_empty("BGP router_id", router_id)?;
+            validate_ipv4_text("BGP router_id", router_id)?;
+        }
         let key = (process.device_id.clone(), vrf.to_string());
         if !upserts.insert(key) {
             return Err(UnderlayError::InvalidIntent(format!(
@@ -441,9 +447,14 @@ fn validate_bgp_processes(
 fn validate_bgp_neighbors(
     neighbors: &[BgpNeighborIntent],
     deletes: &[BgpNeighborDeleteIntent],
+    process_deletes: &[BgpProcessDeleteIntent],
     member_ids: &BTreeSet<DeviceId>,
     context: &str,
 ) -> UnderlayResult<()> {
+    let deleted_process_keys = process_deletes
+        .iter()
+        .map(|delete| (delete.device_id.clone(), delete.vrf.trim().to_string()))
+        .collect::<BTreeSet<_>>();
     let mut upserts = BTreeSet::new();
     for neighbor in neighbors {
         validate_device_id("BGP neighbor device_id", &neighbor.device_id)?;
@@ -452,6 +463,13 @@ fn validate_bgp_neighbors(
         validate_non_empty("BGP neighbor address", &neighbor.address)?;
         let vrf = neighbor.vrf.trim();
         let address = neighbor.address.trim();
+        validate_ipv4_text("BGP neighbor address", address)?;
+        if deleted_process_keys.contains(&(neighbor.device_id.clone(), vrf.to_string())) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} cannot delete BGP process {}/{} and upsert BGP neighbor {}/{}/{} in the same request",
+                neighbor.device_id.0, vrf, neighbor.device_id.0, vrf, address
+            )));
+        }
         if neighbor.remote_as == 0 {
             return Err(UnderlayError::InvalidIntent(format!(
                 "{context} BGP neighbor {}/{}/{} has invalid remote_as 0",
@@ -479,6 +497,7 @@ fn validate_bgp_neighbors(
         validate_non_empty("BGP neighbor delete address", &delete.address)?;
         let vrf = delete.vrf.trim();
         let address = delete.address.trim();
+        validate_ipv4_text("BGP neighbor delete address", address)?;
         let key = (
             delete.device_id.clone(),
             vrf.to_string(),
@@ -498,6 +517,13 @@ fn validate_bgp_neighbors(
         }
     }
 
+    Ok(())
+}
+
+fn validate_ipv4_text(field: &str, value: &str) -> UnderlayResult<()> {
+    value
+        .parse::<Ipv4Addr>()
+        .map_err(|_| UnderlayError::InvalidIntent(format!("invalid {field} {value}")))?;
     Ok(())
 }
 
