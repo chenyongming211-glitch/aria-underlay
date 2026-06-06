@@ -163,24 +163,25 @@ fn ha_lease_required_error() -> UnderlayError {
 }
 
 fn apply_scope_lock_keys(request: &ApplyDomainIntentRequest) -> UnderlayResult<Vec<String>> {
+    let domain_id = normalized_lock_component("domain_id", &request.intent.domain_id)?;
+    let domain_key = format!("domain:{domain_id}");
     match request.options.lock_scope {
-        ApplyLockScope::Domain => Ok(vec![format!(
-            "domain:{}",
-            normalized_lock_component("domain_id", &request.intent.domain_id)?
-        )]),
+        ApplyLockScope::Domain => Ok(vec![domain_key]),
         ApplyLockScope::Region => {
             let region_id = request.options.region_id.as_deref().ok_or_else(|| {
                 UnderlayError::InvalidIntent(
                     "ApplyOptions.region_id is required when lock_scope is Region".into(),
                 )
             })?;
-            Ok(vec![format!(
-                "region:{}",
-                normalized_lock_component("region_id", region_id)?
-            )])
+            Ok(vec![
+                domain_key,
+                format!(
+                    "region:{}",
+                    normalized_lock_component("region_id", region_id)?
+                ),
+            ])
         }
         ApplyLockScope::SwitchPair => {
-            let domain_id = normalized_lock_component("domain_id", &request.intent.domain_id)?;
             let mut keys = request
                 .intent
                 .endpoints
@@ -193,13 +194,14 @@ fn apply_scope_lock_keys(request: &ApplyDomainIntentRequest) -> UnderlayResult<V
                     Ok(format!("switch_pair:{domain_id}:{endpoint_id}"))
                 })
                 .collect::<UnderlayResult<Vec<_>>>()?;
-            keys.sort();
-            keys.dedup();
             if keys.is_empty() {
                 return Err(UnderlayError::InvalidIntent(
                     "switch_pair lock scope requires at least one management endpoint".into(),
                 ));
             }
+            keys.push(domain_key);
+            keys.sort();
+            keys.dedup();
             Ok(keys)
         }
     }

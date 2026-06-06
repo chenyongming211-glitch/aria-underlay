@@ -841,7 +841,7 @@ async fn domain_lock_scope_serializes_same_domain_switch_pair_scope_request() {
 }
 
 #[tokio::test]
-async fn switch_pair_lock_scope_allows_disjoint_endpoints_in_same_domain() {
+async fn switch_pair_lock_scope_serializes_disjoint_endpoints_in_same_domain() {
     let first_prepare_calls = Arc::new(AtomicUsize::new(0));
     let first_prepare_release = Arc::new(tokio::sync::Notify::new());
     let first_endpoint = start_test_adapter(TestAdapter {
@@ -891,18 +891,16 @@ async fn switch_pair_lock_scope_allows_disjoint_endpoints_in_same_domain() {
             .await
     });
 
-    wait_for_prepare_count(
-        &second_prepare_calls,
-        1,
-        "disjoint switch-pair apply should reach prepare while first endpoint is still active",
+    let second_reached_prepare = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        wait_until_prepare_count(&second_prepare_calls, 1),
     )
-    .await;
-    let second_response = tokio::time::timeout(std::time::Duration::from_secs(3), second)
-        .await
-        .expect("second apply task should finish")
-        .expect("second apply task should not panic")
-        .expect("second apply should succeed");
-    assert_eq!(second_response.status, ApplyStatus::Success);
+    .await
+    .is_ok();
+    assert!(
+        !second_reached_prepare,
+        "same-domain switch-pair apply should wait before reaching the second endpoint prepare"
+    );
 
     first_prepare_release.notify_one();
     let first_response = tokio::time::timeout(std::time::Duration::from_secs(3), first)
@@ -911,6 +909,19 @@ async fn switch_pair_lock_scope_allows_disjoint_endpoints_in_same_domain() {
         .expect("first apply task should not panic")
         .expect("first apply should succeed");
     assert_eq!(first_response.status, ApplyStatus::Success);
+
+    wait_for_prepare_count(
+        &second_prepare_calls,
+        1,
+        "second apply should reach prepare after first releases the domain lock",
+    )
+    .await;
+    let second_response = tokio::time::timeout(std::time::Duration::from_secs(3), second)
+        .await
+        .expect("second apply task should finish")
+        .expect("second apply task should not panic")
+        .expect("second apply should succeed");
+    assert_eq!(second_response.status, ApplyStatus::Success);
 }
 
 #[tokio::test]

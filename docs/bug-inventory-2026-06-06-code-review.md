@@ -42,6 +42,7 @@
 - **文件**: `src/tx/domain_lock.rs:19-48` + `src/api/service.rs:165-206`
 - **描述**: `Domain`/`Region`/`SwitchPair` 三种锁作用域生成不同的 key（如 `"domain:X"` vs `"switch_pair:X:ep1"`），并发操作同一 domain 时不同 scope 不互斥
 - **影响**: 可能导致 lost update 和 shadow 状态不一致
+- **状态**: 已修复 — `fix: serialize apply lock scopes by domain`
 - **修复建议**: 锁作用域需要层级化或统一使用最细粒度锁
 
 ### H4: writable-running rollback 不可达
@@ -211,11 +212,11 @@
 2. **H5+H6+H7** — BGP intent 地址、router_id、process/neighbor 冲突校验已补齐
 3. **M1+M2** — Shadow 级联删除与 BGP neighbor stage 已修复
 4. **M3+M4** — Python verify enum crash 与 H3C interface delete 重复输出已修复
+5. **H3** — Apply lock scope 已按 domain 串行化，防止跨 scope 绕过互斥
 
 **P2（剩余设计/低频正确性项）：**
-1. **H3** — 锁作用域层级化
-2. **H4** — writable-running rollback 实现
-3. **M5** — 幂等性持久化失败时的 in-memory slot 处理
+1. **H4** — writable-running rollback 实现
+2. **M5** — 幂等性持久化失败时的 in-memory slot 处理
 
 **P3（边缘/低影响）：**
 - L1-L13 可纳入后续迭代，其中 L1-L3 需要 proto schema 扩展
