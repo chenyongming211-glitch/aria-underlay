@@ -816,10 +816,14 @@ fn desired_vlan_state(device_id: &str, vlan_id: u16, name: &str) -> DeviceDesire
         interfaces: BTreeMap::new(),
         acls: BTreeMap::new(),
         acl_bindings: BTreeMap::new(),
+        bgp_processes: BTreeMap::new(),
+        bgp_neighbors: BTreeMap::new(),
         delete_vlan_ids: Default::default(),
         delete_interface_names: Default::default(),
         delete_acl_ids: Default::default(),
         delete_acl_bindings: Default::default(),
+        delete_bgp_process_vrfs: Default::default(),
+        delete_bgp_neighbors: BTreeMap::new(),
     }
 }
 

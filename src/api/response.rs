@@ -133,6 +133,12 @@ impl VerifyScopeSummary {
                         acl_id
                     ));
                 }
+                ChangeOp::CreateBgpProcess(_)
+                | ChangeOp::UpdateBgpProcess { .. }
+                | ChangeOp::DeleteBgpProcess { .. }
+                | ChangeOp::CreateBgpNeighbor(_)
+                | ChangeOp::UpdateBgpNeighbor { .. }
+                | ChangeOp::DeleteBgpNeighbor { .. } => {}
             }
         }
 

@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::intent::{
     acl::{AclBindingIntent, AclIntent},
+    bgp::{
+        BgpNeighborDeleteIntent, BgpNeighborIntent, BgpProcessDeleteIntent, BgpProcessIntent,
+    },
     interface::{InterfaceDeleteIntent, InterfaceIntent},
     vlan::VlanIntent,
 };
@@ -27,6 +30,14 @@ pub struct UnderlayDomainIntent {
     pub delete_acl_ids: Vec<u16>,
     #[serde(default)]
     pub delete_acl_bindings: Vec<AclBindingIntent>,
+    #[serde(default)]
+    pub bgp_processes: Vec<BgpProcessIntent>,
+    #[serde(default)]
+    pub bgp_neighbors: Vec<BgpNeighborIntent>,
+    #[serde(default)]
+    pub delete_bgp_processes: Vec<BgpProcessDeleteIntent>,
+    #[serde(default)]
+    pub delete_bgp_neighbors: Vec<BgpNeighborDeleteIntent>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

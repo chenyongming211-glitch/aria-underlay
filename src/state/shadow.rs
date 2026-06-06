@@ -7,7 +7,9 @@ use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{AclBinding, AclConfig, DeviceId, InterfaceConfig, VlanConfig};
+use crate::model::{
+    AclBinding, AclConfig, BgpNeighbor, BgpProcess, DeviceId, InterfaceConfig, VlanConfig,
+};
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::utils::atomic_file::atomic_write;
 use crate::{UnderlayError, UnderlayResult};
@@ -22,6 +24,10 @@ pub struct DeviceShadowState {
     pub acls: BTreeMap<u16, AclConfig>,
     #[serde(default)]
     pub acl_bindings: BTreeMap<String, AclBinding>,
+    #[serde(default)]
+    pub bgp_processes: BTreeMap<String, BgpProcess>,
+    #[serde(default)]
+    pub bgp_neighbors: BTreeMap<String, BgpNeighbor>,
     pub warnings: Vec<String>,
 }
 
@@ -34,6 +40,8 @@ impl DeviceShadowState {
             interfaces: desired.interfaces.clone(),
             acls: desired.acls.clone(),
             acl_bindings: desired.acl_bindings.clone(),
+            bgp_processes: desired.bgp_processes.clone(),
+            bgp_neighbors: desired.bgp_neighbors.clone(),
             warnings: Vec::new(),
         }
     }

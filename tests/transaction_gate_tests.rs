@@ -1443,6 +1443,8 @@ fn observed_state_with_unrelated_objects() -> adapter::ObservedDeviceState {
         }],
         acls: Vec::new(),
         acl_bindings: Vec::new(),
+        bgp_processes: Vec::new(),
+        bgp_neighbors: Vec::new(),
     }
 }
 

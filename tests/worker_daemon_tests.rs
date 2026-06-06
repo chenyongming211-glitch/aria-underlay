@@ -565,6 +565,8 @@ fn shadow_state(
             .collect::<BTreeMap<_, _>>(),
         acls: BTreeMap::new(),
         acl_bindings: BTreeMap::new(),
+        bgp_processes: BTreeMap::new(),
+        bgp_neighbors: BTreeMap::new(),
         warnings: Vec::new(),
     }
 }

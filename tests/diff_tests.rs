@@ -384,10 +384,14 @@ fn desired_state_with_acl_bindings(
             .into_iter()
             .map(|binding| (binding.key(), binding))
             .collect(),
+        bgp_processes: Default::default(),
+        bgp_neighbors: Default::default(),
         delete_vlan_ids: Default::default(),
         delete_interface_names: Default::default(),
         delete_acl_ids: Default::default(),
         delete_acl_bindings: Default::default(),
+        delete_bgp_process_vrfs: Default::default(),
+        delete_bgp_neighbors: Default::default(),
     }
 }
 
@@ -422,6 +426,8 @@ fn shadow_state_with_acl_bindings(
             .into_iter()
             .map(|binding| (binding.key(), binding))
             .collect(),
+        bgp_processes: Default::default(),
+        bgp_neighbors: Default::default(),
         warnings: vec![],
     }
 }

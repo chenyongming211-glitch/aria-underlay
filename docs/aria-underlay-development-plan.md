@@ -1104,7 +1104,10 @@ neighbors、route-policy refs、PBR policy refs、ACL refs、interfaces 和 raw 
 BGP 审计还会输出 `neighbor_details`，覆盖 local AS、remote AS、session state、
 import/export route-policy、VRF 和 per-neighbor raw path。同时支持从脱敏真实 H3C
 running XML 样本目录输出 `real_sample_audits` 做 parser 校准；没有样本时 CI 不失败。
-该阶段仍不会生成 PBR/BGP intent、renderer 或 shadow 写入。
+BGP intent / dry-run gated skeleton 可以表达 BGP process、neighbor 和 route-policy
+reference，并通过 ChangePlan 输出依赖顺序、rollback order、routing blast radius 和
+unsupported paths。该阶段仍不会生成 PBR/BGP renderer，也不会把 BGP intent 放进
+adapter prepare/render/commit 写路径；没有 path-level evidence 时必须保持 rejected/read-only。
 
 ### 10.4 Lock Acquisition Strategy
 

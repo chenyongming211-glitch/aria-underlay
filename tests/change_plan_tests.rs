@@ -101,10 +101,14 @@ fn dry_run_builds_change_plan_alongside_change_set() {
         interfaces: Default::default(),
         acls: Default::default(),
         acl_bindings: Default::default(),
+        bgp_processes: Default::default(),
+        bgp_neighbors: Default::default(),
         delete_vlan_ids: Default::default(),
         delete_interface_names: Default::default(),
         delete_acl_ids: Default::default(),
         delete_acl_bindings: Default::default(),
+        delete_bgp_process_vrfs: Default::default(),
+        delete_bgp_neighbors: Default::default(),
     }];
     let current = vec![DeviceShadowState {
         device_id: DeviceId("leaf-1".to_string()),
@@ -113,6 +117,8 @@ fn dry_run_builds_change_plan_alongside_change_set() {
         interfaces: Default::default(),
         acls: Default::default(),
         acl_bindings: Default::default(),
+        bgp_processes: Default::default(),
+        bgp_neighbors: Default::default(),
         warnings: vec![],
     }];
 
@@ -201,6 +207,71 @@ fn dry_run_rejects_bgp_neighbor_without_path_level_profile_evidence() {
             "delete bgp neighbor default 203.0.113.10",
             "delete bgp process default",
         ]
+    );
+}
+
+#[test]
+fn change_plan_rejects_bgp_without_model_profile() {
+    let change_set = ChangeSet {
+        device_id: DeviceId("leaf-1".to_string()),
+        ops: vec![ChangeOp::CreateBgpNeighbor(BgpNeighbor {
+            vrf: "default".to_string(),
+            address: "203.0.113.10".to_string(),
+            remote_as: 65_001,
+            description: None,
+            import_policy: None,
+            export_policy: None,
+        })],
+    };
+
+    let plan = build_change_plan(&change_set);
+
+    assert_eq!(plan.blast_radius, BlastRadius::RoutingControlPlane);
+    assert_eq!(plan.write_decision, DryRunWriteDecision::Rejected);
+    assert_eq!(
+        plan.unsupported_paths,
+        vec!["bgp: missing device model profile".to_string()]
+    );
+}
+
+#[test]
+fn change_plan_rejects_bgp_when_profile_only_has_unrelated_writable_paths() {
+    let profile = DeviceModelProfile {
+        profile_id: "h3c:S6800:Comware7".to_string(),
+        vendor: Vendor::H3c,
+        model: "S6800".to_string(),
+        os_version: "Comware7".to_string(),
+        paths: vec![ModelPathSupport {
+            protocol: ModelProtocol::OpenConfigNetconf,
+            model: "openconfig-vlan".to_string(),
+            revision: Some("2024-01-15".to_string()),
+            path: "/vlans".to_string(),
+            readable: true,
+            writable: true,
+            verified_on_device: true,
+            deviations: vec![],
+            notes: vec![],
+        }],
+        pbr_write_readiness: WriteReadiness::WriteSafe,
+        bgp_write_readiness: WriteReadiness::WriteSafe,
+        rejection_reasons: vec![],
+        yang_module_count: 0,
+    };
+    let change_set = ChangeSet {
+        device_id: DeviceId("leaf-1".to_string()),
+        ops: vec![ChangeOp::CreateBgpProcess(BgpProcess {
+            vrf: "default".to_string(),
+            local_as: 65_000,
+            router_id: None,
+        })],
+    };
+
+    let plan = build_change_plan_with_profile(&change_set, Some(&profile));
+
+    assert_eq!(plan.write_decision, DryRunWriteDecision::Rejected);
+    assert_eq!(
+        plan.unsupported_paths,
+        vec!["bgp: missing writable BGP path evidence".to_string()]
     );
 }
 
@@ -307,9 +378,8 @@ fn change_plan_with_write_rejected_profile_reports_unsupported_paths() {
 
     let plan = build_change_plan_with_profile(&change_set, Some(&profile));
 
-    assert_eq!(plan.unsupported_paths.len(), 2);
+    assert_eq!(plan.unsupported_paths.len(), 1);
     assert!(plan.unsupported_paths[0].starts_with("pbr:"));
-    assert!(plan.unsupported_paths[1].starts_with("bgp:"));
     assert_eq!(plan.write_decision, DryRunWriteDecision::Rejected);
 }
 

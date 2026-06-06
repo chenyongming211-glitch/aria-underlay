@@ -238,6 +238,21 @@ message AclBinding {
   uint32 acl_id = 3;
 }
 
+message BgpProcess {
+  string vrf = 1;
+  uint32 local_as = 2;
+  optional string router_id = 3;
+}
+
+message BgpNeighbor {
+  string vrf = 1;
+  string address = 2;
+  uint32 remote_as = 3;
+  optional string description = 4;
+  optional string import_policy = 5;
+  optional string export_policy = 6;
+}
+
 message DesiredDeviceState {
   string device_id = 1;
   repeated VlanConfig vlans = 2;
@@ -248,6 +263,10 @@ message DesiredDeviceState {
   repeated uint32 delete_acl_ids = 7;
   repeated AclBinding delete_acl_bindings = 8;
   repeated string delete_interface_names = 9;
+  repeated BgpProcess bgp_processes = 10;
+  repeated BgpNeighbor bgp_neighbors = 11;
+  repeated string delete_bgp_process_vrfs = 12;
+  repeated BgpNeighbor delete_bgp_neighbors = 13;
 }
 
 message ObservedDeviceState {
@@ -256,6 +275,8 @@ message ObservedDeviceState {
   repeated InterfaceConfig interfaces = 3;
   repeated AclConfig acls = 4;
   repeated AclBinding acl_bindings = 5;
+  repeated BgpProcess bgp_processes = 6;
+  repeated BgpNeighbor bgp_neighbors = 7;
 }
 
 message StateScope {

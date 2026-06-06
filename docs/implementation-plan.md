@@ -1436,9 +1436,10 @@ H3C acceptance runner 已经完成。当前不要再按 Sprint 0 初始化顺序
 3. PBR/BGP touched_scope 已结构化输出：affected VRFs、BGP AS、neighbors、route-policy refs、PBR policy refs、ACL refs、interfaces、raw paths。
 4. BGP read-only audit 已升级到 `neighbor_details`：local AS、neighbor address、remote AS、session state、import/export route-policy、VRF、per-neighbor raw path。
 5. PBR/BGP real-sample calibration harness 已接入 offline H3C acceptance：可加载脱敏 H3C running XML 样本输出 `real_sample_audits`；样本缺失时不让 CI 失败。
-6. 真实设备到位后做 model profile path-level read/write 验收，并归档 YANG schema library。
-7. 满足 profile 后再决定 OpenConfig 写、vendor native YANG 写、manual-gated，或 rejected。
-8. H3C Basic IPv4 ACL 离线初版已接入 domain/proto、renderer/parser/mock/offline acceptance；真实设备到位后补写入/readback/cleanup 验收。
+6. BGP intent / dry-run gated skeleton 已接入 domain/proto/ChangePlan：能表达 BGP process、neighbor 和 route-policy reference；dry-run 输出 dependency edges、rollback order、routing blast radius 和 unsupported paths；没有 path-level evidence 时保持 rejected/read-only。
+7. 真实设备到位后做 model profile path-level read/write 验收，并归档 YANG schema library。
+8. 满足 profile 后再决定 OpenConfig 写、vendor native YANG 写、manual-gated，或 rejected。
+9. H3C Basic IPv4 ACL 离线初版已接入 domain/proto、renderer/parser/mock/offline acceptance；真实设备到位后补写入/readback/cleanup 验收。
 ```
 
 H3C Batch 2 Basic IPv4 ACL 已完成离线初版，但它不能替代 PBR/BGP 的模型能力评估。

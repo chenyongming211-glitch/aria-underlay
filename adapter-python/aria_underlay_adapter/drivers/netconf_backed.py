@@ -80,6 +80,7 @@ class NetconfBackedDriver:
 
     def dry_run(self, device, desired_state):
         try:
+            _reject_unsupported_bgp_desired_state(desired_state)
             backend = self._backend_for_dry_run(device, desired_state)
             result = backend.dry_run_candidate(desired_state)
         except AdapterError as error:
@@ -106,6 +107,7 @@ class NetconfBackedDriver:
 
     def prepare(self, request):
         try:
+            _reject_unsupported_bgp_desired_state(getattr(request, "desired_state", None))
             backend = self._backend_for_prepare(request)
             prepared = backend.prepare_candidate(getattr(request, "desired_state", None))
         except AdapterError as error:
@@ -238,6 +240,7 @@ class NetconfBackedDriver:
 
     def verify(self, tx_id, device, desired_state, scope=None):
         try:
+            _reject_unsupported_bgp_desired_state(desired_state)
             backend = self._backend_for_state_read(device)
             backend.verify_running(desired_state, scope=_message_or_none(scope))
         except AdapterError as error:
@@ -589,8 +592,33 @@ def _desired_state_is_empty(desired_state) -> bool:
             and not list(getattr(desired_state, "delete_interface_names", []))
             and not list(getattr(desired_state, "delete_acl_ids", []))
             and not list(getattr(desired_state, "delete_acl_bindings", []))
+            and not list(getattr(desired_state, "bgp_processes", []))
+            and not list(getattr(desired_state, "bgp_neighbors", []))
+            and not list(getattr(desired_state, "delete_bgp_process_vrfs", []))
+            and not list(getattr(desired_state, "delete_bgp_neighbors", []))
         )
     )
+
+
+def _reject_unsupported_bgp_desired_state(desired_state) -> None:
+    if desired_state is None:
+        return
+    if (
+        list(getattr(desired_state, "bgp_processes", []))
+        or list(getattr(desired_state, "bgp_neighbors", []))
+        or list(getattr(desired_state, "delete_bgp_process_vrfs", []))
+        or list(getattr(desired_state, "delete_bgp_neighbors", []))
+    ):
+        raise AdapterError(
+            code="BGP_WRITE_UNSUPPORTED",
+            message=(
+                "BGP desired state is dry-run gated in Core and is not supported by "
+                "the NETCONF adapter write path"
+            ),
+            normalized_error="bgp write path unsupported",
+            raw_error_summary="BGP desired fields present",
+            retryable=False,
+        )
 
 
 def _admin_state_to_proto(value, path: str):

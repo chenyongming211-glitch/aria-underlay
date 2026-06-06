@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::model::{
-    AclBinding, AclConfig, AclRule, InterfaceConfig, PortMode, VlanConfig,
+    bgp_neighbor_key, AclBinding, AclConfig, AclRule, BgpNeighbor, BgpProcess, InterfaceConfig,
+    PortMode, VlanConfig,
 };
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::state::DeviceShadowState;
@@ -87,6 +88,33 @@ impl Normalize for AclBinding {
     }
 }
 
+impl Normalize for BgpProcess {
+    fn normalize(mut self) -> Self {
+        self.vrf = self.vrf.trim().to_string();
+        if self.router_id.as_deref() == Some("") {
+            self.router_id = None;
+        }
+        self
+    }
+}
+
+impl Normalize for BgpNeighbor {
+    fn normalize(mut self) -> Self {
+        self.vrf = self.vrf.trim().to_string();
+        self.address = self.address.trim().to_string();
+        if self.description.as_deref() == Some("") {
+            self.description = None;
+        }
+        if self.import_policy.as_deref() == Some("") {
+            self.import_policy = None;
+        }
+        if self.export_policy.as_deref() == Some("") {
+            self.export_policy = None;
+        }
+        self
+    }
+}
+
 pub fn normalize_desired_state(mut state: DeviceDesiredState) -> DeviceDesiredState {
     state.vlans = state
         .vlans
@@ -139,6 +167,39 @@ pub fn normalize_desired_state(mut state: DeviceDesiredState) -> DeviceDesiredSt
         })
         .collect::<BTreeMap<_, _>>();
 
+    state.bgp_processes = state
+        .bgp_processes
+        .into_values()
+        .map(|process| {
+            let process = process.normalize();
+            (process.vrf.clone(), process)
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    state.bgp_neighbors = state
+        .bgp_neighbors
+        .into_values()
+        .map(|neighbor| {
+            let neighbor = neighbor.normalize();
+            (neighbor.key(), neighbor)
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    state.delete_bgp_process_vrfs = state
+        .delete_bgp_process_vrfs
+        .into_iter()
+        .map(|vrf| vrf.trim().to_string())
+        .collect::<BTreeSet<_>>();
+
+    state.delete_bgp_neighbors = state
+        .delete_bgp_neighbors
+        .into_values()
+        .map(|neighbor| {
+            let neighbor = neighbor.normalize();
+            (bgp_neighbor_key(&neighbor.vrf, &neighbor.address), neighbor)
+        })
+        .collect::<BTreeMap<_, _>>();
+
     state
 }
 
@@ -176,6 +237,24 @@ pub fn normalize_shadow_state(mut state: DeviceShadowState) -> DeviceShadowState
         .map(|binding| {
             let binding = binding.normalize();
             (binding.key(), binding)
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    state.bgp_processes = state
+        .bgp_processes
+        .into_values()
+        .map(|process| {
+            let process = process.normalize();
+            (process.vrf.clone(), process)
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    state.bgp_neighbors = state
+        .bgp_neighbors
+        .into_values()
+        .map(|neighbor| {
+            let neighbor = neighbor.normalize();
+            (neighbor.key(), neighbor)
         })
         .collect::<BTreeMap<_, _>>();
 

@@ -6,7 +6,7 @@ use crate::device::model_profile::YangModuleSummary;
 use crate::engine::diff::{ChangeOp, ChangeSet};
 use crate::model::{
     AclAction, AclBinding, AclConfig, AclDirection, AclEndpoint, AclKind, AclProtocol, AclRule,
-    AdminState, DeviceId, InterfaceConfig, PortMode, Vendor, VlanConfig,
+    AdminState, BgpNeighbor, BgpProcess, DeviceId, InterfaceConfig, PortMode, Vendor, VlanConfig,
 };
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::proto::adapter;
@@ -160,6 +160,22 @@ pub fn desired_state_to_proto(desired: &DeviceDesiredState) -> adapter::DesiredD
             .values()
             .map(acl_binding_to_proto)
             .collect(),
+        bgp_processes: desired
+            .bgp_processes
+            .values()
+            .map(bgp_process_to_proto)
+            .collect(),
+        bgp_neighbors: desired
+            .bgp_neighbors
+            .values()
+            .map(bgp_neighbor_to_proto)
+            .collect(),
+        delete_bgp_process_vrfs: desired.delete_bgp_process_vrfs.iter().cloned().collect(),
+        delete_bgp_neighbors: desired
+            .delete_bgp_neighbors
+            .values()
+            .map(bgp_neighbor_to_proto)
+            .collect(),
     }
 }
 
@@ -265,6 +281,12 @@ pub fn state_scope_from_change_set(change_set: &ChangeSet) -> adapter::StateScop
                 interface_names.insert(interface_name.clone());
                 acl_ids.insert(u32::from(*acl_id));
             }
+            ChangeOp::CreateBgpProcess(_)
+            | ChangeOp::UpdateBgpProcess { .. }
+            | ChangeOp::DeleteBgpProcess { .. }
+            | ChangeOp::CreateBgpNeighbor(_)
+            | ChangeOp::UpdateBgpNeighbor { .. }
+            | ChangeOp::DeleteBgpNeighbor { .. } => {}
         }
     }
 
@@ -326,6 +348,18 @@ pub fn shadow_state_from_proto(proto: adapter::ObservedDeviceState, warnings: Ve
         acl_bindings.insert(binding.key(), binding);
     }
 
+    let mut bgp_processes = std::collections::BTreeMap::new();
+    for process in proto.bgp_processes {
+        let process = bgp_process_from_proto(process)?;
+        bgp_processes.insert(process.vrf.clone(), process);
+    }
+
+    let mut bgp_neighbors = std::collections::BTreeMap::new();
+    for neighbor in proto.bgp_neighbors {
+        let neighbor = bgp_neighbor_from_proto(neighbor)?;
+        bgp_neighbors.insert(neighbor.key(), neighbor);
+    }
+
     Ok(DeviceShadowState {
         device_id: DeviceId(proto.device_id),
         revision: 0,
@@ -333,6 +367,8 @@ pub fn shadow_state_from_proto(proto: adapter::ObservedDeviceState, warnings: Ve
         interfaces,
         acls,
         acl_bindings,
+        bgp_processes,
+        bgp_neighbors,
         warnings,
     })
 }
@@ -427,6 +463,25 @@ fn acl_binding_to_proto(binding: &AclBinding) -> adapter::AclBinding {
     }
 }
 
+fn bgp_process_to_proto(process: &BgpProcess) -> adapter::BgpProcess {
+    adapter::BgpProcess {
+        vrf: process.vrf.clone(),
+        local_as: process.local_as,
+        router_id: process.router_id.clone(),
+    }
+}
+
+fn bgp_neighbor_to_proto(neighbor: &BgpNeighbor) -> adapter::BgpNeighbor {
+    adapter::BgpNeighbor {
+        vrf: neighbor.vrf.clone(),
+        address: neighbor.address.clone(),
+        remote_as: neighbor.remote_as,
+        description: neighbor.description.clone(),
+        import_policy: neighbor.import_policy.clone(),
+        export_policy: neighbor.export_policy.clone(),
+    }
+}
+
 fn acl_rule_to_proto(rule: &AclRule) -> adapter::AclRule {
     adapter::AclRule {
         sequence: u32::from(rule.sequence),
@@ -505,6 +560,57 @@ fn acl_binding_from_proto(proto: adapter::AclBinding) -> UnderlayResult<AclBindi
         interface_name: proto.interface_name,
         direction: acl_direction_from_i32(proto.direction)?,
         acl_id: acl_id_from_u32(proto.acl_id, "adapter returned invalid ACL binding ACL id")?,
+    })
+}
+
+fn bgp_process_from_proto(proto: adapter::BgpProcess) -> UnderlayResult<BgpProcess> {
+    if proto.vrf.trim().is_empty() {
+        return Err(UnderlayError::AdapterOperation {
+            code: "INVALID_BGP_PROCESS".into(),
+            message: "adapter returned BGP process without vrf".into(),
+            retryable: false,
+            errors: Vec::new(),
+        });
+    }
+    if proto.local_as == 0 {
+        return Err(UnderlayError::AdapterOperation {
+            code: "INVALID_BGP_PROCESS".into(),
+            message: "adapter returned BGP process with local_as 0".into(),
+            retryable: false,
+            errors: Vec::new(),
+        });
+    }
+    Ok(BgpProcess {
+        vrf: proto.vrf,
+        local_as: proto.local_as,
+        router_id: proto.router_id,
+    })
+}
+
+fn bgp_neighbor_from_proto(proto: adapter::BgpNeighbor) -> UnderlayResult<BgpNeighbor> {
+    if proto.vrf.trim().is_empty() || proto.address.trim().is_empty() {
+        return Err(UnderlayError::AdapterOperation {
+            code: "INVALID_BGP_NEIGHBOR".into(),
+            message: "adapter returned BGP neighbor without vrf or address".into(),
+            retryable: false,
+            errors: Vec::new(),
+        });
+    }
+    if proto.remote_as == 0 {
+        return Err(UnderlayError::AdapterOperation {
+            code: "INVALID_BGP_NEIGHBOR".into(),
+            message: "adapter returned BGP neighbor with remote_as 0".into(),
+            retryable: false,
+            errors: Vec::new(),
+        });
+    }
+    Ok(BgpNeighbor {
+        vrf: proto.vrf,
+        address: proto.address,
+        remote_as: proto.remote_as,
+        description: proto.description,
+        import_policy: proto.import_policy,
+        export_policy: proto.export_policy,
     })
 }
 

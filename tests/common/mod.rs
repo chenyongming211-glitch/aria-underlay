@@ -152,6 +152,8 @@ pub fn observed_access_state(device_id: &str, vlan_id: u32) -> adapter::Observed
         }],
         acls: Vec::new(),
         acl_bindings: Vec::new(),
+        bgp_processes: Vec::new(),
+        bgp_neighbors: Vec::new(),
     }
 }
 

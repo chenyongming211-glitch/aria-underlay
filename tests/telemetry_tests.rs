@@ -1137,6 +1137,8 @@ async fn start_drift_adapter() -> String {
             interfaces: Vec::new(),
             acls: Vec::new(),
             acl_bindings: Vec::new(),
+            bgp_processes: Vec::new(),
+            bgp_neighbors: Vec::new(),
         }),
         current_warnings: vec!["manual change detected by adapter".into()],
         ..Default::default()

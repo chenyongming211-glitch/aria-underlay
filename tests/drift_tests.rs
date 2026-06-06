@@ -81,6 +81,8 @@ fn normalized_equivalent_state_is_not_drift() {
         )]),
         acls: BTreeMap::new(),
         acl_bindings: BTreeMap::new(),
+        bgp_processes: BTreeMap::new(),
+        bgp_neighbors: BTreeMap::new(),
         warnings: Vec::new(),
     };
     let observed = DeviceShadowState {
@@ -108,6 +110,8 @@ fn normalized_equivalent_state_is_not_drift() {
         )]),
         acls: BTreeMap::new(),
         acl_bindings: BTreeMap::new(),
+        bgp_processes: BTreeMap::new(),
+        bgp_neighbors: BTreeMap::new(),
         warnings: Vec::new(),
     };
 
@@ -395,6 +399,8 @@ fn shadow_state(
             .collect::<BTreeMap<_, _>>(),
         acls: BTreeMap::new(),
         acl_bindings: BTreeMap::new(),
+        bgp_processes: BTreeMap::new(),
+        bgp_neighbors: BTreeMap::new(),
         warnings: Vec::new(),
     }
 }

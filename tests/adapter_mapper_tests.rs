@@ -7,7 +7,8 @@ use aria_underlay::device::{DeviceInfo, DeviceLifecycleState, HostKeyPolicy};
 use aria_underlay::engine::diff::{ChangeOp, ChangeSet};
 use aria_underlay::model::{
     AclAction, AclBinding, AclConfig, AclDirection, AclEndpoint, AclKind, AclProtocol, AclRule,
-    AdminState, DeviceId, DeviceRole, InterfaceConfig, PortMode, Vendor, VlanConfig,
+    AdminState, BgpNeighbor, BgpProcess, DeviceId, DeviceRole, InterfaceConfig, PortMode, Vendor,
+    VlanConfig,
 };
 use aria_underlay::planner::device_plan::DeviceDesiredState;
 use aria_underlay::proto::adapter;
@@ -214,6 +215,8 @@ fn maps_observed_state_to_shadow_state() {
                 direction: adapter::AclDirection::Inbound as i32,
                 acl_id: 3999,
             }],
+            bgp_processes: vec![],
+            bgp_neighbors: vec![],
         },
         vec!["test warning".into()],
     )
@@ -254,6 +257,8 @@ fn rejects_observed_acl_kind_outside_its_numeric_range() {
                 rules: vec![],
             }],
             acl_bindings: vec![],
+            bgp_processes: vec![],
+            bgp_neighbors: vec![],
         },
         vec![],
     )
@@ -291,12 +296,43 @@ fn maps_desired_state_to_proto() {
             "GE1/0/1|inbound".into(),
             acl_binding("GE1/0/1", AclDirection::Inbound, 3999),
         )]),
+        bgp_processes: BTreeMap::from([(
+            "default".into(),
+            BgpProcess {
+                vrf: "default".into(),
+                local_as: 65_000,
+                router_id: Some("192.0.2.1".into()),
+            },
+        )]),
+        bgp_neighbors: BTreeMap::from([(
+            "default|203.0.113.10".into(),
+            BgpNeighbor {
+                vrf: "default".into(),
+                address: "203.0.113.10".into(),
+                remote_as: 65_001,
+                description: Some("tenant-a edge".into()),
+                import_policy: Some("RP-IN".into()),
+                export_policy: Some("RP-OUT".into()),
+            },
+        )]),
         delete_vlan_ids: BTreeSet::from([300]),
         delete_interface_names: BTreeSet::from(["GE1/0/3".into()]),
         delete_acl_ids: BTreeSet::from([3998]),
         delete_acl_bindings: BTreeMap::from([(
             "GE1/0/2|outbound".into(),
             acl_binding("GE1/0/2", AclDirection::Outbound, 3998),
+        )]),
+        delete_bgp_process_vrfs: BTreeSet::from(["blue".into()]),
+        delete_bgp_neighbors: BTreeMap::from([(
+            "blue|198.51.100.20".into(),
+            BgpNeighbor {
+                vrf: "blue".into(),
+                address: "198.51.100.20".into(),
+                remote_as: 65_100,
+                description: None,
+                import_policy: None,
+                export_policy: None,
+            },
         )]),
     };
 
@@ -320,6 +356,14 @@ fn maps_desired_state_to_proto() {
     assert_eq!(proto.delete_acl_ids, vec![3998]);
     assert_eq!(proto.delete_acl_bindings[0].interface_name, "GE1/0/2");
     assert_eq!(proto.delete_acl_bindings[0].acl_id, 3998);
+    assert_eq!(proto.bgp_processes[0].vrf, "default");
+    assert_eq!(proto.bgp_processes[0].local_as, 65_000);
+    assert_eq!(proto.bgp_neighbors[0].address, "203.0.113.10");
+    assert_eq!(proto.bgp_neighbors[0].remote_as, 65_001);
+    assert_eq!(proto.bgp_neighbors[0].import_policy.as_deref(), Some("RP-IN"));
+    assert_eq!(proto.delete_bgp_process_vrfs, vec!["blue"]);
+    assert_eq!(proto.delete_bgp_neighbors[0].vrf, "blue");
+    assert_eq!(proto.delete_bgp_neighbors[0].address, "198.51.100.20");
 }
 
 #[test]
@@ -487,10 +531,14 @@ fn desired_state() -> DeviceDesiredState {
             "GE1/0/1|inbound".into(),
             acl_binding("GE1/0/1", AclDirection::Inbound, 3999),
         )]),
+        bgp_processes: BTreeMap::new(),
+        bgp_neighbors: BTreeMap::new(),
         delete_vlan_ids: Default::default(),
         delete_interface_names: Default::default(),
         delete_acl_ids: Default::default(),
         delete_acl_bindings: Default::default(),
+        delete_bgp_process_vrfs: Default::default(),
+        delete_bgp_neighbors: BTreeMap::new(),
     }
 }
 

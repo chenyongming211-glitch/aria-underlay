@@ -507,6 +507,39 @@ def test_netconf_driver_dry_run_returns_no_change_for_empty_desired_without_rend
     assert session.calls == []
 
 
+def test_netconf_driver_dry_run_rejects_bgp_desired_state_before_device_read():
+    session = _RecordingSession()
+    driver = NetconfBackedDriver(_BackendWithSession(session))
+
+    response = driver.dry_run(
+        device=pb2.DeviceRef(vendor_hint=pb2.VENDOR_H3C),
+        desired_state=pb2.DesiredDeviceState(
+            device_id="leaf-a",
+            bgp_processes=[
+                pb2.BgpProcess(
+                    vrf="default",
+                    local_as=65000,
+                    router_id="192.0.2.1",
+                )
+            ],
+            bgp_neighbors=[
+                pb2.BgpNeighbor(
+                    vrf="default",
+                    address="203.0.113.10",
+                    remote_as=65001,
+                    import_policy="RP-IN",
+                    export_policy="RP-OUT",
+                )
+            ],
+        ),
+    )
+
+    assert response.result.status == pb2.ADAPTER_OPERATION_STATUS_FAILED
+    assert response.result.changed is False
+    assert response.result.errors[0].code == "BGP_WRITE_UNSUPPORTED"
+    assert session.calls == []
+
+
 def test_netconf_driver_get_state_rejects_skeleton_parser_before_device_read():
     session = _RecordingSession()
     driver = NetconfBackedDriver(_BackendWithSession(session))

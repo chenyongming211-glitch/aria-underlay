@@ -2,7 +2,11 @@ use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 
 use crate::intent::{
-    acl::AclBindingIntent, SwitchPairIntent, UnderlayDomainIntent, UnderlayTopology,
+    acl::AclBindingIntent,
+    bgp::{
+        BgpNeighborDeleteIntent, BgpNeighborIntent, BgpProcessDeleteIntent, BgpProcessIntent,
+    },
+    SwitchPairIntent, UnderlayDomainIntent, UnderlayTopology,
 };
 use crate::model::{
     acl_binding_key, is_canonical_identifier, AclConfig, AclKind, AclProtocol, DeviceId, PortMode,
@@ -188,6 +192,18 @@ pub fn validate_underlay_domain_intent(intent: &UnderlayDomainIntent) -> Underla
         &member_ids,
         "underlay domain",
     )?;
+    validate_bgp_processes(
+        &intent.bgp_processes,
+        &intent.delete_bgp_processes,
+        &member_ids,
+        "underlay domain",
+    )?;
+    validate_bgp_neighbors(
+        &intent.bgp_neighbors,
+        &intent.delete_bgp_neighbors,
+        &member_ids,
+        "underlay domain",
+    )?;
 
     Ok(())
 }
@@ -369,6 +385,134 @@ fn validate_basic_acl_rule(
         )));
     }
     Ok(())
+}
+
+fn validate_bgp_processes(
+    processes: &[BgpProcessIntent],
+    deletes: &[BgpProcessDeleteIntent],
+    member_ids: &BTreeSet<DeviceId>,
+    context: &str,
+) -> UnderlayResult<()> {
+    let mut upserts = BTreeSet::new();
+    for process in processes {
+        validate_device_id("BGP process device_id", &process.device_id)?;
+        ensure_known_member(member_ids, &process.device_id, "BGP process")?;
+        validate_non_empty("BGP process vrf", &process.vrf)?;
+        let vrf = process.vrf.trim();
+        if process.local_as == 0 {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} BGP process {}/{} has invalid local_as 0",
+                process.device_id.0, vrf
+            )));
+        }
+        let key = (process.device_id.clone(), vrf.to_string());
+        if !upserts.insert(key) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} has duplicate BGP process {}/{}",
+                process.device_id.0, vrf
+            )));
+        }
+    }
+
+    let mut delete_keys = BTreeSet::new();
+    for delete in deletes {
+        validate_device_id("BGP process delete device_id", &delete.device_id)?;
+        ensure_known_member(member_ids, &delete.device_id, "BGP process delete")?;
+        validate_non_empty("BGP process delete vrf", &delete.vrf)?;
+        let vrf = delete.vrf.trim();
+        let key = (delete.device_id.clone(), vrf.to_string());
+        if upserts.contains(&key) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} cannot upsert and delete BGP process {}/{} in the same request",
+                delete.device_id.0, vrf
+            )));
+        }
+        if !delete_keys.insert(key) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} has duplicate BGP process delete {}/{}",
+                delete.device_id.0, vrf
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_bgp_neighbors(
+    neighbors: &[BgpNeighborIntent],
+    deletes: &[BgpNeighborDeleteIntent],
+    member_ids: &BTreeSet<DeviceId>,
+    context: &str,
+) -> UnderlayResult<()> {
+    let mut upserts = BTreeSet::new();
+    for neighbor in neighbors {
+        validate_device_id("BGP neighbor device_id", &neighbor.device_id)?;
+        ensure_known_member(member_ids, &neighbor.device_id, "BGP neighbor")?;
+        validate_non_empty("BGP neighbor vrf", &neighbor.vrf)?;
+        validate_non_empty("BGP neighbor address", &neighbor.address)?;
+        let vrf = neighbor.vrf.trim();
+        let address = neighbor.address.trim();
+        if neighbor.remote_as == 0 {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} BGP neighbor {}/{}/{} has invalid remote_as 0",
+                neighbor.device_id.0, vrf, address
+            )));
+        }
+        let key = (
+            neighbor.device_id.clone(),
+            vrf.to_string(),
+            address.to_string(),
+        );
+        if !upserts.insert(key) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} has duplicate BGP neighbor {}/{}/{}",
+                neighbor.device_id.0, vrf, address
+            )));
+        }
+    }
+
+    let mut delete_keys = BTreeSet::new();
+    for delete in deletes {
+        validate_device_id("BGP neighbor delete device_id", &delete.device_id)?;
+        ensure_known_member(member_ids, &delete.device_id, "BGP neighbor delete")?;
+        validate_non_empty("BGP neighbor delete vrf", &delete.vrf)?;
+        validate_non_empty("BGP neighbor delete address", &delete.address)?;
+        let vrf = delete.vrf.trim();
+        let address = delete.address.trim();
+        let key = (
+            delete.device_id.clone(),
+            vrf.to_string(),
+            address.to_string(),
+        );
+        if upserts.contains(&key) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} cannot upsert and delete BGP neighbor {}/{}/{} in the same request",
+                delete.device_id.0, vrf, address
+            )));
+        }
+        if !delete_keys.insert(key) {
+            return Err(UnderlayError::InvalidIntent(format!(
+                "{context} has duplicate BGP neighbor delete {}/{}/{}",
+                delete.device_id.0, vrf, address
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn ensure_known_member(
+    member_ids: &BTreeSet<DeviceId>,
+    device_id: &DeviceId,
+    subject: &str,
+) -> UnderlayResult<()> {
+    if member_ids.contains(device_id) {
+        return Ok(());
+    }
+    Err(UnderlayError::InvalidIntent(format!(
+        "{subject} references unknown switch member {}",
+        device_id.0
+    )))
 }
 
 fn validate_acl_ids<I>(acl_ids: I, context: &str) -> UnderlayResult<()>

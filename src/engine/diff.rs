@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::normalize::{normalize_desired_state, normalize_shadow_state};
 use crate::model::{
-    acl_binding_key, AclBinding, AclConfig, AclDirection, DeviceId, InterfaceConfig, VlanConfig,
+    acl_binding_key, bgp_neighbor_key, AclBinding, AclConfig, AclDirection, BgpNeighbor,
+    BgpProcess, DeviceId, InterfaceConfig, VlanConfig,
 };
 use crate::planner::device_plan::DeviceDesiredState;
 use crate::state::DeviceShadowState;
@@ -47,6 +48,23 @@ pub enum ChangeOp {
         interface_name: String,
         direction: AclDirection,
         acl_id: u16,
+    },
+    CreateBgpProcess(BgpProcess),
+    UpdateBgpProcess {
+        before: BgpProcess,
+        after: BgpProcess,
+    },
+    DeleteBgpProcess {
+        vrf: String,
+    },
+    CreateBgpNeighbor(BgpNeighbor),
+    UpdateBgpNeighbor {
+        before: BgpNeighbor,
+        after: BgpNeighbor,
+    },
+    DeleteBgpNeighbor {
+        vrf: String,
+        address: String,
     },
 }
 
@@ -140,6 +158,49 @@ pub fn compute_diff(desired: &DeviceDesiredState, current: &DeviceShadowState) -
         }
     }
 
+    for (vrf, desired_process) in &desired.bgp_processes {
+        match current.bgp_processes.get(vrf) {
+            Some(current_process) if current_process == desired_process => {}
+            Some(current_process) => change_set.ops.push(ChangeOp::UpdateBgpProcess {
+                before: current_process.clone(),
+                after: desired_process.clone(),
+            }),
+            None => change_set
+                .ops
+                .push(ChangeOp::CreateBgpProcess(desired_process.clone())),
+        }
+    }
+
+    for (key, desired_neighbor) in &desired.bgp_neighbors {
+        match current.bgp_neighbors.get(key) {
+            Some(current_neighbor) if current_neighbor == desired_neighbor => {}
+            Some(current_neighbor) => change_set.ops.push(ChangeOp::UpdateBgpNeighbor {
+                before: current_neighbor.clone(),
+                after: desired_neighbor.clone(),
+            }),
+            None => change_set
+                .ops
+                .push(ChangeOp::CreateBgpNeighbor(desired_neighbor.clone())),
+        }
+    }
+
+    for (key, delete_neighbor) in &desired.delete_bgp_neighbors {
+        if current.bgp_neighbors.contains_key(key) {
+            change_set.ops.push(ChangeOp::DeleteBgpNeighbor {
+                vrf: delete_neighbor.vrf.clone(),
+                address: delete_neighbor.address.clone(),
+            });
+        }
+    }
+
+    for vrf in &desired.delete_bgp_process_vrfs {
+        if current.bgp_processes.contains_key(vrf) {
+            change_set
+                .ops
+                .push(ChangeOp::DeleteBgpProcess { vrf: vrf.clone() });
+        }
+    }
+
     change_set
 }
 
@@ -168,6 +229,8 @@ impl ChangeSet {
             interfaces: Default::default(),
             acls: Default::default(),
             acl_bindings: Default::default(),
+            bgp_processes: Default::default(),
+            bgp_neighbors: Default::default(),
             warnings: Vec::new(),
         });
         state.device_id = desired.device_id.clone();
@@ -214,6 +277,26 @@ impl ChangeSet {
                     state
                         .acl_bindings
                         .remove(&acl_binding_key(interface_name, direction));
+                }
+                ChangeOp::CreateBgpProcess(process) => {
+                    state
+                        .bgp_processes
+                        .insert(process.vrf.clone(), process.clone());
+                }
+                ChangeOp::UpdateBgpProcess { after, .. } => {
+                    state.bgp_processes.insert(after.vrf.clone(), after.clone());
+                }
+                ChangeOp::DeleteBgpProcess { vrf } => {
+                    state.bgp_processes.remove(vrf);
+                }
+                ChangeOp::CreateBgpNeighbor(neighbor) => {
+                    state.bgp_neighbors.insert(neighbor.key(), neighbor.clone());
+                }
+                ChangeOp::UpdateBgpNeighbor { after, .. } => {
+                    state.bgp_neighbors.insert(after.key(), after.clone());
+                }
+                ChangeOp::DeleteBgpNeighbor { vrf, address } => {
+                    state.bgp_neighbors.remove(&bgp_neighbor_key(vrf, address));
                 }
             }
         }

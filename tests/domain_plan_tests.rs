@@ -1,8 +1,9 @@
 use aria_underlay::intent::interface::{InterfaceDeleteIntent, InterfaceIntent};
 use aria_underlay::intent::vlan::VlanIntent;
 use aria_underlay::intent::{
-    AclBindingIntent, AclIntent, ManagementEndpointIntent, SwitchMemberIntent, UnderlayDomainIntent,
-    UnderlayTopology,
+    AclBindingIntent, AclIntent, BgpNeighborDeleteIntent, BgpNeighborIntent,
+    BgpProcessDeleteIntent, BgpProcessIntent, ManagementEndpointIntent, SwitchMemberIntent,
+    UnderlayDomainIntent, UnderlayTopology,
 };
 use aria_underlay::model::{
     AclAction, AclDirection, AclKind, AclProtocol, AclRule, AdminState, DeviceId, DeviceRole,
@@ -187,6 +188,59 @@ fn explicit_delete_intents_are_planned_to_target_management_endpoint() {
 }
 
 #[test]
+fn bgp_intents_are_planned_to_owning_management_endpoint() {
+    let mut intent = domain_intent(
+        UnderlayTopology::MlagDualManagementIp,
+        vec![endpoint("leaf-a-mgmt"), endpoint("leaf-b-mgmt")],
+        vec![
+            member("leaf-a", Some(DeviceRole::LeafA), "leaf-a-mgmt"),
+            member("leaf-b", Some(DeviceRole::LeafB), "leaf-b-mgmt"),
+        ],
+        vec![],
+    );
+    intent.bgp_processes = vec![BgpProcessIntent {
+        device_id: DeviceId("leaf-b".into()),
+        vrf: "default".into(),
+        local_as: 65_000,
+        router_id: Some("192.0.2.1".into()),
+    }];
+    intent.bgp_neighbors = vec![BgpNeighborIntent {
+        device_id: DeviceId("leaf-b".into()),
+        vrf: "default".into(),
+        address: "203.0.113.10".into(),
+        remote_as: 65_001,
+        description: Some("tenant-a edge".into()),
+        import_policy: Some("RP-IN".into()),
+        export_policy: Some("RP-OUT".into()),
+    }];
+    intent.delete_bgp_processes = vec![BgpProcessDeleteIntent {
+        device_id: DeviceId("leaf-a".into()),
+        vrf: "blue".into(),
+    }];
+    intent.delete_bgp_neighbors = vec![BgpNeighborDeleteIntent {
+        device_id: DeviceId("leaf-a".into()),
+        vrf: "blue".into(),
+        address: "198.51.100.20".into(),
+    }];
+
+    let states = plan_underlay_domain(&intent).expect("BGP domain should plan");
+
+    assert!(states[0].bgp_processes.is_empty());
+    assert!(states[0].delete_bgp_process_vrfs.contains("blue"));
+    assert_eq!(
+        states[0].delete_bgp_neighbors["blue|198.51.100.20"].address,
+        "198.51.100.20"
+    );
+    assert_eq!(states[1].bgp_processes["default"].local_as, 65_000);
+    assert_eq!(
+        states[1].bgp_neighbors["default|203.0.113.10"]
+            .import_policy
+            .as_deref(),
+        Some("RP-IN")
+    );
+}
+
+#[test]
 fn unknown_member_reference_fails_validation() {
     let intent = domain_intent(
         UnderlayTopology::SmallFabric,
@@ -226,6 +280,10 @@ fn domain_intent(
         delete_interfaces: vec![],
         delete_acl_ids: vec![],
         delete_acl_bindings: vec![],
+        bgp_processes: vec![],
+        bgp_neighbors: vec![],
+        delete_bgp_processes: vec![],
+        delete_bgp_neighbors: vec![],
     }
 }
 

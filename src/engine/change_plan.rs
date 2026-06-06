@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::device::model_profile::{DeviceModelProfile, WriteReadiness};
+use crate::device::model_profile::{DeviceModelProfile, ModelPathSupport, WriteReadiness};
 use crate::engine::diff::{ChangeOp, ChangeSet};
 use crate::model::AclDirection;
 
@@ -87,16 +87,22 @@ pub fn build_change_plan_with_profile(
     for op in &change_set.ops {
         match op {
             ChangeOp::DeleteAclBinding { .. } => unbind.push(op.clone()),
+            ChangeOp::DeleteBgpNeighbor { .. } => unbind.push(op.clone()),
             ChangeOp::DeleteAcl { .. }
             | ChangeOp::DeleteVlan { .. }
-            | ChangeOp::DeleteInterfaceConfig { .. } => delete_base.push(op.clone()),
-            ChangeOp::CreateAcl(_) | ChangeOp::CreateVlan(_) => create_base.push(op.clone()),
+            | ChangeOp::DeleteInterfaceConfig { .. }
+            | ChangeOp::DeleteBgpProcess { .. } => delete_base.push(op.clone()),
+            ChangeOp::CreateAcl(_) | ChangeOp::CreateVlan(_) | ChangeOp::CreateBgpProcess(_) => {
+                create_base.push(op.clone())
+            }
             ChangeOp::UpdateAcl { .. }
             | ChangeOp::UpdateVlan { .. }
-            | ChangeOp::UpdateInterface { .. } => update_base.push(op.clone()),
-            ChangeOp::CreateAclBinding(_) | ChangeOp::UpdateAclBinding { .. } => {
-                bind.push(op.clone())
-            }
+            | ChangeOp::UpdateInterface { .. }
+            | ChangeOp::UpdateBgpProcess { .. }
+            | ChangeOp::UpdateBgpNeighbor { .. } => update_base.push(op.clone()),
+            ChangeOp::CreateAclBinding(_)
+            | ChangeOp::UpdateAclBinding { .. }
+            | ChangeOp::CreateBgpNeighbor(_) => bind.push(op.clone()),
         }
     }
 
@@ -111,7 +117,8 @@ pub fn build_change_plan_with_profile(
     let rollback_order = rollback_order_for_stages(&stages);
     let blast_radius = classify_blast_radius(change_set);
     let unsupported_paths = collect_unsupported_paths(change_set, profile);
-    let write_decision = classify_write_decision(profile, &blast_radius, &unsupported_paths);
+    let write_decision =
+        classify_write_decision(profile, &blast_radius, &unsupported_paths, change_set);
     ChangePlan {
         device_id: change_set.device_id.0.clone(),
         stages,
@@ -131,22 +138,30 @@ fn collect_unsupported_paths(
     change_set: &ChangeSet,
     profile: Option<&DeviceModelProfile>,
 ) -> Vec<String> {
-    let _ = change_set;
     let Some(profile) = profile else {
+        if touches_bgp(change_set) {
+            return vec!["bgp: missing device model profile".to_string()];
+        }
         return Vec::new();
     };
     let mut unsupported = Vec::new();
-    if profile.pbr_write_readiness == WriteReadiness::WriteRejected {
+    if touches_policy_reference(change_set) && profile.pbr_write_readiness == WriteReadiness::WriteRejected {
         unsupported.push(format!(
             "pbr: {}",
             first_rejection_reason(profile, "pbr"),
         ));
     }
-    if profile.bgp_write_readiness == WriteReadiness::WriteRejected {
-        unsupported.push(format!(
-            "bgp: {}",
-            first_rejection_reason(profile, "bgp"),
-        ));
+    if touches_bgp(change_set) {
+        if profile.bgp_write_readiness == WriteReadiness::WriteRejected {
+            unsupported.push(format!(
+                "bgp: {}",
+                first_rejection_reason(profile, "bgp"),
+            ));
+        } else if profile.bgp_write_readiness == WriteReadiness::WriteSafe
+            && !has_writable_bgp_path(profile)
+        {
+            unsupported.push("bgp: missing writable BGP path evidence".to_string());
+        }
     }
     unsupported
 }
@@ -173,8 +188,12 @@ fn classify_write_decision(
     profile: Option<&DeviceModelProfile>,
     blast_radius: &BlastRadius,
     unsupported_paths: &[String],
+    change_set: &ChangeSet,
 ) -> DryRunWriteDecision {
     let Some(profile) = profile else {
+        if matches!(blast_radius, BlastRadius::RoutingControlPlane) {
+            return DryRunWriteDecision::Rejected;
+        }
         return DryRunWriteDecision::AllowedVendorPrivate;
     };
 
@@ -205,12 +224,15 @@ fn classify_write_decision(
         }
     }
 
-    if profile
+    let writable_paths = profile
         .paths
         .iter()
-        .any(|path| path.verified_on_device && path.writable && path.readable)
-    {
-        let has_openconfig = profile.paths.iter().any(|path| {
+        .filter(|path| !touches_bgp(change_set) || is_bgp_path(path))
+        .filter(|path| path.verified_on_device && path.writable && path.readable)
+        .collect::<Vec<_>>();
+
+    if !writable_paths.is_empty() {
+        let has_openconfig = writable_paths.iter().any(|path| {
             path.verified_on_device
                 && path.writable
                 && matches!(
@@ -227,6 +249,19 @@ fn classify_write_decision(
     } else {
         DryRunWriteDecision::AllowedVendorPrivate
     }
+}
+
+fn has_writable_bgp_path(profile: &DeviceModelProfile) -> bool {
+    profile
+        .paths
+        .iter()
+        .any(|path| is_bgp_path(path) && path.verified_on_device && path.writable && path.readable)
+}
+
+fn is_bgp_path(path: &ModelPathSupport) -> bool {
+    let model = path.model.to_ascii_lowercase();
+    let path_text = path.path.to_ascii_lowercase();
+    model.contains("bgp") || path_text.contains("bgp")
 }
 
 fn push_stage(stages: &mut Vec<ChangePlanStage>, kind: ChangePlanStageKind, ops: Vec<ChangeOp>) {
@@ -262,6 +297,24 @@ fn dependency_edges_for_change_set(change_set: &ChangeSet) -> Vec<ChangeDependen
                     edges.extend(binding_edges);
                 }
             }
+            ChangeOp::CreateBgpNeighbor(neighbor)
+            | ChangeOp::UpdateBgpNeighbor {
+                after: neighbor, ..
+            } => edges.push(ChangeDependencyEdge {
+                from: bgp_neighbor_node(&neighbor.vrf, &neighbor.address),
+                to: bgp_process_node(&neighbor.vrf),
+            }),
+            ChangeOp::DeleteBgpProcess { vrf } => {
+                let neighbor_edges = delete_bgp_neighbor_edges(change_set, vrf);
+                if neighbor_edges.is_empty() {
+                    edges.push(ChangeDependencyEdge {
+                        from: format!("{} delete", bgp_process_node(vrf)),
+                        to: format!("all bgp process {vrf} neighbors removed"),
+                    });
+                } else {
+                    edges.extend(neighbor_edges);
+                }
+            }
             _ => {}
         }
     }
@@ -285,6 +338,23 @@ fn delete_acl_binding_edges(change_set: &ChangeSet, acl_id: u16) -> Vec<ChangeDe
                     acl_id,
                     "unbind",
                 ),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+fn delete_bgp_neighbor_edges(change_set: &ChangeSet, vrf: &str) -> Vec<ChangeDependencyEdge> {
+    change_set
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            ChangeOp::DeleteBgpNeighbor {
+                vrf: neighbor_vrf,
+                address,
+            } if neighbor_vrf == vrf => Some(ChangeDependencyEdge {
+                from: format!("{} delete", bgp_process_node(vrf)),
+                to: format!("{} delete", bgp_neighbor_node(vrf, address)),
             }),
             _ => None,
         })
@@ -329,12 +399,29 @@ fn rollback_action_for_op(op: &ChangeOp) -> String {
             "restore acl binding {acl_id} on {interface_name} {}",
             acl_direction_text(direction)
         ),
+        ChangeOp::CreateBgpProcess(process) => format!("delete bgp process {}", process.vrf),
+        ChangeOp::UpdateBgpProcess { before, .. } => {
+            format!("restore bgp process {}", before.vrf)
+        }
+        ChangeOp::DeleteBgpProcess { vrf } => format!("restore bgp process {vrf}"),
+        ChangeOp::CreateBgpNeighbor(neighbor) => {
+            format!("delete bgp neighbor {} {}", neighbor.vrf, neighbor.address)
+        }
+        ChangeOp::UpdateBgpNeighbor { before, .. } => {
+            format!("restore bgp neighbor {} {}", before.vrf, before.address)
+        }
+        ChangeOp::DeleteBgpNeighbor { vrf, address } => {
+            format!("restore bgp neighbor {vrf} {address}")
+        }
     }
 }
 
 fn classify_blast_radius(change_set: &ChangeSet) -> BlastRadius {
     if change_set.ops.is_empty() {
         return BlastRadius::NoChange;
+    }
+    if touches_bgp(change_set) {
+        return BlastRadius::RoutingControlPlane;
     }
     if change_set.ops.iter().any(|op| {
         matches!(
@@ -350,6 +437,34 @@ fn classify_blast_radius(change_set: &ChangeSet) -> BlastRadius {
         return BlastRadius::PolicyReference;
     }
     BlastRadius::LocalInterfaceOrVlan
+}
+
+fn touches_policy_reference(change_set: &ChangeSet) -> bool {
+    change_set.ops.iter().any(|op| {
+        matches!(
+            op,
+            ChangeOp::CreateAcl(_)
+                | ChangeOp::UpdateAcl { .. }
+                | ChangeOp::DeleteAcl { .. }
+                | ChangeOp::CreateAclBinding(_)
+                | ChangeOp::UpdateAclBinding { .. }
+                | ChangeOp::DeleteAclBinding { .. }
+        )
+    })
+}
+
+fn touches_bgp(change_set: &ChangeSet) -> bool {
+    change_set.ops.iter().any(|op| {
+        matches!(
+            op,
+            ChangeOp::CreateBgpProcess(_)
+                | ChangeOp::UpdateBgpProcess { .. }
+                | ChangeOp::DeleteBgpProcess { .. }
+                | ChangeOp::CreateBgpNeighbor(_)
+                | ChangeOp::UpdateBgpNeighbor { .. }
+                | ChangeOp::DeleteBgpNeighbor { .. }
+        )
+    })
 }
 
 fn acl_node(acl_id: u16, suffix: &str) -> String {
@@ -380,4 +495,12 @@ fn acl_direction_text(direction: &AclDirection) -> &'static str {
         AclDirection::Inbound => "inbound",
         AclDirection::Outbound => "outbound",
     }
+}
+
+fn bgp_process_node(vrf: &str) -> String {
+    format!("bgp-process {vrf}")
+}
+
+fn bgp_neighbor_node(vrf: &str, address: &str) -> String {
+    format!("bgp-neighbor {vrf} {address}")
 }
