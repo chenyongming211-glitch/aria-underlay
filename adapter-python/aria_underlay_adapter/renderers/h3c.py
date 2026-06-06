@@ -83,11 +83,7 @@ class H3cRenderer:
             self.render_acl_binding_delete(binding)
             for binding in getattr(desired_state, "delete_acl_bindings", [])
         ]
-        access_delete_nodes = [
-            self.render_interface_delete(interface_name)
-            for interface_name in getattr(desired_state, "delete_interface_names", [])
-        ]
-        trunk_delete_nodes = [
+        interface_delete_nodes = [
             self.render_interface_delete(interface_name)
             for interface_name in getattr(desired_state, "delete_interface_names", [])
         ]
@@ -130,20 +126,20 @@ class H3cRenderer:
                     children=vlan_nodes + vlan_delete_nodes,
                 )
             )
-        if access_nodes or access_delete_nodes:
+        if access_nodes or interface_delete_nodes:
             vlan_children.append(
                 XmlElement(
                     "AccessInterfaces",
                     namespace=self.VLAN_NAMESPACE,
-                    children=access_nodes + access_delete_nodes,
+                    children=access_nodes + interface_delete_nodes,
                 )
             )
-        if trunk_nodes or trunk_delete_nodes:
+        if trunk_nodes:
             vlan_children.append(
                 XmlElement(
                     "TrunkInterfaces",
                     namespace=self.VLAN_NAMESPACE,
-                    children=trunk_nodes + trunk_delete_nodes,
+                    children=trunk_nodes,
                 )
             )
         if vlan_children:

@@ -98,6 +98,7 @@
 - **文件**: `adapter-python/aria_underlay_adapter/backends/netconf_state.py:514, 567, 577, 597, 616`
 - **描述**: `int(kind or 0)` 对非数字字符串（如 `"hybrid"`）抛 `ValueError` 而非 `_verify_mismatch`。同模式在 `_acl_action_text`、`_acl_protocol_text`、`_acl_kind_text`、`_acl_direction_text` 中重复出现（共 5 处）
 - **影响**: Verify 路径 crash 而非返回清晰的 mismatch 错误
+- **状态**: 已修复 — `fix: harden python verify enums and h3c interface deletes`
 - **修复建议**: 统一用 try/except 处理 `ValueError`，返回 `_verify_mismatch`
 
 ### M4: H3C renderer 接口 delete 在 Access 和 Trunk 区段重复发送
@@ -105,6 +106,7 @@
 - **文件**: `adapter-python/aria_underlay_adapter/renderers/h3c.py:86-93`
 - **描述**: 同一个 `delete_interface_names` 列表生成两份 delete 节点，分别放入 `AccessInterfaces` 和 `TrunkInterfaces`
 - **影响**: 设备收到同一接口在两个互斥区段中的 delete 操作，可能导致错误或警告
+- **状态**: 已修复重复输出 — `fix: harden python verify enums and h3c interface deletes`；精确按当前接口模式选择 Access/Trunk 仍需扩展 desired-state 输入
 - **修复建议**: 根据接口实际模式（access/trunk）分别放入对应区段
 
 ### M5: 幂等性持久化缺口
@@ -204,18 +206,16 @@
 
 ## 下一步优先级建议
 
-**P1（影响正确性，需尽快修复）：**
-1. **H1+H2** — 分离 `touches_policy_reference` 为 `touches_acl` + `touches_pbr`，ACL 不应受 PBR/BGP readiness 影响
-2. **H5+H6** — 给 BGP neighbor address 和 router_id 加 IPv4 格式验证
-3. **H7** — BGP process 删除与 neighbor 新增交叉验证
-4. **M3** — Python 验证函数统一处理 `ValueError`
-5. **M4** — H3C renderer 接口 delete 去重
-6. **M1** — `apply_to_shadow` 添加级联删除
+**P1（影响正确性，已修复）：**
+1. **H1+H2** — ACL readiness gate 已与 PBR/BGP gate 分离
+2. **H5+H6+H7** — BGP intent 地址、router_id、process/neighbor 冲突校验已补齐
+3. **M1+M2** — Shadow 级联删除与 BGP neighbor stage 已修复
+4. **M3+M4** — Python verify enum crash 与 H3C interface delete 重复输出已修复
 
-**P2（设计改进）：**
-7. **H3** — 锁作用域层级化
-8. **H4** — writable-running rollback 实现
-9. **M2** — `UpdateBgpNeighbor` 移到 bind 阶段
+**P2（剩余设计/低频正确性项）：**
+1. **H3** — 锁作用域层级化
+2. **H4** — writable-running rollback 实现
+3. **M5** — 幂等性持久化失败时的 in-memory slot 处理
 
 **P3（边缘/低影响）：**
 - L1-L13 可纳入后续迭代，其中 L1-L3 需要 proto schema 扩展

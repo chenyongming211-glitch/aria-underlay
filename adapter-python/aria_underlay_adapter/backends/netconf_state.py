@@ -511,14 +511,30 @@ def _optional_field(message, name):
 
 def _mode_to_dict(mode) -> dict:
     kind = _field(mode, "kind")
-    if kind in {"access", "ACCESS"} or int(kind or 0) == 1:
+    normalized_kind = kind.strip().lower() if isinstance(kind, str) else kind
+    if normalized_kind == "access":
         return {
             "kind": "access",
             "access_vlan": _optional_field(mode, "access_vlan"),
             "native_vlan": None,
             "allowed_vlans": _repeated_field(mode, "allowed_vlans"),
         }
-    if kind in {"trunk", "TRUNK"} or int(kind or 0) == 2:
+    if normalized_kind == "trunk":
+        return {
+            "kind": "trunk",
+            "access_vlan": None,
+            "native_vlan": _optional_field(mode, "native_vlan"),
+            "allowed_vlans": sorted(set(_repeated_field(mode, "allowed_vlans"))),
+        }
+    numeric_kind = _verify_enum_number(kind, "port mode kind")
+    if numeric_kind == 1:
+        return {
+            "kind": "access",
+            "access_vlan": _optional_field(mode, "access_vlan"),
+            "native_vlan": None,
+            "allowed_vlans": _repeated_field(mode, "allowed_vlans"),
+        }
+    if numeric_kind == 2:
         return {
             "kind": "trunk",
             "access_vlan": None,
@@ -563,18 +579,23 @@ def _normalize_acl_rules(rules) -> list[dict]:
 
 def _acl_action_text(value) -> str:
     if isinstance(value, str):
-        return value.strip().lower()
-    if int(value or 0) == 1:
+        normalized = value.strip().lower()
+        if normalized in {"permit", "deny"}:
+            return normalized
+    numeric = _verify_enum_number(value, "ACL action")
+    if numeric == 1:
         return "permit"
-    if int(value or 0) == 2:
+    if numeric == 2:
         return "deny"
     raise _verify_mismatch(f"unknown ACL action during verification: {value!r}")
 
 
 def _acl_protocol_text(value) -> str:
     if isinstance(value, str):
-        return value.strip().lower()
-    numeric = int(value or 0)
+        normalized = value.strip().lower()
+        if normalized in {"ip", "tcp", "udp", "icmp"}:
+            return normalized
+    numeric = _verify_enum_number(value, "ACL protocol")
     if numeric == 1:
         return "ip"
     if numeric == 2:
@@ -593,8 +614,16 @@ def _acl_kind_text(value, acl_id: int) -> str:
             kind = "basic_ipv4"
         elif kind in {"ipv4_advanced", "advanced"}:
             kind = "advanced_ipv4"
+        elif kind not in {"basic_ipv4", "advanced_ipv4"}:
+            numeric = _verify_enum_number(value, "ACL kind")
+            if numeric == 2:
+                kind = "basic_ipv4"
+            elif numeric in {0, 1}:
+                kind = "basic_ipv4" if 2000 <= int(acl_id) <= 2999 else "advanced_ipv4"
+            else:
+                raise _verify_mismatch(f"unknown ACL kind during verification: {value!r}")
     else:
-        numeric = int(value or 0)
+        numeric = _verify_enum_number(value, "ACL kind")
         if numeric == 2:
             kind = "basic_ipv4"
         elif numeric in {0, 1}:
@@ -612,13 +641,24 @@ def _acl_kind_text(value, acl_id: int) -> str:
 
 def _acl_direction_text(value) -> str:
     if isinstance(value, str):
-        return value.strip().lower()
-    numeric = int(value or 0)
+        normalized = value.strip().lower()
+        if normalized in {"inbound", "in"}:
+            return "inbound"
+        if normalized in {"outbound", "out"}:
+            return "outbound"
+    numeric = _verify_enum_number(value, "ACL direction")
     if numeric == 1:
         return "inbound"
     if numeric == 2:
         return "outbound"
     raise _verify_mismatch(f"unknown ACL direction during verification: {value!r}")
+
+
+def _verify_enum_number(value, label: str) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError) as exc:
+        raise _verify_mismatch(f"unknown {label} during verification: {value!r}") from exc
 
 
 def _acl_endpoint_dict(endpoint) -> dict | None:
