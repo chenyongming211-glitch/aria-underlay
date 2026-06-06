@@ -78,6 +78,36 @@ fn change_plan_orders_unbind_before_acl_delete() {
 }
 
 #[test]
+fn change_plan_stages_bgp_neighbor_update_as_bind_reference() {
+    let change_set = ChangeSet {
+        device_id: DeviceId("leaf-1".to_string()),
+        ops: vec![ChangeOp::UpdateBgpNeighbor {
+            before: BgpNeighbor {
+                vrf: "default".to_string(),
+                address: "203.0.113.10".to_string(),
+                remote_as: 65_001,
+                description: None,
+                import_policy: None,
+                export_policy: None,
+            },
+            after: BgpNeighbor {
+                vrf: "default".to_string(),
+                address: "203.0.113.10".to_string(),
+                remote_as: 65_002,
+                description: Some("tenant edge".to_string()),
+                import_policy: None,
+                export_policy: None,
+            },
+        }],
+    };
+
+    let plan = build_change_plan(&change_set);
+
+    assert_eq!(plan.stages.len(), 1);
+    assert_eq!(plan.stages[0].kind, ChangePlanStageKind::BindReferences);
+}
+
+#[test]
 fn change_plan_treats_interface_config_delete_as_local_delete() {
     let change_set = ChangeSet {
         device_id: DeviceId("leaf-1".to_string()),

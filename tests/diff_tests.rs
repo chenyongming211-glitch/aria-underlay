@@ -1,7 +1,7 @@
 use aria_underlay::engine::diff::{compute_diff, ChangeOp, ChangeSet};
 use aria_underlay::model::{
     AclAction, AclBinding, AclConfig, AclDirection, AclEndpoint, AclKind, AclProtocol, AclRule,
-    AdminState, DeviceId, InterfaceConfig, PortMode, VlanConfig,
+    AdminState, BgpNeighbor, BgpProcess, DeviceId, InterfaceConfig, PortMode, VlanConfig,
 };
 use aria_underlay::planner::device_plan::DeviceDesiredState;
 use aria_underlay::state::DeviceShadowState;
@@ -328,6 +328,73 @@ fn explicit_delete_targets_are_deleted() {
             ChangeOp::DeleteAcl { acl_id: 3999 },
         ]
     );
+}
+
+#[test]
+fn applying_parent_deletes_cascades_orphaned_shadow_references() {
+    let mut desired = desired_state_with_acl_bindings(vec![], vec![], vec![], vec![]);
+    desired.delete_acl_ids.insert(3999);
+    desired
+        .delete_bgp_process_vrfs
+        .insert("default".to_string());
+
+    let mut current = shadow_state_with_acl_bindings(
+        vec![],
+        vec![],
+        vec![acl(3999, "delete"), acl(3998, "keep")],
+        vec![
+            acl_binding("GE1/0/13", AclDirection::Inbound, 3999),
+            acl_binding("GE1/0/14", AclDirection::Inbound, 3998),
+        ],
+    );
+    current.bgp_processes.insert(
+        "default".to_string(),
+        BgpProcess {
+            vrf: "default".to_string(),
+            local_as: 65_000,
+            router_id: Some("192.0.2.1".to_string()),
+        },
+    );
+    current.bgp_processes.insert(
+        "blue".to_string(),
+        BgpProcess {
+            vrf: "blue".to_string(),
+            local_as: 65_010,
+            router_id: Some("192.0.2.2".to_string()),
+        },
+    );
+    current.bgp_neighbors.insert(
+        "default|203.0.113.10".to_string(),
+        BgpNeighbor {
+            vrf: "default".to_string(),
+            address: "203.0.113.10".to_string(),
+            remote_as: 65_001,
+            description: None,
+            import_policy: None,
+            export_policy: None,
+        },
+    );
+    current.bgp_neighbors.insert(
+        "blue|203.0.113.11".to_string(),
+        BgpNeighbor {
+            vrf: "blue".to_string(),
+            address: "203.0.113.11".to_string(),
+            remote_as: 65_011,
+            description: None,
+            import_policy: None,
+            export_policy: None,
+        },
+    );
+
+    let change_set = compute_diff(&desired, &current);
+    let updated = change_set.apply_to_shadow(Some(&current), &desired, 0);
+
+    assert!(!updated.acls.contains_key(&3999));
+    assert!(!updated.acl_bindings.contains_key("GE1/0/13|inbound"));
+    assert!(updated.acl_bindings.contains_key("GE1/0/14|inbound"));
+    assert!(!updated.bgp_processes.contains_key("default"));
+    assert!(!updated.bgp_neighbors.contains_key("default|203.0.113.10"));
+    assert!(updated.bgp_neighbors.contains_key("blue|203.0.113.11"));
 }
 
 #[test]
