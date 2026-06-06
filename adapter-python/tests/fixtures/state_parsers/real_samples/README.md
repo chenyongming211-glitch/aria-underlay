@@ -144,6 +144,38 @@ structured `touched_scope` fields such as affected VRFs, BGP AS numbers,
 neighbors, route-policy references, PBR policy references, ACL references,
 interfaces, and raw XML paths.
 
+To calibrate BGP policy dependencies without guessing vendor XML shapes, add an
+optional sidecar evidence file next to the sample:
+
+```text
+20260606-s5560-bgp.redacted.xml
+20260606-s5560-bgp.redacted.evidence.json
+```
+
+Use this JSON shape:
+
+```json
+{
+  "route_policies": [
+    {
+      "name": "rp-in",
+      "referenced_prefix_lists": ["pl-in"],
+      "referenced_acl_ids": [3998],
+      "source": "sample_sidecar"
+    }
+  ],
+  "prefix_lists": [{"name": "pl-in"}],
+  "acl_ids": [3998]
+}
+```
+
+The acceptance report uses this evidence to populate
+`route_policy_dependency_status`, `route_policy_evidence`,
+`prefix_list_evidence`, `acl_evidence`, `missing_route_policy_refs`,
+`missing_prefix_list_refs`, and `missing_acl_refs`. This only distinguishes
+“route-policy exists but BGP write is still read-only” from “route-policy is
+missing”; it does not enable BGP writes.
+
 No sample or missing sample directory is non-fatal. A committed malformed XML
 sample or a parser failure is fatal, because that means the parser calibration
 fixture is invalid or the parser has a real gap.

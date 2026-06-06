@@ -124,6 +124,52 @@ def test_offline_h3c_acceptance_reports_pbr_bgp_read_only_audit():
                 "bgp: no path-level write evidence",
                 "pbr: no path-level write evidence",
             ],
+            "route_policy_dependency_status": [
+                {
+                    "from": "bgp-neighbor tenant-a 192.0.2.1",
+                    "to": "route-policy rp-in",
+                    "direction": "import",
+                    "route_policy": "rp-in",
+                    "status": "present_read_only",
+                    "referenced_prefix_lists": ["pl-rp-in"],
+                    "referenced_acl_ids": [3999],
+                    "missing_prefix_lists": [],
+                    "missing_acl_ids": [],
+                    "evidence_source": "offline_fixture",
+                },
+                {
+                    "from": "bgp-neighbor tenant-a 192.0.2.1",
+                    "to": "route-policy rp-out",
+                    "direction": "export",
+                    "route_policy": "rp-out",
+                    "status": "present_read_only",
+                    "referenced_prefix_lists": ["pl-rp-out"],
+                    "referenced_acl_ids": [3999],
+                    "missing_prefix_lists": [],
+                    "missing_acl_ids": [],
+                    "evidence_source": "offline_fixture",
+                },
+            ],
+            "route_policy_evidence": [
+                {
+                    "name": "rp-in",
+                    "referenced_prefix_lists": ["pl-rp-in"],
+                    "referenced_acl_ids": [3999],
+                    "missing_prefix_lists": [],
+                    "missing_acl_ids": [],
+                    "source": "offline_fixture",
+                },
+                {
+                    "name": "rp-out",
+                    "referenced_prefix_lists": ["pl-rp-out"],
+                    "referenced_acl_ids": [3999],
+                    "missing_prefix_lists": [],
+                    "missing_acl_ids": [],
+                    "source": "offline_fixture",
+                },
+            ],
+            "prefix_list_evidence": ["pl-rp-in", "pl-rp-out"],
+            "acl_evidence": [3999],
             "route_policy_dependencies": [
                 {
                     "from": "bgp-neighbor tenant-a 192.0.2.1",
@@ -136,7 +182,9 @@ def test_offline_h3c_acceptance_reports_pbr_bgp_read_only_audit():
                     "direction": "export",
                 },
             ],
-            "missing_route_policy_refs": ["rp-in", "rp-out"],
+            "missing_route_policy_refs": [],
+            "missing_prefix_list_refs": [],
+            "missing_acl_refs": [],
             "touched_scope": {
                 "affected_vrfs": ["tenant-a"],
                 "bgp_as_numbers": [65001],
@@ -195,7 +243,7 @@ def test_offline_h3c_acceptance_summary_marks_parser_loop(capsys):
     assert "vrfs=tenant-a" in captured.err
     assert "bgp_neighbors=192.0.2.1" in captured.err
     assert "route_policies=rp-in,rp-out" in captured.err
-    assert "missing_route_policies=rp-in,rp-out" in captured.err
+    assert "missing_route_policies=-" in captured.err
     assert "pbr_policies=pbr-tenant-a" in captured.err
     assert "acl_refs=3999" in captured.err
     assert "interfaces=GigabitEthernet1/0/13" in captured.err
@@ -206,6 +254,22 @@ def test_offline_h3c_acceptance_loads_pbr_bgp_real_samples(tmp_path):
     sample_dir.mkdir()
     sample = sample_dir / "20260531-s5560-comware7-pbr-bgp.redacted.xml"
     sample.write_text(_pbr_bgp_real_sample_xml())
+    sample.with_suffix(".evidence.json").write_text(
+        json.dumps(
+            {
+                "route_policies": [
+                    {
+                        "name": "rp-redacted-in",
+                        "referenced_prefix_lists": ["pl-redacted-in"],
+                        "referenced_acl_ids": [3998],
+                        "source": "sample_sidecar",
+                    }
+                ],
+                "prefix_lists": [{"name": "pl-redacted-in"}],
+                "acl_ids": [3998],
+            }
+        )
+    )
 
     report = offline_h3c.run_acceptance(pbr_bgp_sample_dir=sample_dir)
 
@@ -233,8 +297,47 @@ def test_offline_h3c_acceptance_loads_pbr_bgp_real_samples(tmp_path):
     }
     assert sample_audit["unsupported_paths"] == [
         "bgp: no path-level write evidence",
+        "bgp: missing route-policy evidence rp-redacted-out",
         "pbr: no path-level write evidence",
     ]
+    assert sample_audit["route_policy_dependency_status"] == [
+        {
+            "from": "bgp-neighbor tenant-b 203.0.113.10",
+            "to": "route-policy rp-redacted-in",
+            "direction": "import",
+            "route_policy": "rp-redacted-in",
+            "status": "present_read_only",
+            "referenced_prefix_lists": ["pl-redacted-in"],
+            "referenced_acl_ids": [3998],
+            "missing_prefix_lists": [],
+            "missing_acl_ids": [],
+            "evidence_source": "sample_sidecar",
+        },
+        {
+            "from": "bgp-neighbor tenant-b 203.0.113.10",
+            "to": "route-policy rp-redacted-out",
+            "direction": "export",
+            "route_policy": "rp-redacted-out",
+            "status": "missing",
+            "referenced_prefix_lists": [],
+            "referenced_acl_ids": [],
+            "missing_prefix_lists": [],
+            "missing_acl_ids": [],
+            "evidence_source": None,
+        },
+    ]
+    assert sample_audit["route_policy_evidence"] == [
+        {
+            "name": "rp-redacted-in",
+            "referenced_prefix_lists": ["pl-redacted-in"],
+            "referenced_acl_ids": [3998],
+            "missing_prefix_lists": [],
+            "missing_acl_ids": [],
+            "source": "sample_sidecar",
+        }
+    ]
+    assert sample_audit["prefix_list_evidence"] == ["pl-redacted-in"]
+    assert sample_audit["acl_evidence"] == [3998]
     assert sample_audit["route_policy_dependencies"] == [
         {
             "from": "bgp-neighbor tenant-b 203.0.113.10",
@@ -247,10 +350,9 @@ def test_offline_h3c_acceptance_loads_pbr_bgp_real_samples(tmp_path):
             "direction": "export",
         },
     ]
-    assert sample_audit["missing_route_policy_refs"] == [
-        "rp-redacted-in",
-        "rp-redacted-out",
-    ]
+    assert sample_audit["missing_route_policy_refs"] == ["rp-redacted-out"]
+    assert sample_audit["missing_prefix_list_refs"] == []
+    assert sample_audit["missing_acl_refs"] == []
     assert sample_audit["bgp"]["neighbor_details"] == [
         {
             "address": "203.0.113.10",

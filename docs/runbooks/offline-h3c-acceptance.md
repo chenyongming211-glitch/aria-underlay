@@ -62,11 +62,12 @@ affected VRFs, BGP AS numbers, neighbors, route-policy references, PBR policy
 references, ACL references, interfaces, raw XML paths, and warnings. BGP audit
 also includes `neighbor_details` with local AS, neighbor address, remote AS,
 session state, import/export policy, VRF, and the raw XML path for each parsed
-neighbor. The report also derives BGP `route_policy_dependencies` and
-`missing_route_policy_refs`; because the offline runner has no SoT evidence
-input, parsed route-policy refs are reported as missing evidence. The report
-returns `write_decision=read_only` with unsupported paths until real path-level
-write evidence exists.
+neighbor. The report also derives BGP `route_policy_dependencies`,
+`route_policy_dependency_status`, route-policy / prefix-list / ACL evidence
+fields, and missing evidence fields. Evidence only distinguishes whether a
+referenced policy exists in the sample context; it does not enable BGP writes.
+The report returns `write_decision=read_only` with unsupported paths until real
+path-level write evidence exists.
 
 ## PBR/BGP Real-Sample Calibration
 
@@ -91,9 +92,44 @@ reported under `real_sample_audits` with:
 - `write_decision`.
 - structured `touched_scope`.
 - structured BGP `neighbor_details` when BGP nodes are present.
-- BGP `route_policy_dependencies` and `missing_route_policy_refs`.
+- BGP `route_policy_dependencies` and `route_policy_dependency_status`.
+- `route_policy_evidence`, `prefix_list_evidence`, and `acl_evidence`.
+- `missing_route_policy_refs`, `missing_prefix_list_refs`, and
+  `missing_acl_refs`.
 - `unsupported_paths`.
 - `warnings`.
+
+Optional sidecar evidence can be placed next to a real sample. For a sample
+named `20260606-s5560-bgp.redacted.xml`, use:
+
+```text
+20260606-s5560-bgp.redacted.evidence.json
+```
+
+The sidecar schema is intentionally small:
+
+```json
+{
+  "route_policies": [
+    {
+      "name": "rp-in",
+      "referenced_prefix_lists": ["pl-in"],
+      "referenced_acl_ids": [3998],
+      "source": "sample_sidecar"
+    }
+  ],
+  "prefix_lists": [{"name": "pl-in"}],
+  "acl_ids": [3998]
+}
+```
+
+When a BGP neighbor references a route-policy present in this evidence, the
+dependency status is `present_read_only`: the policy exists, but BGP writing is
+still blocked by missing path-level write evidence. When a referenced
+route-policy is absent, it remains in `missing_route_policy_refs` and
+`unsupported_paths` includes `bgp: missing route-policy evidence <name>`.
+Referenced prefix-lists or ACLs without evidence are reported separately as
+`missing_prefix_list_refs` or `missing_acl_refs`.
 
 Invalid XML or parser errors fail the report for that sample. Passing sample
 audits are parser calibration evidence only; they do not enable PBR/BGP writes

@@ -140,7 +140,8 @@ def format_summary(report: dict[str, Any]) -> str:
                 "- {}: passed [{}], changed={}, write_decision={}, "
                 "blast_radius={}, vrfs={}, bgp_neighbors={}, "
                 "route_policies={}, missing_route_policies={}, "
-                "pbr_policies={}, acl_refs={}, interfaces={}".format(
+                "prefix_lists={}, missing_prefix_lists={}, "
+                "pbr_policies={}, acl_refs={}, missing_acls={}, interfaces={}".format(
                     audit["name"],
                     ", ".join(audit["surface"]),
                     str(audit["changed"]).lower(),
@@ -150,8 +151,11 @@ def format_summary(report: dict[str, Any]) -> str:
                     _format_summary_values(touched_scope.get("bgp_neighbors", [])),
                     _format_summary_values(touched_scope.get("route_policy_refs", [])),
                     _format_summary_values(audit.get("missing_route_policy_refs", [])),
+                    _format_summary_values(audit.get("prefix_list_evidence", [])),
+                    _format_summary_values(audit.get("missing_prefix_list_refs", [])),
                     _format_summary_values(touched_scope.get("pbr_policy_refs", [])),
                     _format_summary_values(touched_scope.get("acl_refs", [])),
+                    _format_summary_values(audit.get("missing_acl_refs", [])),
                     _format_summary_values(touched_scope.get("interfaces", [])),
                 )
             )
@@ -172,7 +176,8 @@ def format_summary(report: dict[str, Any]) -> str:
                 "- {}: passed [{}], sample={}, changed={}, "
                 "write_decision={}, blast_radius={}, vrfs={}, "
                 "bgp_neighbors={}, route_policies={}, missing_route_policies={}, "
-                "pbr_policies={}, acl_refs={}, interfaces={}".format(
+                "prefix_lists={}, missing_prefix_lists={}, "
+                "pbr_policies={}, acl_refs={}, missing_acls={}, interfaces={}".format(
                     audit["name"],
                     ", ".join(audit["surface"]),
                     audit["sample_path"],
@@ -183,8 +188,11 @@ def format_summary(report: dict[str, Any]) -> str:
                     _format_summary_values(touched_scope.get("bgp_neighbors", [])),
                     _format_summary_values(touched_scope.get("route_policy_refs", [])),
                     _format_summary_values(audit.get("missing_route_policy_refs", [])),
+                    _format_summary_values(audit.get("prefix_list_evidence", [])),
+                    _format_summary_values(audit.get("missing_prefix_list_refs", [])),
                     _format_summary_values(touched_scope.get("pbr_policy_refs", [])),
                     _format_summary_values(touched_scope.get("acl_refs", [])),
+                    _format_summary_values(audit.get("missing_acl_refs", [])),
                     _format_summary_values(touched_scope.get("interfaces", [])),
                 )
             )
@@ -365,12 +373,15 @@ def _run_pbr_bgp_read_only_audit(parser: H3cStateParser) -> dict[str, Any]:
             "pbr": {},
             "bgp": {},
             "route_policy_dependencies": [],
-            "missing_route_policy_refs": [],
+            **_empty_policy_calibration(),
             "touched_scope": _empty_high_risk_touched_scope(),
             "error": _error_payload(exc),
         }
     route_policy_dependencies = _bgp_route_policy_dependencies(audit)
-    missing_route_policy_refs = _missing_route_policy_refs(route_policy_dependencies)
+    policy_calibration = _calibrate_bgp_policy_evidence(
+        route_policy_dependencies,
+        _offline_high_risk_policy_evidence(),
+    )
 
     return {
         "name": "pbr_bgp_high_risk_read_only",
@@ -381,12 +392,9 @@ def _run_pbr_bgp_read_only_audit(parser: H3cStateParser) -> dict[str, Any]:
         "write_decision": audit["write_decision"],
         "features_present": audit["features_present"],
         "blast_radius": "routing_control_plane",
-        "unsupported_paths": [
-            "bgp: no path-level write evidence",
-            "pbr: no path-level write evidence",
-        ],
+        "unsupported_paths": _high_risk_unsupported_paths(audit, policy_calibration),
         "route_policy_dependencies": route_policy_dependencies,
-        "missing_route_policy_refs": missing_route_policy_refs,
+        **policy_calibration,
         "touched_scope": audit["touched_scope"],
         "pbr": audit["pbr"],
         "bgp": audit["bgp"],
@@ -427,13 +435,11 @@ def _run_pbr_bgp_real_sample_audit(
     if audit is None:
         audit = _empty_high_risk_audit()
 
-    unsupported_paths = []
-    if "bgp" in audit["features_present"]:
-        unsupported_paths.append("bgp: no path-level write evidence")
-    if "pbr" in audit["features_present"]:
-        unsupported_paths.append("pbr: no path-level write evidence")
     route_policy_dependencies = _bgp_route_policy_dependencies(audit)
-    missing_route_policy_refs = _missing_route_policy_refs(route_policy_dependencies)
+    policy_calibration = _calibrate_bgp_policy_evidence(
+        route_policy_dependencies,
+        _sample_policy_evidence(sample, parsed),
+    )
 
     return {
         "name": f"real_sample:{sample.name}",
@@ -446,9 +452,9 @@ def _run_pbr_bgp_real_sample_audit(
         "write_decision": audit["write_decision"],
         "features_present": audit["features_present"],
         "blast_radius": "routing_control_plane",
-        "unsupported_paths": unsupported_paths,
+        "unsupported_paths": _high_risk_unsupported_paths(audit, policy_calibration),
         "route_policy_dependencies": route_policy_dependencies,
-        "missing_route_policy_refs": missing_route_policy_refs,
+        **policy_calibration,
         "touched_scope": audit["touched_scope"],
         "pbr": audit["pbr"],
         "bgp": audit["bgp"],
@@ -476,7 +482,7 @@ def _failed_real_sample_audit(sample: Path, exc: Exception) -> dict[str, Any]:
         "pbr": {},
         "bgp": {},
         "route_policy_dependencies": [],
-        "missing_route_policy_refs": [],
+        **_empty_policy_calibration(),
         "touched_scope": _empty_high_risk_touched_scope(),
         "error": _error_payload(exc),
     }
@@ -538,18 +544,281 @@ def _bgp_route_policy_dependencies(audit: dict[str, Any]) -> list[dict[str, str]
     return dependencies
 
 
-def _missing_route_policy_refs(
+def _offline_high_risk_policy_evidence() -> dict[str, Any]:
+    return _normalize_policy_evidence(
+        {
+            "route_policies": [
+                {
+                    "name": "rp-in",
+                    "referenced_prefix_lists": ["pl-rp-in"],
+                    "referenced_acl_ids": [3999],
+                },
+                {
+                    "name": "rp-out",
+                    "referenced_prefix_lists": ["pl-rp-out"],
+                    "referenced_acl_ids": [3999],
+                },
+            ],
+            "prefix_lists": ["pl-rp-in", "pl-rp-out"],
+            "acl_ids": [3999],
+        },
+        default_source="offline_fixture",
+    )
+
+
+def _sample_policy_evidence(sample: Path, parsed: dict[str, Any]) -> dict[str, Any]:
+    evidence = _normalize_policy_evidence(
+        {"acl_ids": [acl["acl_id"] for acl in parsed.get("acls", [])]},
+        default_source="parsed_sample",
+    )
+    sidecar = sample.with_suffix(".evidence.json")
+    if not sidecar.exists():
+        return evidence
+    return _merge_policy_evidence(
+        evidence,
+        _normalize_policy_evidence(
+            json.loads(sidecar.read_text()),
+            default_source="sample_sidecar",
+        ),
+    )
+
+
+def _normalize_policy_evidence(
+    payload: dict[str, Any],
+    *,
+    default_source: str,
+) -> dict[str, Any]:
+    route_policies = {}
+    for item in payload.get("route_policies", []):
+        raw_policy = {"name": item} if isinstance(item, str) else dict(item)
+        name = _normalized_non_empty_string(raw_policy.get("name"))
+        if name is None:
+            continue
+        route_policies[name] = {
+            "name": name,
+            "referenced_prefix_lists": _normalized_string_list(
+                raw_policy.get("referenced_prefix_lists", [])
+            ),
+            "referenced_acl_ids": _normalized_int_list(
+                raw_policy.get("referenced_acl_ids", [])
+            ),
+            "source": _normalized_non_empty_string(raw_policy.get("source"))
+            or default_source,
+        }
+    return {
+        "route_policies": route_policies,
+        "prefix_lists": set(
+            _normalized_prefix_list_names(payload.get("prefix_lists", []))
+        ),
+        "acl_ids": set(
+            _normalized_int_list(payload.get("acl_ids", []))
+            + _normalized_acl_ids(payload.get("acls", []))
+        ),
+    }
+
+
+def _merge_policy_evidence(
+    left: dict[str, Any],
+    right: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "route_policies": {
+            **left["route_policies"],
+            **right["route_policies"],
+        },
+        "prefix_lists": set(left["prefix_lists"]) | set(right["prefix_lists"]),
+        "acl_ids": set(left["acl_ids"]) | set(right["acl_ids"]),
+    }
+
+
+def _calibrate_bgp_policy_evidence(
     route_policy_dependencies: list[dict[str, str]],
-) -> list[str]:
-    refs = []
-    seen = set()
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    dependency_status = []
+    route_policy_evidence = []
+    missing_route_policy_refs = []
+    missing_prefix_list_refs = []
+    missing_acl_refs = []
+    reported_route_policies = set()
+
     for dependency in route_policy_dependencies:
         policy = dependency["to"].removeprefix("route-policy ").strip()
-        if not policy or policy in seen:
+        policy_evidence = evidence["route_policies"].get(policy)
+        if policy_evidence is None:
+            dependency_status.append(
+                {
+                    **dependency,
+                    "route_policy": policy,
+                    "status": "missing",
+                    "referenced_prefix_lists": [],
+                    "referenced_acl_ids": [],
+                    "missing_prefix_lists": [],
+                    "missing_acl_ids": [],
+                    "evidence_source": None,
+                }
+            )
+            if policy and policy not in missing_route_policy_refs:
+                missing_route_policy_refs.append(policy)
             continue
-        seen.add(policy)
-        refs.append(policy)
-    return refs
+
+        missing_prefix_lists = [
+            prefix_list
+            for prefix_list in policy_evidence["referenced_prefix_lists"]
+            if prefix_list not in evidence["prefix_lists"]
+        ]
+        missing_acl_ids = [
+            acl_id
+            for acl_id in policy_evidence["referenced_acl_ids"]
+            if acl_id not in evidence["acl_ids"]
+        ]
+        for prefix_list in missing_prefix_lists:
+            if prefix_list not in missing_prefix_list_refs:
+                missing_prefix_list_refs.append(prefix_list)
+        for acl_id in missing_acl_ids:
+            if acl_id not in missing_acl_refs:
+                missing_acl_refs.append(acl_id)
+
+        dependency_status.append(
+            {
+                **dependency,
+                "route_policy": policy,
+                "status": (
+                    "present_read_only"
+                    if not missing_prefix_lists and not missing_acl_ids
+                    else "present_with_missing_dependencies"
+                ),
+                "referenced_prefix_lists": policy_evidence["referenced_prefix_lists"],
+                "referenced_acl_ids": policy_evidence["referenced_acl_ids"],
+                "missing_prefix_lists": missing_prefix_lists,
+                "missing_acl_ids": missing_acl_ids,
+                "evidence_source": policy_evidence["source"],
+            }
+        )
+        if policy in reported_route_policies:
+            continue
+        reported_route_policies.add(policy)
+        route_policy_evidence.append(
+            {
+                "name": policy,
+                "referenced_prefix_lists": policy_evidence["referenced_prefix_lists"],
+                "referenced_acl_ids": policy_evidence["referenced_acl_ids"],
+                "missing_prefix_lists": missing_prefix_lists,
+                "missing_acl_ids": missing_acl_ids,
+                "source": policy_evidence["source"],
+            }
+        )
+
+    return {
+        "route_policy_dependency_status": dependency_status,
+        "route_policy_evidence": route_policy_evidence,
+        "prefix_list_evidence": sorted(evidence["prefix_lists"]),
+        "acl_evidence": sorted(evidence["acl_ids"]),
+        "missing_route_policy_refs": missing_route_policy_refs,
+        "missing_prefix_list_refs": missing_prefix_list_refs,
+        "missing_acl_refs": missing_acl_refs,
+    }
+
+
+def _empty_policy_calibration() -> dict[str, Any]:
+    return {
+        "route_policy_dependency_status": [],
+        "route_policy_evidence": [],
+        "prefix_list_evidence": [],
+        "acl_evidence": [],
+        "missing_route_policy_refs": [],
+        "missing_prefix_list_refs": [],
+        "missing_acl_refs": [],
+    }
+
+
+def _high_risk_unsupported_paths(
+    audit: dict[str, Any],
+    policy_calibration: dict[str, Any],
+) -> list[str]:
+    unsupported_paths = []
+    if "bgp" in audit["features_present"]:
+        unsupported_paths.append("bgp: no path-level write evidence")
+        unsupported_paths.extend(
+            f"bgp: missing route-policy evidence {policy}"
+            for policy in policy_calibration["missing_route_policy_refs"]
+        )
+        unsupported_paths.extend(
+            f"bgp: missing prefix-list evidence {prefix_list}"
+            for prefix_list in policy_calibration["missing_prefix_list_refs"]
+        )
+        unsupported_paths.extend(
+            f"bgp: missing ACL evidence {acl_id}"
+            for acl_id in policy_calibration["missing_acl_refs"]
+        )
+    if "pbr" in audit["features_present"]:
+        unsupported_paths.append("pbr: no path-level write evidence")
+    return unsupported_paths
+
+
+def _normalized_prefix_list_names(values: list[Any]) -> list[str]:
+    names = []
+    for item in values:
+        if isinstance(item, str):
+            name = _normalized_non_empty_string(item)
+        else:
+            name = _normalized_non_empty_string(dict(item).get("name"))
+        if name is not None:
+            names.append(name)
+    return _dedupe_preserve_order(names)
+
+
+def _normalized_acl_ids(values: list[Any]) -> list[int]:
+    acl_ids = []
+    for item in values:
+        if isinstance(item, int):
+            acl_ids.append(item)
+            continue
+        raw = item if isinstance(item, str) else dict(item).get("acl_id")
+        try:
+            acl_ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    return _dedupe_sorted_ints(acl_ids)
+
+
+def _normalized_string_list(values: list[Any]) -> list[str]:
+    names = []
+    for value in values:
+        name = _normalized_non_empty_string(value)
+        if name is not None:
+            names.append(name)
+    return _dedupe_preserve_order(names)
+
+
+def _normalized_int_list(values: list[Any]) -> list[int]:
+    integers = []
+    for value in values:
+        try:
+            integers.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return _dedupe_sorted_ints(integers)
+
+
+def _normalized_non_empty_string(value: Any) -> str | None:
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
+def _dedupe_preserve_order(values: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _dedupe_sorted_ints(values: list[int]) -> list[int]:
+    return sorted(set(values))
 
 
 def _empty_high_risk_touched_scope() -> dict[str, list[Any]]:

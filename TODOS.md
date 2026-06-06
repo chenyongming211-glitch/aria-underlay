@@ -91,7 +91,7 @@
 
 ## P1: 进行中 — PBR/BGP read-only parser/audit + BGP dry-run gated intent skeleton
 
-**状态**：初版已落地在 Python adapter：`H3cStateParser` 会从 running XML 中识别 PBR/BGP 高风险配置，输出 `high_risk_audit` 和结构化 `touched_scope`；offline H3C acceptance report 新增 `read_only_audits`，明确 `write_decision=read_only`、`blast_radius=routing_control_plane`、unsupported paths、affected VRFs、BGP AS、BGP neighbors、route-policy refs、PBR policy refs、ACL refs 和 interfaces。BGP 审计已升级到邻居级细节：local AS、remote AS、session state、import/export policy、VRF 和 per-neighbor raw path。PBR/BGP real-sample calibration harness 已接入：可从脱敏 H3C running XML 样本目录生成 `real_sample_audits`；目录缺失或当前无样本时 CI 不失败。BGP intent / dry-run gated skeleton 已接入 domain/proto/ChangePlan：可以表达 BGP process、neighbor 和 route-policy reference；ChangePlan 输出 BGP route-policy dependency edges、`route_policy_dependencies` 和 `missing_route_policy_refs`，缺少 policy evidence 或 path-level evidence 时结构化拒绝写入。当前仍不生成 PBR/BGP renderer，不进入 adapter 写配置路径。
+**状态**：初版已落地在 Python adapter：`H3cStateParser` 会从 running XML 中识别 PBR/BGP 高风险配置，输出 `high_risk_audit` 和结构化 `touched_scope`；offline H3C acceptance report 新增 `read_only_audits`，明确 `write_decision=read_only`、`blast_radius=routing_control_plane`、unsupported paths、affected VRFs、BGP AS、BGP neighbors、route-policy refs、PBR policy refs、ACL refs 和 interfaces。BGP 审计已升级到邻居级细节：local AS、remote AS、session state、import/export policy、VRF 和 per-neighbor raw path。PBR/BGP real-sample calibration harness 已接入：可从脱敏 H3C running XML 样本目录生成 `real_sample_audits`；目录缺失或当前无样本时 CI 不失败。真实样本 sidecar evidence 已接入，可声明 route-policy、prefix-list、ACL 证据，让报告区分 route-policy 存在但仍只读、route-policy 缺失、route-policy 下游 prefix-list/ACL 证据缺失。BGP intent / dry-run gated skeleton 已接入 domain/proto/ChangePlan：可以表达 BGP process、neighbor 和 route-policy reference；ChangePlan 输出 BGP route-policy dependency edges、`route_policy_dependencies` 和 `missing_route_policy_refs`，缺少 policy evidence 或 path-level evidence 时结构化拒绝写入。当前仍不生成 PBR/BGP renderer，不进入 adapter 写配置路径。
 
 **做什么**：先把 PBR/BGP 作为只读审计对象接入 parser 和离线报告，让系统能发现现网中是否已经存在 PBR/BGP、涉及哪些 VRF/neighbor/policy/ACL/interface，以及为什么当前必须拒绝自动写入。
 
@@ -100,6 +100,7 @@
 - Offline H3C acceptance runner 输出 `read_only_audits`，覆盖 parser-only audit、read-only decision、blast radius、unsupported paths、`touched_scope` 和 warnings。
 - BGP read-only audit 输出 `neighbor_details`，用于真实样本校准 local AS / remote AS / session state / route policy 解析质量。
 - Offline H3C acceptance runner 可通过 `--pbr-bgp-sample-dir` 加载脱敏真实样本，输出每个样本的 `real_sample_audits`；样本缺失时保持非失败。
+- 真实样本可通过 `<sample>.evidence.json` 提供 route-policy / prefix-list / ACL 证据；report 输出 `route_policy_dependency_status`、`route_policy_evidence`、`prefix_list_evidence`、`acl_evidence`、`missing_prefix_list_refs` 和 `missing_acl_refs`。
 - PBR 默认 blast radius 为 `policy_reference`；BGP 默认 blast radius 为 `routing_control_plane`。
 - BGP process / neighbor intent 进入 desired state、shadow diff 和 ChangePlan；dry-run 输出 BGP dependency edges、rollback order、routing blast radius 和 unsupported paths。
 - BGP neighbor import/export policy 会进入 ChangePlan route-policy dependency；missing policy evidence 会输出为 `missing_route_policy_refs` 和 `bgp: missing route-policy evidence ...`。
@@ -114,7 +115,7 @@
 
 **下一步**：
 - 收集脱敏真实 H3C running XML 样本，放入 `adapter-python/tests/fixtures/state_parsers/real_samples/h3c/comware7/` 或通过 `--pbr-bgp-sample-dir` 指定目录跑 calibration harness。
-- 继续做 BGP real-sample calibration：用真实样本补齐不同 Comware 固件的 neighbor/peer tag 变体，直到 `neighbor_details` 覆盖稳定。
+- 继续做 BGP real-sample calibration：用真实样本和 sidecar evidence 补齐不同 Comware 固件的 neighbor/peer tag 变体、route-policy 依赖和 prefix-list/ACL 引用，直到 `neighbor_details` 和依赖状态覆盖稳定。
 - 之后再推进 BGP path-level profile 验证；写配置仍必须等待 DeviceModelProfile 和 ChangePlan 门禁通过。
 
 **工作量**：M
