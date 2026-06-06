@@ -146,17 +146,11 @@ fn collect_unsupported_paths(
     };
     let mut unsupported = Vec::new();
     if touches_policy_reference(change_set) && profile.pbr_write_readiness == WriteReadiness::WriteRejected {
-        unsupported.push(format!(
-            "pbr: {}",
-            first_rejection_reason(profile, "pbr"),
-        ));
+        unsupported.push(feature_rejection_reason(profile, "pbr"));
     }
     if touches_bgp(change_set) {
         if profile.bgp_write_readiness == WriteReadiness::WriteRejected {
-            unsupported.push(format!(
-                "bgp: {}",
-                first_rejection_reason(profile, "bgp"),
-            ));
+            unsupported.push(feature_rejection_reason(profile, "bgp"));
         } else if profile.bgp_write_readiness == WriteReadiness::WriteSafe
             && !has_writable_bgp_path(profile)
         {
@@ -164,6 +158,16 @@ fn collect_unsupported_paths(
         }
     }
     unsupported
+}
+
+fn feature_rejection_reason(profile: &DeviceModelProfile, feature: &str) -> String {
+    let reason = first_rejection_reason(profile, feature);
+    let prefix = format!("{feature}:");
+    if reason.trim_start().to_ascii_lowercase().starts_with(&prefix) {
+        reason
+    } else {
+        format!("{feature}: {reason}")
+    }
 }
 
 fn first_rejection_reason(profile: &DeviceModelProfile, feature: &str) -> String {
