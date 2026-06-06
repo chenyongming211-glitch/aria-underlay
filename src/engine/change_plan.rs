@@ -190,7 +190,7 @@ fn collect_unsupported_paths(
         }
         return unsupported;
     };
-    if touches_policy_reference(change_set) && profile.pbr_write_readiness == WriteReadiness::WriteRejected {
+    if touches_pbr(change_set) && profile.pbr_write_readiness == WriteReadiness::WriteRejected {
         unsupported.push(feature_rejection_reason(profile, "pbr"));
     }
     if touches_bgp(change_set) {
@@ -262,8 +262,8 @@ fn classify_write_decision(
         }
     }
 
-    if profile.pbr_write_readiness == WriteReadiness::ReadOnly
-        || profile.bgp_write_readiness == WriteReadiness::ReadOnly
+    if (touches_pbr(change_set) && profile.pbr_write_readiness == WriteReadiness::ReadOnly)
+        || (touches_bgp(change_set) && profile.bgp_write_readiness == WriteReadiness::ReadOnly)
     {
         if matches!(
             blast_radius,
@@ -531,23 +531,13 @@ fn classify_blast_radius(change_set: &ChangeSet) -> BlastRadius {
     if touches_bgp(change_set) {
         return BlastRadius::RoutingControlPlane;
     }
-    if change_set.ops.iter().any(|op| {
-        matches!(
-            op,
-            ChangeOp::CreateAcl(_)
-                | ChangeOp::UpdateAcl { .. }
-                | ChangeOp::DeleteAcl { .. }
-                | ChangeOp::CreateAclBinding(_)
-                | ChangeOp::UpdateAclBinding { .. }
-                | ChangeOp::DeleteAclBinding { .. }
-        )
-    }) {
+    if touches_acl(change_set) {
         return BlastRadius::PolicyReference;
     }
     BlastRadius::LocalInterfaceOrVlan
 }
 
-fn touches_policy_reference(change_set: &ChangeSet) -> bool {
+fn touches_acl(change_set: &ChangeSet) -> bool {
     change_set.ops.iter().any(|op| {
         matches!(
             op,
@@ -559,6 +549,10 @@ fn touches_policy_reference(change_set: &ChangeSet) -> bool {
                 | ChangeOp::DeleteAclBinding { .. }
         )
     })
+}
+
+fn touches_pbr(_change_set: &ChangeSet) -> bool {
+    false
 }
 
 fn touches_bgp(change_set: &ChangeSet) -> bool {

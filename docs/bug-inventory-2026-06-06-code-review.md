@@ -22,6 +22,7 @@
 
 ### H1: ACL 写入被 ReadOnly 误拦截
 
+- **状态**: 已修复 — `fix: separate acl readiness from pbr bgp gates`
 - **文件**: `src/engine/change_plan.rs:265-273`
 - **描述**: `classify_write_decision` 用 `||` 检查 `pbr_write_readiness == ReadOnly || bgp_write_readiness == ReadOnly`，匹配 `BlastRadius::PolicyReference`（含 ACL 操作）。当 BGP 为 ReadOnly 时，纯 ACL 变更也被错误地返回 `ReadOnly`
 - **影响**: 设备 profile 标记 BGP 为 ReadOnly 后，ACL 写配置被意外阻断
@@ -29,6 +30,7 @@
 
 ### H2: ACL 变更被当作 PBR 拒绝
 
+- **状态**: 已修复 — `fix: separate acl readiness from pbr bgp gates`
 - **文件**: `src/engine/change_plan.rs:193`
 - **描述**: `collect_unsupported_paths` 用 `touches_policy_reference()` 判断 PBR，但该函数匹配所有 ACL 操作。当 `pbr_write_readiness == WriteRejected` 时，纯 ACL 变更被错误标记为 PBR 拒绝
 - **影响**: ACL-only 变更在 PBR 不支持的设备上被拒
