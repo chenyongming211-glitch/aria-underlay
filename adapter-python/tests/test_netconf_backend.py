@@ -915,25 +915,20 @@ def test_prepare_candidate_edits_and_validates_when_renderer_is_configured():
     ]
 
 
-def test_prepare_candidate_edits_running_for_rollback_on_error_devices():
+def test_prepare_candidate_rejects_writable_running_rollback_on_error_devices():
     session = _RecordingSession(
         server_capabilities=[BASE_10, WRITABLE_RUNNING, ROLLBACK_ON_ERROR]
     )
     backend = _BackendWithSession(session, config_renderer=_StaticRenderer("<config/>"))
 
-    backend.prepare_candidate(desired_state=object())
+    with pytest.raises(AdapterError) as exc_info:
+        backend.prepare_candidate(desired_state=object())
 
-    assert session.calls == [
-        (
-            "edit_config",
-            {
-                "target": "running",
-                "config": "<config/>",
-                "default_operation": "merge",
-                "error_option": "rollback-on-error",
-            },
-        )
-    ]
+    assert exc_info.value.code == "NETCONF_PREPARE_STRATEGY_UNSUPPORTED"
+    assert "writable-running rollback-on-error cannot provide post-prepare rollback" in (
+        exc_info.value.raw_error_summary
+    )
+    assert session.calls == []
 
 
 def test_prepare_candidate_rejects_devices_without_transactional_edit_target():
