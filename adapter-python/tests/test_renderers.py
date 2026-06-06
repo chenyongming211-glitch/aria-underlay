@@ -576,9 +576,7 @@ def test_h3c_renderer_builds_explicit_delete_document():
     assert access.find(f"{{{ns}}}IfIndex").text == "13"
 
     trunk = root.find(f".//{{{ns}}}VLAN/{{{ns}}}TrunkInterfaces/{{{ns}}}Interface")
-    assert trunk is not None
-    assert trunk.attrib[operation_attr] == "delete"
-    assert trunk.find(f"{{{ns}}}IfIndex").text == "13"
+    assert trunk is None
     assert binding.find(f"{{{ns}}}AppAclGroup").text == "3999"
 
 

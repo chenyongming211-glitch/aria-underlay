@@ -25,6 +25,7 @@ from aria_underlay_adapter.backends.netconf import (
     build_state_filter,
     capability_from_raw,
 )
+from aria_underlay_adapter.backends.netconf_state import verify_interfaces
 from aria_underlay_adapter.drivers.netconf_backed import NetconfBackedDriver
 from aria_underlay_adapter.errors import AdapterError
 from aria_underlay_adapter.proto import aria_underlay_adapter_pb2 as pb2
@@ -1853,6 +1854,41 @@ def test_verify_running_fails_with_parsed_vlan_mismatch():
         assert "name mismatch" in error.raw_error_summary
     else:
         raise AssertionError("parsed running mismatch should fail verification")
+
+
+def test_verify_interfaces_reports_unknown_string_mode_as_verify_failure():
+    desired = SimpleNamespace(
+        interfaces=[
+            SimpleNamespace(
+                name="GE1/0/1",
+                admin_state="up",
+                description=None,
+                mode={"kind": "hybrid"},
+            )
+        ],
+        delete_interface_names=[],
+    )
+    observed = {
+        "interfaces": [
+            {
+                "name": "GE1/0/1",
+                "admin_state": "up",
+                "description": None,
+                "mode": {
+                    "kind": "access",
+                    "access_vlan": 100,
+                    "native_vlan": None,
+                    "allowed_vlans": [],
+                },
+            }
+        ]
+    }
+
+    with pytest.raises(AdapterError) as exc:
+        verify_interfaces(desired, observed)
+
+    assert exc.value.code == "VERIFY_FAILED"
+    assert "unknown port mode kind during verification" in exc.value.raw_error_summary
 
 
 def test_verify_running_succeeds_with_matching_acl():
