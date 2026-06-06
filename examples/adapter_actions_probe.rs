@@ -112,6 +112,7 @@ fn desired_state(device_id: DeviceId) -> DeviceDesiredState {
         interfaces,
         acls: BTreeMap::new(),
         acl_bindings: BTreeMap::new(),
+        route_policy_refs: Default::default(),
         bgp_processes: BTreeMap::new(),
         bgp_neighbors: BTreeMap::new(),
         delete_vlan_ids: Default::default(),

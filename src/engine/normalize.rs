@@ -167,6 +167,13 @@ pub fn normalize_desired_state(mut state: DeviceDesiredState) -> DeviceDesiredSt
         })
         .collect::<BTreeMap<_, _>>();
 
+    state.route_policy_refs = state
+        .route_policy_refs
+        .into_iter()
+        .map(|policy| policy.trim().to_string())
+        .filter(|policy| !policy.is_empty())
+        .collect::<BTreeSet<_>>();
+
     state.bgp_processes = state
         .bgp_processes
         .into_values()

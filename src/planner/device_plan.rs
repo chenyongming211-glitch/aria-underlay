@@ -17,6 +17,8 @@ pub struct DeviceDesiredState {
     #[serde(default)]
     pub acl_bindings: BTreeMap<String, AclBinding>,
     #[serde(default)]
+    pub route_policy_refs: BTreeSet<String>,
+    #[serde(default)]
     pub bgp_processes: BTreeMap<String, BgpProcess>,
     #[serde(default)]
     pub bgp_neighbors: BTreeMap<String, BgpNeighbor>,
@@ -77,6 +79,7 @@ pub fn plan_switch_pair(intent: &SwitchPairIntent) -> Vec<DeviceDesiredState> {
                 interfaces,
                 acls: BTreeMap::new(),
                 acl_bindings: BTreeMap::new(),
+                route_policy_refs: BTreeSet::new(),
                 bgp_processes: BTreeMap::new(),
                 bgp_neighbors: BTreeMap::new(),
                 delete_vlan_ids: BTreeSet::new(),

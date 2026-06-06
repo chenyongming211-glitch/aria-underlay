@@ -190,6 +190,8 @@ fn dry_run_reports_bgp_route_policy_dependencies_and_missing_evidence() {
 #[test]
 fn dry_run_rejects_bgp_neighbor_without_path_level_profile_evidence() {
     let mut desired_state = empty_desired_state("leaf-1");
+    desired_state.route_policy_refs.insert("RP-IN".to_string());
+    desired_state.route_policy_refs.insert("RP-OUT".to_string());
     desired_state.bgp_processes.insert(
         "default".to_string(),
         BgpProcess {

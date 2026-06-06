@@ -64,6 +64,7 @@ pub fn plan_underlay_domain(
                         })
                         .collect(),
                     acl_bindings: BTreeMap::new(),
+                    route_policy_refs: Default::default(),
                     bgp_processes: BTreeMap::new(),
                     bgp_neighbors: BTreeMap::new(),
                     delete_vlan_ids: intent.delete_vlan_ids.iter().copied().collect(),

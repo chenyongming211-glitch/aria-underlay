@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::device::model_profile::DeviceModelProfile;
-use crate::engine::change_plan::{build_change_plan_with_profile, ChangePlan};
+use crate::engine::change_plan::{
+    build_change_plan_with_profile_and_route_policy_evidence, ChangePlan,
+};
 use crate::engine::diff::{compute_diff, ChangeSet};
 use crate::model::DeviceId;
 use crate::planner::device_plan::DeviceDesiredState;
@@ -52,7 +54,11 @@ pub fn build_dry_run_plan_with_profiles(
             })?;
         let change_set = compute_diff(desired, current);
         let profile = profiles.get(&desired.device_id);
-        let change_plan = build_change_plan_with_profile(&change_set, profile);
+        let change_plan = build_change_plan_with_profile_and_route_policy_evidence(
+            &change_set,
+            profile,
+            &desired.route_policy_refs,
+        );
         change_sets.push(change_set);
         change_plans.push(change_plan);
     }

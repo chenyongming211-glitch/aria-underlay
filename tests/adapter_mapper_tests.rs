@@ -296,6 +296,7 @@ fn maps_desired_state_to_proto() {
             "GE1/0/1|inbound".into(),
             acl_binding("GE1/0/1", AclDirection::Inbound, 3999),
         )]),
+        route_policy_refs: Default::default(),
         bgp_processes: BTreeMap::from([(
             "default".into(),
             BgpProcess {
@@ -531,6 +532,7 @@ fn desired_state() -> DeviceDesiredState {
             "GE1/0/1|inbound".into(),
             acl_binding("GE1/0/1", AclDirection::Inbound, 3999),
         )]),
+        route_policy_refs: Default::default(),
         bgp_processes: BTreeMap::new(),
         bgp_neighbors: BTreeMap::new(),
         delete_vlan_ids: Default::default(),

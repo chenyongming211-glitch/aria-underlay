@@ -384,6 +384,7 @@ fn desired_state_with_acl_bindings(
             .into_iter()
             .map(|binding| (binding.key(), binding))
             .collect(),
+        route_policy_refs: Default::default(),
         bgp_processes: Default::default(),
         bgp_neighbors: Default::default(),
         delete_vlan_ids: Default::default(),
