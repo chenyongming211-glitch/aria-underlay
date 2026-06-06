@@ -262,6 +262,9 @@ impl ChangeSet {
                 }
                 ChangeOp::DeleteAcl { acl_id } => {
                     state.acls.remove(acl_id);
+                    state
+                        .acl_bindings
+                        .retain(|_, binding| binding.acl_id != *acl_id);
                 }
                 ChangeOp::CreateAclBinding(binding) => {
                     state.acl_bindings.insert(binding.key(), binding.clone());
@@ -288,6 +291,9 @@ impl ChangeSet {
                 }
                 ChangeOp::DeleteBgpProcess { vrf } => {
                     state.bgp_processes.remove(vrf);
+                    state
+                        .bgp_neighbors
+                        .retain(|_, neighbor| neighbor.vrf != *vrf);
                 }
                 ChangeOp::CreateBgpNeighbor(neighbor) => {
                     state.bgp_neighbors.insert(neighbor.key(), neighbor.clone());

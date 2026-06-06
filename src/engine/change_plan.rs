@@ -130,11 +130,11 @@ pub fn build_change_plan_with_profile_and_route_policy_evidence(
             ChangeOp::UpdateAcl { .. }
             | ChangeOp::UpdateVlan { .. }
             | ChangeOp::UpdateInterface { .. }
-            | ChangeOp::UpdateBgpProcess { .. }
-            | ChangeOp::UpdateBgpNeighbor { .. } => update_base.push(op.clone()),
+            | ChangeOp::UpdateBgpProcess { .. } => update_base.push(op.clone()),
             ChangeOp::CreateAclBinding(_)
             | ChangeOp::UpdateAclBinding { .. }
-            | ChangeOp::CreateBgpNeighbor(_) => bind.push(op.clone()),
+            | ChangeOp::CreateBgpNeighbor(_)
+            | ChangeOp::UpdateBgpNeighbor { .. } => bind.push(op.clone()),
         }
     }
 

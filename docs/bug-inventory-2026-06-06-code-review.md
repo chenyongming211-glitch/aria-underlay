@@ -82,6 +82,7 @@
 - **文件**: `src/engine/diff.rs:289-290`
 - **描述**: `DeleteBgpProcess` 只 `remove(vrf)` 不清理该 VRF 下的 neighbors。`DeleteAcl` 同理不清理 bindings
 - **影响**: Shadow 中出现孤立引用（neighbors 引用不存在的 process，bindings 引用不存在的 ACL）
+- **状态**: 已修复 — `fix: cascade shadow deletes and stage bgp neighbor updates`
 - **修复建议**: `DeleteBgpProcess` 时 `retain` 移除同 VRF 的 neighbors；`DeleteAcl` 时移除同 acl_id 的 bindings
 
 ### M2: `UpdateBgpNeighbor` 分阶段错误
@@ -89,6 +90,7 @@
 - **文件**: `src/engine/change_plan.rs:130-137`
 - **描述**: `UpdateBgpNeighbor` 在 `update_base`（stage 4），而 `UpdateAclBinding` 在 `bind`（stage 5），`CreateBgpNeighbor` 也在 `bind`
 - **影响**: 三者中 UpdateBgpNeighbor 分阶段不一致，可能导致更新顺序问题
+- **状态**: 已修复 — `fix: cascade shadow deletes and stage bgp neighbor updates`
 - **修复建议**: 将 `UpdateBgpNeighbor` 移到 `bind` 阶段
 
 ### M3: Python 验证函数对非数字字符串 crash
