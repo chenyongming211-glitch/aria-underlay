@@ -520,6 +520,53 @@ async fn apply_domain_intent_reuses_persisted_response_after_service_recreation(
 }
 
 #[tokio::test]
+async fn apply_domain_intent_does_not_cache_idempotency_record_when_persistence_fails() {
+    let prepare_calls = Arc::new(AtomicUsize::new(0));
+    let endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-mgmt", 100)),
+        prepare_calls: Some(prepare_calls.clone()),
+        ..Default::default()
+    })
+    .await;
+    let inventory = inventory_with_endpoint_at(
+        "stack-mgmt",
+        DeviceLifecycleState::Ready,
+        endpoint,
+    );
+    let idempotency_root = temp_store_dir("idempotency-file-root");
+    std::fs::write(&idempotency_root, b"not a directory")
+        .expect("idempotency root fixture should be a file");
+    let service = AriaUnderlayService::new(inventory)
+        .with_file_apply_idempotency_store(&idempotency_root);
+
+    let mut first_request = apply_request_with_vlan(200, DriftPolicy::ReportOnly);
+    first_request.idempotency_key = Some("tenant-a:site-a:op-persist-failed".into());
+    let first_response = service
+        .apply_domain_intent(first_request)
+        .await
+        .expect("first apply should succeed while reporting idempotency persistence failure");
+
+    let mut retry_request = apply_request_with_vlan(200, DriftPolicy::ReportOnly);
+    retry_request.idempotency_key = Some("tenant-a:site-a:op-persist-failed".into());
+    let retry_response = service
+        .apply_domain_intent(retry_request)
+        .await
+        .expect("retry should re-apply when idempotency persistence failed");
+
+    assert_eq!(prepare_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(first_response.status, ApplyStatus::Success);
+    assert_eq!(retry_response.status, ApplyStatus::Success);
+    assert!(!first_response.reused);
+    assert!(!retry_response.reused);
+    assert_ne!(first_response.tx_id, retry_response.tx_id);
+    assert!(first_response.warnings.iter().any(|warning| {
+        warning.contains("idempotency record persistence failed")
+    }));
+
+    std::fs::remove_file(idempotency_root).ok();
+}
+
+#[tokio::test]
 async fn apply_domain_intent_serializes_same_domain_requests() {
     let first_prepare_calls = Arc::new(AtomicUsize::new(0));
     let first_prepare_release = Arc::new(tokio::sync::Notify::new());
