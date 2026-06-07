@@ -108,6 +108,32 @@ fn change_plan_stages_bgp_neighbor_update_as_bind_reference() {
 }
 
 #[test]
+fn change_plan_rollback_for_acl_binding_update_uses_previous_binding() {
+    let change_set = ChangeSet {
+        device_id: DeviceId("leaf-1".to_string()),
+        ops: vec![ChangeOp::UpdateAclBinding {
+            before: AclBinding {
+                interface_name: "GigabitEthernet1/0/1".to_string(),
+                direction: AclDirection::Inbound,
+                acl_id: 3998,
+            },
+            after: AclBinding {
+                interface_name: "GigabitEthernet1/0/1".to_string(),
+                direction: AclDirection::Inbound,
+                acl_id: 3999,
+            },
+        }],
+    };
+
+    let plan = build_change_plan(&change_set);
+
+    assert_eq!(
+        plan.rollback_order,
+        vec!["remove acl binding 3998 on GigabitEthernet1/0/1 inbound"]
+    );
+}
+
+#[test]
 fn change_plan_treats_interface_config_delete_as_local_delete() {
     let change_set = ChangeSet {
         device_id: DeviceId("leaf-1".to_string()),
