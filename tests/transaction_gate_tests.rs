@@ -475,6 +475,38 @@ async fn apply_domain_intent_rejects_same_idempotency_key_for_different_payload(
 }
 
 #[tokio::test]
+async fn apply_domain_intent_rejects_too_long_idempotency_key_before_adapter() {
+    let prepare_calls = Arc::new(AtomicUsize::new(0));
+    let endpoint = start_test_adapter(TestAdapter {
+        current_state: Some(observed_access_state("stack-mgmt", 100)),
+        prepare_calls: Some(prepare_calls.clone()),
+        ..Default::default()
+    })
+    .await;
+    let inventory = inventory_with_endpoint_at(
+        "stack-mgmt",
+        DeviceLifecycleState::Ready,
+        endpoint,
+    );
+    let service = AriaUnderlayService::new(inventory);
+
+    let mut request = apply_request_with_vlan(200, DriftPolicy::ReportOnly);
+    request.idempotency_key = Some("x".repeat(126));
+    let err = service
+        .apply_domain_intent(request)
+        .await
+        .expect_err("too long idempotency key must fail closed");
+
+    assert_eq!(prepare_calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        err,
+        UnderlayError::InvalidIntent(message)
+            if message.contains("idempotency_key")
+                && message.contains("125 bytes")
+    ));
+}
+
+#[tokio::test]
 async fn apply_domain_intent_reuses_persisted_response_after_service_recreation() {
     let prepare_calls = Arc::new(AtomicUsize::new(0));
     let endpoint = start_test_adapter(TestAdapter {
