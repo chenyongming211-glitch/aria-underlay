@@ -574,15 +574,15 @@ impl AriaUnderlayService {
             );
             let mut response = response;
             self.persist_domain_apply_record(record_request, &mut response);
-            let mut stored_record =
-                ApplyIdempotencyRecord::new(fingerprint.clone(), response.clone());
+            let stored_record =
+                ApplyIdempotencyRecord::new(fingerprint, response.clone());
             if let Err(err) = self.apply_idempotency.put(&idempotency_key, &stored_record) {
                 response
                     .warnings
                     .push(format!("idempotency record persistence failed: {err}"));
-                stored_record = ApplyIdempotencyRecord::new(fingerprint, response.clone());
+            } else {
+                *record = Some(stored_record);
             }
-            *record = Some(stored_record);
             return Ok(response);
         }
 

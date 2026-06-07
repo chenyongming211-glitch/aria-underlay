@@ -116,6 +116,8 @@
 - **文件**: `src/api/service.rs:577-583`
 - **描述**: `put` 失败后仍执行 `*record = Some(stored_record)`，in-memory slot 被设置。进程内幂等有效，但重启后持久化记录丢失
 - **影响**: 进程重启后同一 `idempotency_key` 的请求会重新执行（实际触发概率低）
+- **状态**: 已修复 — `fix: avoid caching failed idempotency persistence`
+- **修复说明**: 持久化失败时仅在当前 response 上追加 warning，不写入 in-memory slot；同进程重试不会误复用未落盘记录
 - **修复建议**: `put` 失败时不设置 in-memory slot，或重试持久化
 
 ### M7: H3C 接口正则硬编码 slot `1/0/`
@@ -215,9 +217,10 @@
 4. **M3+M4** — Python verify enum crash 与 H3C interface delete 重复输出已修复
 5. **H3** — Apply lock scope 已按 domain 串行化，防止跨 scope 绕过互斥
 6. **H4** — writable-running rollback-on-error 已在 prepare 阶段 fail-closed
+7. **M5** — 幂等性持久化失败时不再写入 in-memory slot
 
 **P2（剩余设计/低频正确性项）：**
-1. **M5** — 幂等性持久化失败时的 in-memory slot 处理
+- 当前无剩余 P2 项
 
 **P3（边缘/低影响）：**
 - L1-L13 可纳入后续迭代，其中 L1-L3 需要 proto schema 扩展
