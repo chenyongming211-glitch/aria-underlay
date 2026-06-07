@@ -491,7 +491,7 @@ fn rollback_action_for_op(op: &ChangeOp) -> String {
         ChangeOp::CreateAcl(acl) => format!("delete acl {}", acl.acl_id),
         ChangeOp::UpdateAcl { before, .. } => format!("restore acl {}", before.acl_id),
         ChangeOp::DeleteAcl { acl_id } => format!("restore acl {acl_id}"),
-        ChangeOp::CreateAclBinding(binding) | ChangeOp::UpdateAclBinding { after: binding, .. } => {
+        ChangeOp::CreateAclBinding(binding) => {
             format!(
                 "remove acl binding {} on {} {}",
                 binding.acl_id,
@@ -499,6 +499,12 @@ fn rollback_action_for_op(op: &ChangeOp) -> String {
                 acl_direction_text(&binding.direction)
             )
         }
+        ChangeOp::UpdateAclBinding { before, .. } => format!(
+            "restore acl binding {} on {} {}",
+            before.acl_id,
+            before.interface_name,
+            acl_direction_text(&before.direction)
+        ),
         ChangeOp::DeleteAclBinding {
             interface_name,
             direction,

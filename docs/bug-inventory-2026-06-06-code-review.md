@@ -152,6 +152,8 @@
 - **文件**: `src/engine/change_plan.rs:494-501`
 - **描述**: Rollback 描述用了 `after`（新 binding），正确应该用 `before`（旧 binding）。对比 `UpdateBgpNeighbor`（line 518）正确使用了 `before`
 - **影响**: Rollback 日志描述不准确
+- **状态**: 已修复 — `fix: restore previous acl binding in rollback plan`
+- **修复说明**: `UpdateAclBinding` rollback 描述从 `CreateAclBinding` 的 remove 文案中拆出，改为使用 `before` 生成 `restore acl binding ...`，确保 dry-run/ChangePlan 报告展示旧绑定
 
 ### L5: commit/verify endpoint 中 `?` 后有不可达死代码
 
@@ -225,4 +227,4 @@
 - 当前无剩余 P2 项
 
 **P3（边缘/低影响）：**
-- L6 已修复；L1-L5、L7-L13 可纳入后续迭代，其中 L1-L3 需要 proto schema 扩展，L7 需要单独设计多 shadow 写入失败补偿策略
+- L4、L6 已修复；L1-L3、L5、L7-L13 可纳入后续迭代，其中 L1-L3 需要 proto schema 扩展，L7 需要单独设计多 shadow 写入失败补偿策略

@@ -129,7 +129,7 @@ fn change_plan_rollback_for_acl_binding_update_uses_previous_binding() {
 
     assert_eq!(
         plan.rollback_order,
-        vec!["remove acl binding 3998 on GigabitEthernet1/0/1 inbound"]
+        vec!["restore acl binding 3998 on GigabitEthernet1/0/1 inbound"]
     );
 }
 
