@@ -164,6 +164,8 @@
 - **文件**: `src/api/idempotency.rs:79-81`
 - **描述**: `normalize_idempotency_key` 只检查空，无长度限制。hex 编码后 key 长度翻倍，可能超 255 字节文件名限制
 - **影响**: 超长 key 导致文件写入失败
+- **状态**: 已修复 — `fix: limit idempotency key length`
+- **修复说明**: `idempotency_key` 在入口 trim 后按 UTF-8 byte length 限制为 125 bytes，确保文件型 store 的 hex 文件名加 `.json` 后不超过 255 bytes；超长 key 返回 `InvalidIntent`，不会进入 adapter
 
 ### L7: 多设备恢复中部分 shadow 写入失败导致不一致
 
@@ -223,4 +225,4 @@
 - 当前无剩余 P2 项
 
 **P3（边缘/低影响）：**
-- L1-L13 可纳入后续迭代，其中 L1-L3 需要 proto schema 扩展
+- L6 已修复；L1-L5、L7-L13 可纳入后续迭代，其中 L1-L3 需要 proto schema 扩展，L7 需要单独设计多 shadow 写入失败补偿策略

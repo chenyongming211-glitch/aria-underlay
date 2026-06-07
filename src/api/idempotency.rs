@@ -13,6 +13,8 @@ use crate::utils::atomic_file::atomic_write;
 use crate::utils::time::now_unix_secs;
 use crate::{UnderlayError, UnderlayResult};
 
+const MAX_IDEMPOTENCY_KEY_BYTES: usize = 125;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ApplyIdempotencyRecord {
     #[serde(default = "now_unix_secs")]
@@ -187,6 +189,12 @@ pub(crate) fn normalize_idempotency_key(key: &str) -> UnderlayResult<String> {
         return Err(UnderlayError::InvalidIntent(
             "idempotency_key must not be empty".into(),
         ));
+    }
+    let key_len = key.len();
+    if key_len > MAX_IDEMPOTENCY_KEY_BYTES {
+        return Err(UnderlayError::InvalidIntent(format!(
+            "idempotency_key must be at most {MAX_IDEMPOTENCY_KEY_BYTES} bytes after trimming; got {key_len} bytes"
+        )));
     }
     Ok(key.to_string())
 }
