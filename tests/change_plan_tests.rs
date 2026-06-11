@@ -2,8 +2,9 @@ use aria_underlay::device::model_profile::{
     DeviceModelProfile, ModelPathSupport, ModelProtocol, WriteReadiness,
 };
 use aria_underlay::engine::change_plan::{
-    build_change_plan, build_change_plan_with_profile, BlastRadius, ChangePlanStageKind,
-    DryRunWriteDecision, RoutePolicyDirection,
+    build_change_plan, build_change_plan_with_profile,
+    build_change_plan_with_profile_and_high_risk_features, BlastRadius, ChangePlanStageKind,
+    DryRunWriteDecision, HighRiskFeature, RoutePolicyDirection,
 };
 use aria_underlay::engine::diff::{ChangeOp, ChangeSet};
 use aria_underlay::engine::dry_run::{build_dry_run_plan, build_dry_run_plan_with_profiles};
@@ -338,6 +339,7 @@ fn change_plan_rejects_bgp_without_model_profile() {
     let plan = build_change_plan(&change_set);
 
     assert_eq!(plan.blast_radius, BlastRadius::RoutingControlPlane);
+    assert_eq!(plan.high_risk_features, vec![HighRiskFeature::Bgp]);
     assert_eq!(plan.write_decision, DryRunWriteDecision::Rejected);
     assert_eq!(
         plan.unsupported_paths,
@@ -511,6 +513,7 @@ fn acl_change_is_not_rejected_when_pbr_write_readiness_is_rejected() {
 
     let plan = build_change_plan_with_profile(&change_set, Some(&profile));
 
+    assert!(plan.high_risk_features.is_empty());
     assert_eq!(plan.blast_radius, BlastRadius::PolicyReference);
     assert!(plan.unsupported_paths.is_empty());
     assert_eq!(plan.write_decision, DryRunWriteDecision::AllowedVendorPrivate);
@@ -573,4 +576,138 @@ fn acl_change_is_not_read_only_when_bgp_write_readiness_is_read_only() {
     assert_eq!(plan.blast_radius, BlastRadius::PolicyReference);
     assert!(plan.unsupported_paths.is_empty());
     assert_eq!(plan.write_decision, DryRunWriteDecision::AllowedVendorPrivate);
+}
+
+#[test]
+fn high_risk_bgp_write_without_profile_is_rejected_with_routing_blast_radius() {
+    let change_set = ChangeSet {
+        device_id: DeviceId("leaf-1".to_string()),
+        ops: vec![],
+    };
+
+    let plan = build_change_plan_with_profile_and_high_risk_features(
+        &change_set,
+        None,
+        &[HighRiskFeature::Bgp],
+    );
+
+    assert_eq!(plan.high_risk_features, vec![HighRiskFeature::Bgp]);
+    assert_eq!(plan.blast_radius, BlastRadius::RoutingControlPlane);
+    assert_eq!(plan.write_decision, DryRunWriteDecision::Rejected);
+    assert_eq!(
+        plan.unsupported_paths,
+        vec!["bgp: missing device model profile"]
+    );
+}
+
+#[test]
+fn high_risk_pbr_write_rejected_profile_reports_pbr_reason_only() {
+    let profile = DeviceModelProfile {
+        profile_id: "h3c:S5560:Comware7".to_string(),
+        vendor: Vendor::H3c,
+        model: "S5560".to_string(),
+        os_version: "Comware7".to_string(),
+        paths: vec![],
+        pbr_write_readiness: WriteReadiness::WriteRejected,
+        bgp_write_readiness: WriteReadiness::WriteSafe,
+        rejection_reasons: vec![
+            "pbr: no path-level write evidence".to_string(),
+            "bgp: verified on OpenConfig".to_string(),
+        ],
+        yang_module_count: 0,
+    };
+    let change_set = ChangeSet {
+        device_id: DeviceId("leaf-1".to_string()),
+        ops: vec![],
+    };
+
+    let plan = build_change_plan_with_profile_and_high_risk_features(
+        &change_set,
+        Some(&profile),
+        &[HighRiskFeature::Pbr],
+    );
+
+    assert_eq!(plan.high_risk_features, vec![HighRiskFeature::Pbr]);
+    assert_eq!(plan.blast_radius, BlastRadius::PolicyReference);
+    assert_eq!(plan.write_decision, DryRunWriteDecision::Rejected);
+    assert_eq!(
+        plan.unsupported_paths,
+        vec!["pbr: no path-level write evidence"]
+    );
+}
+
+#[test]
+fn high_risk_bgp_read_only_profile_reports_read_only_decision() {
+    let profile = DeviceModelProfile {
+        profile_id: "h3c:S5560:Comware7".to_string(),
+        vendor: Vendor::H3c,
+        model: "S5560".to_string(),
+        os_version: "Comware7".to_string(),
+        paths: vec![ModelPathSupport {
+            protocol: ModelProtocol::OpenConfigNetconf,
+            model: "openconfig-bgp".to_string(),
+            revision: Some("2024-10-30".to_string()),
+            path: "/network-instances/network-instance/protocols/protocol/bgp".to_string(),
+            readable: true,
+            writable: false,
+            verified_on_device: true,
+            deviations: vec![],
+            notes: vec!["readback only".to_string()],
+        }],
+        pbr_write_readiness: WriteReadiness::WriteSafe,
+        bgp_write_readiness: WriteReadiness::ReadOnly,
+        rejection_reasons: vec![],
+        yang_module_count: 1,
+    };
+    let change_set = ChangeSet {
+        device_id: DeviceId("leaf-1".to_string()),
+        ops: vec![],
+    };
+
+    let plan = build_change_plan_with_profile_and_high_risk_features(
+        &change_set,
+        Some(&profile),
+        &[HighRiskFeature::Bgp],
+    );
+
+    assert_eq!(plan.write_decision, DryRunWriteDecision::ReadOnly);
+    assert_eq!(
+        plan.unsupported_paths,
+        vec!["bgp: write readiness is read-only"]
+    );
+}
+
+#[test]
+fn high_risk_qos_and_nqa_default_to_rejected_until_profile_contract_exists() {
+    let profile = DeviceModelProfile {
+        profile_id: "h3c:S5560:Comware7".to_string(),
+        vendor: Vendor::H3c,
+        model: "S5560".to_string(),
+        os_version: "Comware7".to_string(),
+        paths: vec![],
+        pbr_write_readiness: WriteReadiness::WriteSafe,
+        bgp_write_readiness: WriteReadiness::WriteSafe,
+        rejection_reasons: vec![],
+        yang_module_count: 0,
+    };
+    let change_set = ChangeSet {
+        device_id: DeviceId("leaf-1".to_string()),
+        ops: vec![],
+    };
+
+    let plan = build_change_plan_with_profile_and_high_risk_features(
+        &change_set,
+        Some(&profile),
+        &[HighRiskFeature::Qos, HighRiskFeature::Nqa],
+    );
+
+    assert_eq!(plan.blast_radius, BlastRadius::PolicyReference);
+    assert_eq!(plan.write_decision, DryRunWriteDecision::Rejected);
+    assert_eq!(
+        plan.unsupported_paths,
+        vec![
+            "qos: DeviceModelProfile write readiness is not implemented",
+            "nqa: DeviceModelProfile write readiness is not implemented",
+        ]
+    );
 }

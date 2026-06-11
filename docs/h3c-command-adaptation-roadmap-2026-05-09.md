@@ -55,6 +55,22 @@ For this roadmap, ACL family expansion may continue as a low-risk H3C command
 surface, but PBR/BGP/QoS/NQA write support starts only after the standard model
 gate and ChangePlan report path are implemented.
 
+The code gate is explicit: any QoS, PBR, NQA, or BGP write entry point must call
+the ChangePlan builder with the matching high-risk feature before any renderer
+is allowed to run. Low-risk VLAN, interface, ACL, and packet-filter binding
+changes must not be blocked by unrelated high-risk readiness in a device
+profile.
+
+The gate is fail-closed:
+
+- Missing `DeviceModelProfile` rejects declared high-risk writes.
+- PBR and BGP require `WriteSafe` readiness plus verified writable path-level
+  evidence for the matching model path.
+- QoS and NQA remain rejected until their `DeviceModelProfile` readiness
+  contract is added.
+- BGP raises the blast radius to `routing_control_plane`; QoS, PBR, and NQA use
+  `policy_reference` until a narrower command-specific scope is proven.
+
 ## Batch 1: Low-Risk Completion
 
 ### ACL Rule Description Closure

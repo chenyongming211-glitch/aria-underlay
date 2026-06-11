@@ -9,6 +9,8 @@ use crate::model::AclDirection;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangePlan {
     pub device_id: String,
+    #[serde(default)]
+    pub high_risk_features: Vec<HighRiskFeature>,
     pub stages: Vec<ChangePlanStage>,
     pub dependency_edges: Vec<ChangeDependencyEdge>,
     #[serde(default)]
@@ -26,9 +28,10 @@ pub struct ChangePlan {
 ///
 /// This is the final write decision for the current change set, derived from the
 /// device's model profile. Current production features (VLAN, interface, ACL) use
-/// handwritten vendor renderers and are always allowed. High-risk features (PBR,
-/// BGP, QoS) require path-level evidence in the model profile before writes are
-/// permitted.
+/// handwritten vendor renderers and are allowed through the low-risk path.
+/// High-risk features (PBR, BGP, QoS, NQA) must be declared explicitly or be
+/// inferred from high-risk intents, and require path-level evidence in the model
+/// profile before writes are permitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DryRunWriteDecision {
@@ -44,6 +47,15 @@ pub enum DryRunWriteDecision {
     ReadOnly,
     /// Write rejected: device lacks required transaction support or path evidence.
     Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HighRiskFeature {
+    Pbr,
+    Bgp,
+    Qos,
+    Nqa,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,10 +111,19 @@ pub fn build_change_plan_with_profile(
     change_set: &ChangeSet,
     profile: Option<&DeviceModelProfile>,
 ) -> ChangePlan {
-    build_change_plan_with_profile_and_route_policy_evidence(
+    build_change_plan_with_profile_and_high_risk_features(change_set, profile, &[])
+}
+
+pub fn build_change_plan_with_profile_and_high_risk_features(
+    change_set: &ChangeSet,
+    profile: Option<&DeviceModelProfile>,
+    high_risk_features: &[HighRiskFeature],
+) -> ChangePlan {
+    build_change_plan_with_profile_route_policy_evidence_and_high_risk_features(
         change_set,
         profile,
         &BTreeSet::new(),
+        high_risk_features,
     )
 }
 
@@ -110,6 +131,20 @@ pub fn build_change_plan_with_profile_and_route_policy_evidence(
     change_set: &ChangeSet,
     profile: Option<&DeviceModelProfile>,
     route_policy_evidence: &BTreeSet<String>,
+) -> ChangePlan {
+    build_change_plan_with_profile_route_policy_evidence_and_high_risk_features(
+        change_set,
+        profile,
+        route_policy_evidence,
+        &[],
+    )
+}
+
+pub fn build_change_plan_with_profile_route_policy_evidence_and_high_risk_features(
+    change_set: &ChangeSet,
+    profile: Option<&DeviceModelProfile>,
+    route_policy_evidence: &BTreeSet<String>,
+    high_risk_features: &[HighRiskFeature],
 ) -> ChangePlan {
     let mut unbind = Vec::new();
     let mut delete_base = Vec::new();
@@ -150,14 +185,26 @@ pub fn build_change_plan_with_profile_and_route_policy_evidence(
         &route_policy_dependencies,
         route_policy_evidence,
     );
+    let high_risk_features = effective_high_risk_features(change_set, high_risk_features);
     let dependency_edges = dependency_edges_for_change_set(change_set);
     let rollback_order = rollback_order_for_stages(&stages);
-    let blast_radius = classify_blast_radius(change_set);
-    let unsupported_paths = collect_unsupported_paths(change_set, profile, &missing_route_policy_refs);
-    let write_decision =
-        classify_write_decision(profile, &blast_radius, &unsupported_paths, change_set);
+    let blast_radius = classify_blast_radius(change_set, &high_risk_features);
+    let unsupported_paths = collect_unsupported_paths(
+        change_set,
+        profile,
+        &missing_route_policy_refs,
+        &high_risk_features,
+    );
+    let write_decision = classify_write_decision(
+        profile,
+        &blast_radius,
+        &unsupported_paths,
+        change_set,
+        &high_risk_features,
+    );
     ChangePlan {
         device_id: change_set.device_id.0.clone(),
+        high_risk_features,
         stages,
         dependency_edges,
         route_policy_dependencies,
@@ -177,6 +224,7 @@ fn collect_unsupported_paths(
     change_set: &ChangeSet,
     profile: Option<&DeviceModelProfile>,
     missing_route_policy_refs: &[String],
+    high_risk_features: &[HighRiskFeature],
 ) -> Vec<String> {
     let mut unsupported = missing_route_policy_refs
         .iter()
@@ -184,22 +232,37 @@ fn collect_unsupported_paths(
         .collect::<Vec<_>>();
 
     let Some(profile) = profile else {
-        if touches_bgp(change_set) {
-            unsupported.push("bgp: missing device model profile".to_string());
-            return unsupported;
+        for feature in high_risk_features {
+            unsupported.push(format!("{}: missing device model profile", feature.name()));
         }
         return unsupported;
     };
-    if touches_pbr(change_set) && profile.pbr_write_readiness == WriteReadiness::WriteRejected {
-        unsupported.push(feature_rejection_reason(profile, "pbr"));
-    }
-    if touches_bgp(change_set) {
-        if profile.bgp_write_readiness == WriteReadiness::WriteRejected {
-            unsupported.push(feature_rejection_reason(profile, "bgp"));
-        } else if profile.bgp_write_readiness == WriteReadiness::WriteSafe
-            && !has_writable_bgp_path(profile)
-        {
-            unsupported.push("bgp: missing writable BGP path evidence".to_string());
+
+    for feature in high_risk_features {
+        match feature_readiness(profile, *feature) {
+            Some(WriteReadiness::WriteSafe) => {
+                if *feature == HighRiskFeature::Bgp && !has_writable_bgp_path(profile) {
+                    unsupported.push("bgp: missing writable BGP path evidence".to_string());
+                } else if *feature != HighRiskFeature::Bgp
+                    && !has_verified_writable_path_for_feature(profile, *feature)
+                {
+                    unsupported.push(format!(
+                        "{}: missing verified writable path-level evidence",
+                        feature.name()
+                    ));
+                }
+            }
+            Some(WriteReadiness::ReadOnly) => unsupported.push(format!(
+                "{}: write readiness is read-only",
+                feature.name()
+            )),
+            Some(WriteReadiness::WriteRejected) => {
+                unsupported.push(feature_rejection_reason(profile, feature.name()))
+            }
+            None => unsupported.push(format!(
+                "{}: DeviceModelProfile write readiness is not implemented",
+                feature.name()
+            )),
         }
     }
     unsupported
@@ -225,10 +288,12 @@ fn first_rejection_reason(profile: &DeviceModelProfile, feature: &str) -> String
 }
 
 /// Derive the final write decision for this dry-run from the device model profile,
-/// the blast radius of the change set, and any unsupported paths.
+/// the blast radius of the change set, unsupported paths, and high-risk feature
+/// declarations.
 ///
 /// - No profile: vendor private renderer is assumed for the current production
 ///   surface (VLAN, interface, ACL).
+/// - Declared or inferred high-risk feature without profile evidence: rejected.
 /// - Profile with `WriteRejected` readiness on a high-risk blast radius: rejected.
 /// - Profile with `ReadOnly` readiness: read-only.
 /// - Profile with `WriteSafe` readiness: standard model or vendor native depending
@@ -238,13 +303,22 @@ fn classify_write_decision(
     blast_radius: &BlastRadius,
     unsupported_paths: &[String],
     change_set: &ChangeSet,
+    high_risk_features: &[HighRiskFeature],
 ) -> DryRunWriteDecision {
     let Some(profile) = profile else {
-        if matches!(blast_radius, BlastRadius::RoutingControlPlane) {
+        if !high_risk_features.is_empty() || matches!(blast_radius, BlastRadius::RoutingControlPlane)
+        {
             return DryRunWriteDecision::Rejected;
         }
         return DryRunWriteDecision::AllowedVendorPrivate;
     };
+
+    if high_risk_features
+        .iter()
+        .any(|feature| feature_readiness(profile, *feature) == Some(WriteReadiness::ReadOnly))
+    {
+        return DryRunWriteDecision::ReadOnly;
+    }
 
     if matches!(
         blast_radius,
@@ -311,6 +385,29 @@ fn is_bgp_path(path: &ModelPathSupport) -> bool {
     let model = path.model.to_ascii_lowercase();
     let path_text = path.path.to_ascii_lowercase();
     model.contains("bgp") || path_text.contains("bgp")
+}
+
+fn feature_readiness(
+    profile: &DeviceModelProfile,
+    feature: HighRiskFeature,
+) -> Option<WriteReadiness> {
+    match feature {
+        HighRiskFeature::Pbr => Some(profile.pbr_write_readiness),
+        HighRiskFeature::Bgp => Some(profile.bgp_write_readiness),
+        HighRiskFeature::Qos | HighRiskFeature::Nqa => None,
+    }
+}
+
+fn has_verified_writable_path_for_feature(
+    profile: &DeviceModelProfile,
+    feature: HighRiskFeature,
+) -> bool {
+    profile.paths.iter().any(|path| {
+        path.readable
+            && path.writable
+            && path.verified_on_device
+            && feature.matches_path(path)
+    })
 }
 
 fn push_stage(stages: &mut Vec<ChangePlanStage>, kind: ChangePlanStageKind, ops: Vec<ChangeOp>) {
@@ -530,7 +627,16 @@ fn rollback_action_for_op(op: &ChangeOp) -> String {
     }
 }
 
-fn classify_blast_radius(change_set: &ChangeSet) -> BlastRadius {
+fn classify_blast_radius(
+    change_set: &ChangeSet,
+    high_risk_features: &[HighRiskFeature],
+) -> BlastRadius {
+    if high_risk_features.contains(&HighRiskFeature::Bgp) {
+        return BlastRadius::RoutingControlPlane;
+    }
+    if !high_risk_features.is_empty() {
+        return BlastRadius::PolicyReference;
+    }
     if change_set.ops.is_empty() {
         return BlastRadius::NoChange;
     }
@@ -573,6 +679,58 @@ fn touches_bgp(change_set: &ChangeSet) -> bool {
                 | ChangeOp::DeleteBgpNeighbor { .. }
         )
     })
+}
+
+fn effective_high_risk_features(
+    change_set: &ChangeSet,
+    declared_features: &[HighRiskFeature],
+) -> Vec<HighRiskFeature> {
+    let mut features = Vec::new();
+    if touches_pbr(change_set) {
+        push_unique_feature(&mut features, HighRiskFeature::Pbr);
+    }
+    if touches_bgp(change_set) {
+        push_unique_feature(&mut features, HighRiskFeature::Bgp);
+    }
+    for feature in declared_features {
+        push_unique_feature(&mut features, *feature);
+    }
+    features
+}
+
+fn push_unique_feature(features: &mut Vec<HighRiskFeature>, feature: HighRiskFeature) {
+    if !features.contains(&feature) {
+        features.push(feature);
+    }
+}
+
+impl HighRiskFeature {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Pbr => "pbr",
+            Self::Bgp => "bgp",
+            Self::Qos => "qos",
+            Self::Nqa => "nqa",
+        }
+    }
+
+    fn matches_path(self, path: &ModelPathSupport) -> bool {
+        let model = path.model.to_ascii_lowercase();
+        let path_text = path.path.to_ascii_lowercase();
+        match self {
+            Self::Pbr => model.contains("pbr")
+                || model.contains("policy-forwarding")
+                || path_text.contains("pbr")
+                || path_text.contains("policy-forwarding"),
+            Self::Bgp => model.contains("bgp") || path_text.contains("bgp"),
+            Self::Qos => model.contains("qos")
+                || model.contains("quality-of-service")
+                || path_text.contains("qos")
+                || path_text.contains("quality-of-service")
+                || path_text.contains("traffic"),
+            Self::Nqa => model.contains("nqa") || path_text.contains("nqa"),
+        }
+    }
 }
 
 fn acl_node(acl_id: u16, suffix: &str) -> String {
